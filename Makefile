@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest mcpscope claudiapin buildident supervisorpolicy
+all: jevonsd jevons-head treeguard commitscope commitbase fleetgit attrib runlock buildsnap recover detach jevons-watchdog bin/gate gotest mcpscope claudiapin buildident supervisorpolicy
 
 # 🎯T710: unbuildable strays (bin/jevond predating the jevon-to-jevons
 # rename) must not survive a clean. bin/ is gitignored; this recipe is
@@ -44,6 +44,15 @@ treeguard: bin/treeguard
 bin/treeguard: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/treeguard ./cmd/treeguard
+
+# Shared-checkout git wrapper (🎯T1134). Refuses `git stash` in the shared
+# clone from a fleet seat; prepend bin/ ahead of real git on PATH.
+.PHONY: fleetgit
+fleetgit: bin/fleetgit
+
+bin/fleetgit: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/fleetgit ./cmd/fleetgit
 
 # Shared-index commit guard (🎯T377). The git pre-commit hook execs this, so
 # `make all` builds it; the hook self-builds if it is missing, and this target
@@ -132,8 +141,18 @@ bin/detach: $(GO_SRC)
 # worker can cite a green it actually got and a misreported background run can
 # be read back in band (`bin/gate last`). Built by `make all` because the
 # fleet brief tells every worker to run gates through it.
-.PHONY: gate
+# Owner gate (🎯T1279): Jevons ships to master by gated push, not by PR.
+# Runs the product net on a commit in a clean checkout under bin/gate and,
+# only on GREEN, writes .git/gate-attestation for the pre-push hook.
+# `make gate` runs test-fast (every layer, every journey but the live-fleet
+# ones); `make gate-full` runs test (🎯T1299). GATE_COMMIT=<sha> measures
+# another commit; GATE_PROVIDER picks the journey backend (default
+# openai-codex).
+.PHONY: gate gate-full
 gate: bin/gate
+	@scripts/gate-attest.sh fast
+gate-full: bin/gate
+	@scripts/gate-attest.sh full
 
 bin/gate: $(GO_SRC)
 	@mkdir -p bin
@@ -150,7 +169,13 @@ achieve-verify: bin/gate
 
 # Hermetic oracle for the check, run under the gate so the status survives.
 test-achieve-verify: bin/gate
-	bin/gate -name achieve-verify -- go test -count=1 -run 'CheckAttestation|T765' ./internal/gate
+	bin/gate -name achieve-verify -- go test -count=1 -run 'CheckAttestation|T765|T703' ./internal/gate
+
+# 🎯T765: check-ledger walks live ledger attestations (audit equivalent of
+# the finish-report FALSE-GREEN banner). Same package oracle as achieve-verify.
+.PHONY: test-check-ledger
+test-check-ledger: bin/gate
+	bin/gate -name check-ledger -- go test -count=1 -run 'CheckLedger' ./internal/gate
 
 # MCP scope diagnosis and repair (🎯T464). An agent whose jevons_* tools are
 # absent cannot call an MCP tool to ask why, so the answer has to arrive
@@ -164,10 +189,11 @@ bin/mcpscope: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/mcpscope ./cmd/mcpscope
 
-# Development-daemon supervisor (🎯T405 / 🎯T553.3). KeepAlive on jevonsd is the
-# standing owner (`make jevonsd-install`). The interval watchdog that
-# called restart-jevonsd is legacy; keep the binary for oracles until T553.3
-# retires it. `make watchdog-install` still exists but is not the product path.
+# Development-daemon watchdog (🎯T405): one probe per invocation, run by a
+# supervisor or scheduler on an interval; it restarts the development
+# daemon when a bounce did not take and tells the owner. The daemon's own
+# process is held by supervisord (`make supervisor-install`, 🎯T1111);
+# launchd is not involved.
 .PHONY: jevons-watchdog
 jevons-watchdog: bin/jevons-watchdog
 
@@ -175,26 +201,9 @@ bin/jevons-watchdog: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/jevons-watchdog ./cmd/jevons-watchdog
 
-.PHONY: watchdog-install watchdog-uninstall watchdog-status
-watchdog-install: bin/jevons-watchdog
-	bin/jevons-watchdog -install
-
-watchdog-uninstall: bin/jevons-watchdog
-	bin/jevons-watchdog -uninstall
-
+.PHONY: watchdog-status
 watchdog-status: bin/jevons-watchdog
 	@bin/jevons-watchdog -status
-
-JEVONSD_LABEL := com.marcelocantos.jevonsd
-.PHONY: jevonsd-install jevonsd-uninstall jevonsd-status
-jevonsd-install: bin/jevonsd
-	bin/jevonsd -install-daemon-agent
-
-jevonsd-uninstall: bin/jevonsd
-	bin/jevonsd -uninstall-daemon-agent
-
-jevonsd-status:
-	-launchctl print gui/$$(id -u)/$(JEVONSD_LABEL) | head -20
 
 # Test verdict harness (owner, 2026-08-11). Wraps `go test -json` and
 # reports pass/fail with counts instead of a transcript, so a failing
@@ -272,7 +281,8 @@ ios:
 # suite will happily use all of them -- docratchet alone builds whole
 # repos in parallel worktrees and was measured at ~1286% CPU, which makes
 # the machine unusable for whoever is sitting at it. Leave some behind.
-# Override per-run: make test-go TEST_CPUS=16
+# Override per-run: make test-go TEST_CPUS=16. Fleet seats running bin/gate
+# -- go test … read test_max_procs from state_dir/capacity.json (🎯T781).
 TEST_CPUS ?= 8
 export GOMAXPROCS = $(TEST_CPUS)
 
@@ -353,24 +363,13 @@ ui-check-bundle: ui-deps
 # Daily/dev servers (🎯T540.4 / vellum supervisor/ shape): tracked
 # supervisor/*.ini with @REPO@, rendered into Homebrew supervisor.d.
 # Vite :5173 is not a standing program — make ui-dev is opt-in HMR.
-# jevonsd-install (launchd KeepAlive) remains until SUPERVISOR_TAKEOVER=1.
+# supervisord is the only supervisor of the development daemon (🎯T1111).
 .PHONY: supervisor-install supervisor-status
 supervisor-install: bin/jevonsd
 	supervisor/install.sh
 
 supervisor-status:
 	-supervisorctl status jevonsd
-
-# Daily UI LaunchAgents (legacy 🎯T540.4 path). Prefer make supervisor-install.
-UI_DAEMON_LABEL := com.marcelocantos.jevons-ui
-ui-daemon-install: bin/jevonsd
-	bin/jevonsd -install-ui-agents
-
-ui-daemon-stop: bin/jevonsd
-	bin/jevonsd -uninstall-ui-agents
-
-ui-daemon-status:
-	-launchctl print gui/$$(id -u)/$(UI_DAEMON_LABEL) | head -20
 
 # ui/node_modules is gitignored, so a clean checkout of HEAD (bin/gate -clean,
 # CI, a fresh clone) has no vitest until this install runs. 🎯T563: the old
@@ -387,6 +386,11 @@ $(UI_VITEST_MOD): ui/package.json ui/package-lock.json
 
 test-ui-react: ui-deps
 	cd ui && npm test
+
+# 🎯T863: thin Lean oracle (lake build + zero sorry in lean/Invariants).
+.PHONY: test-lean-invariants
+test-lean-invariants:
+	./scripts/lean-oracle.sh check
 
 # Historical command retained as a React-unit alias. Legacy assertions are
 # traceable in docs/audits/react-retirement-2026-09-05/legacy-suites.json.
@@ -420,16 +424,41 @@ $(PLAYWRIGHT_MOD): scripts/browser-loop-test/package.json scripts/browser-loop-t
 
 # Browser checks drive the built React main/sidebar widgets. Transport is
 # mocked here; the real packaged owner turn is journey J30.
-.PHONY: test-ui playwright-browser
+.PHONY: test-ui playwright-browser t404-open-questions-ui-test
 playwright-browser: playwright-deps
 	cd scripts/browser-loop-test && npx playwright install chromium
 
+t404-open-questions-ui-test: ui-build playwright-browser
+	node scripts/react-ui-test/t404-open-questions-test.cjs
+
+.PHONY: t1208-diagram-sanitization-ui-test
+t1208-diagram-sanitization-ui-test: ui-check-bundle playwright-browser
+	node scripts/react-ui-test/t1208-diagram-sanitization-test.cjs
+
 test-ui: ui-build playwright-browser
+	$(MAKE) test-ui-run
+
+# test-ui without its build prerequisites, for testpar (🎯T1299): ui-build is
+# phony, and two layers rebuilding ui/dist at once would race.
+.PHONY: test-ui-run
+test-ui-run:
 	node scripts/react-ui-test/legacy-obligations.cjs
 	node scripts/react-ui-test/test.cjs
 	node scripts/react-ui-test/t789-send-cutin-test.cjs
 	node scripts/react-ui-test/t799-composer-grow-test.cjs
 	node scripts/react-ui-test/t949-resize-loop-test.cjs
+	node scripts/react-ui-test/t532-idle-tab-test.cjs
+	JEVONS_T1224_BROWSER=1 go test ./internal/server -run ^TestT1224BrowserTransport$$ -count=1
+	node scripts/react-ui-test/t1126-reattach-test.cjs
+	node scripts/react-ui-test/t1164-reload-pin-test.cjs
+	node scripts/react-ui-test/t1208-diagram-sanitization-test.cjs
+	node --test scripts/react-ui-test/boundary-oracle.test.cjs scripts/react-ui-test/boundary-prompt.test.cjs
+	node scripts/react-ui-test/t404-open-questions-test.cjs
+
+# 🎯T1274: real React viewport geometry on phone, iPad and desktop.
+.PHONY: t1274-phone-ticker-test
+t1274-phone-ticker-test: ui-build playwright-browser
+	node scripts/react-ui-test/t1274-phone-ticker-test.cjs
 
 .PHONY: test-ui-live
 test-ui-live: playwright-browser
@@ -469,13 +498,47 @@ test-live-suite:
 # collide on :13715 (🎯T817). Pin one with PORT=13715; the suite still refuses
 # the development ports (🎯T526 portguard).
 PORT ?= 0
+JOURNEY_SUITE = go run ./scripts/journey-suite -port $(PORT) $(if $(PROVIDER),-provider $(PROVIDER))
 .PHONY: test-journey
 test-journey: jevonsd playwright-browser
-	go run ./scripts/journey-suite -port $(PORT) $(if $(PROVIDER),-provider $(PROVIDER)) $(if $(ONLY),-only $(ONLY))
+	$(JOURNEY_SUITE) $(if $(ONLY),-only $(ONLY))
 
-# Full product net (🎯T492): hermetic layers first, then Universe-B journeys.
+# ── Gate speed (🎯T1299) ──────────────────────────────
+# The live-fleet journeys run real coding workers end to end: J51 workers
+# landing through integrate, J50 one worker (2-25 min). They are the full
+# gate's, not every landing's: `make gate` runs test-fast, `make gate-full`
+# runs test. (J39 took 10 min waiting on real 30 s fleet passes; with the
+# isolate cadence knob it takes about 1 min and stays in the fast net.)
+SLOW_JOURNEYS ?= J50-,J51-
+
+# Layers without build prerequisites, for testpar. Each starts its own
+# isolate on an ephemeral port (PORT=0), so the two suites can run at once.
+.PHONY: test-prereqs test-journey-fast-run test-journey-slow-run test-fast
+test-prereqs: ui-build bin/jevonsd bin/gotest playwright-browser
+test-journey-fast-run:
+	$(JOURNEY_SUITE) -skip $(SLOW_JOURNEYS)
+test-journey-slow-run:
+	$(JOURNEY_SUITE) -only $(SLOW_JOURNEYS)
+
+# 🎯T1302: an instance has one overseer and one owner conversation, so the
+# journeys that drive it run one at a time within an isolate. JOURNEY_SHARDS
+# suites, each with its own isolate and overseer, split them by measured
+# time (journey-suite -shard i/N); together they are test-journey-fast-run.
+JOURNEY_SHARDS ?= 3
+JOURNEY_SHARD_TARGETS := $(foreach i,$(shell seq 1 $(JOURNEY_SHARDS)),test-journey-shard-$(i))
+test-journey-shard-%:
+	$(JOURNEY_SUITE) -skip $(SLOW_JOURNEYS) -shard $*/$(JOURNEY_SHARDS)
+
+# Fast product net: every layer at once, the live-fleet journeys left to the
+# full net. The prerequisites build once first; the layers then share nothing.
+test-fast: ui-check-bundle
+	$(MAKE) test-prereqs
+	go run ./scripts/testpar test-go test-web test-ui-run $(JOURNEY_SHARD_TARGETS)
+
+# Full product net (🎯T492): every layer and every journey, all at once.
 test: ui-check-bundle
-	$(MAKE) test-go test-web test-ui test-journey
+	$(MAKE) test-prereqs
+	go run ./scripts/testpar test-go test-web test-ui-run $(JOURNEY_SHARD_TARGETS) test-journey-slow-run
 
 # ── Fleet spend (🎯T392.6) ──────────────────────────
 # Decomposes spend into the levers that act on it:

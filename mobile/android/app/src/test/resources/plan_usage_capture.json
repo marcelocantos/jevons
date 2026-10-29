@@ -1,0 +1,103 @@
+{
+  "at": "2026-10-28T01:45:11.574159Z",
+  "pending": false,
+  "backends": [
+    {
+      "provider": "claude",
+      "status": "available",
+      "fetched_at": "2026-10-28T01:41:09.760735Z",
+      "stale_at": "2026-10-28T01:56:09Z",
+      "stale": false,
+      "windows": [
+        {
+          "name": "session",
+          "model": "",
+          "remaining_percent": 92,
+          "used_percent": 8,
+          "resets_at": "2026-10-28T04:40:00.019962Z",
+          "band": "ok"
+        },
+        {
+          "name": "weekly",
+          "model": "",
+          "remaining_percent": 73,
+          "used_percent": 27,
+          "resets_at": "2026-11-02T02:00:00.019985Z",
+          "band": "ok"
+        },
+        {
+          "name": "weekly_model",
+          "model": "Fable",
+          "remaining_percent": 75,
+          "used_percent": 25,
+          "resets_at": "2026-11-02T02:00:00.020148Z",
+          "band": "ok"
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "status": "available",
+      "fetched_at": "2026-10-28T01:41:10.176961Z",
+      "stale_at": "2026-10-28T01:56:10Z",
+      "stale": false,
+      "windows": [
+        {
+          "name": "weekly",
+          "model": "",
+          "remaining_percent": 91,
+          "used_percent": 9,
+          "resets_at": "2026-11-02T06:31:07Z",
+          "band": "ok"
+        }
+      ]
+    },
+    {
+      "provider": "grok",
+      "status": "available",
+      "fetched_at": "2026-10-28T01:41:10.435063Z",
+      "stale_at": "2026-10-28T01:56:10Z",
+      "stale": false,
+      "windows": [
+        {
+          "name": "weekly",
+          "model": "",
+          "remaining_percent": 46,
+          "used_percent": 54,
+          "resets_at": "2026-10-31T01:53:09.930537Z",
+          "band": "ok"
+        }
+      ]
+    },
+    {
+      "provider": "cursor",
+      "status": "available",
+      "fetched_at": "2026-10-28T01:42:10.730787Z",
+      "stale_at": "2026-10-28T01:57:10Z",
+      "stale": false,
+      "windows": [
+        {
+          "name": "monthly",
+          "model": "",
+          "remaining_percent": 56.5783870967742,
+          "used_percent": 43.4216129032258,
+          "resets_at": "2026-11-14T22:13:34Z",
+          "band": "ok"
+        },
+        {
+          "name": "api",
+          "model": "API",
+          "remaining_percent": 0,
+          "used_percent": 100,
+          "resets_at": "2026-11-14T22:13:34Z",
+          "band": "exhausted"
+        }
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "status": "unavailable",
+      "windows": []
+    }
+  ]
+}

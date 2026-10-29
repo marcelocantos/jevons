@@ -70,6 +70,34 @@ func (s *Store) TailStart(agent string, userTurns int) (int, error) {
 	return start, nil
 }
 
+// TailStartOwner is TailStart restricted to owner-authored user rows
+// (turn_origin=owner in the event JSON). Used when a connect cap would
+// otherwise paint only machine noise past the owner's last turn (🎯T1159).
+func (s *Store) TailStartOwner(agent string, ownerTurns int) (int, error) {
+	if s == nil || ownerTurns <= 0 {
+		return 0, nil
+	}
+	n, err := s.N(agent)
+	if err != nil || n == 0 {
+		return 0, err
+	}
+	const ownerMark = `"turn_origin":"owner"`
+	var lo sql.NullInt64
+	err = s.db.QueryRow(`
+		SELECT MIN(idx) FROM (
+			SELECT idx FROM transcript_events
+			WHERE agent = ? AND typ = 'user' AND body LIKE '%' || ? || '%'
+			ORDER BY idx DESC LIMIT ?
+		)`, agent, ownerMark, ownerTurns).Scan(&lo)
+	if err != nil {
+		return 0, fmt.Errorf("statedb: tail-start-owner: %w", err)
+	}
+	if lo.Valid {
+		return int(lo.Int64), nil
+	}
+	return 0, nil
+}
+
 // minPaintAssistants is how many nonempty assistant bubbles first-paint
 // should try to include when older prose exists further back. Keep-first
 // journal deletes (and tool deserts) can leave the last N user turns with

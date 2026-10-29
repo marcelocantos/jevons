@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // Overseer turn-state phases (🎯T555.1). A closed enum derived from signals
@@ -165,9 +166,9 @@ func hubPhase(phase string) string {
 	return "working"
 }
 
-// correspondentForBatch stamps who a drained notify batch is for: nothing
-// for the owner; an agent-responded route fact names in drain order (deduped);
-// CorrespondentFleet for any nameless note.
+// correspondentForBatch stamps who a drained notify batch is answering:
+// nothing for the owner; agent route or event Worker names in drain order;
+// CorrespondentFleet only for a nameless system/daemon note (🎯T576).
 func correspondentForBatch(batch []string, ownerBatch bool) []string {
 	if ownerBatch {
 		return nil
@@ -175,10 +176,7 @@ func correspondentForBatch(batch []string, ownerBatch bool) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, note := range batch {
-		name, ok := notifyAgentRespondedName(note)
-		if !ok || name == "" {
-			name = CorrespondentFleet
-		}
+		name := correspondentName(note)
 		if seen[name] {
 			continue
 		}
@@ -186,6 +184,30 @@ func correspondentForBatch(batch []string, ownerBatch bool) []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+// correspondentName reads route/idle facts first. A legacy event may have
+// a Worker: field without a fact; parse it only under an [event:] heading,
+// never from arbitrary prose or a quoted Worker: line in an agent report.
+func correspondentName(note string) string {
+	if name, ok := notifyAgentRespondedName(note); ok && name != "" {
+		return name
+	}
+	if name, ok := openingSeatFact(note, envelope.IntentIdle); ok && name != "" {
+		return name
+	}
+	line, rest, _ := strings.Cut(strings.TrimSpace(note), "\n")
+	if strings.HasPrefix(line, "[event:") && strings.Contains(line, "]") {
+		for _, field := range strings.Split(rest, "\n") {
+			if name, ok := strings.CutPrefix(field, "Worker: "); ok {
+				parts := strings.Fields(name)
+				if len(parts) == 1 {
+					return parts[0]
+				}
+			}
+		}
+	}
+	return CorrespondentFleet
 }
 
 // phaseWireLine is the interleaved progress frame on /ws/chat. It carries no
@@ -275,7 +297,8 @@ func (s *Server) reduceOverseerPhase(next PhaseSample, midTurnOnly bool) {
 		s.mu.Unlock()
 		return
 	}
-	if next.Phase == PhaseIdle {
+	if next.Phase == PhaseIdle || next.Phase == PhaseError {
+		// 🎯T1278: an errored turn is over; it answers nobody now.
 		next.Correspondent = nil
 		s.overseerCorrespondent = nil
 	} else {

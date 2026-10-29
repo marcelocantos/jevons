@@ -23,6 +23,8 @@ func MintRefusalDetail(cands []DestCand, now time.Time, th Thresholds) string {
 		switch {
 		case be.Status != StatusAvailable:
 			why = "no reading (" + strings.TrimSpace(be.Status) + ")"
+		case be.Stale && !windowRolledOver(be.Windows, now):
+			why = fmt.Sprintf("plan reading stale (fetched %s ago)", formatStaleAge(be.AgeSeconds))
 		case be.Override != nil && !IsDestBandOverride(be.Override.Band):
 			why = "owner override " + string(be.Override.Band)
 			if r := strings.TrimSpace(be.Override.Reason); r != "" {
@@ -36,6 +38,9 @@ func MintRefusalDetail(cands []DestCand, now time.Time, th Thresholds) string {
 			}
 		default:
 			why = windowReason(be, now, th)
+			if why == "not a destination" && be.Stale && windowRolledOver(be.Windows, now) {
+				why = staleRolloverRefusal(be, now)
+			}
 		}
 		parts = append(parts, c.Provider+": "+why)
 	}
@@ -70,4 +75,33 @@ func windowReason(be Backend, now time.Time, th Thresholds) string {
 		return "weekly " + string(band)
 	}
 	return "not a destination"
+}
+
+func staleRolloverRefusal(be Backend, now time.Time) string {
+	var parts []string
+	for _, w := range be.Windows {
+		if w.ResetsAt == nil || !w.ResetsAt.Before(now) {
+			continue
+		}
+		age := now.Sub(*w.ResetsAt)
+		if age < 0 {
+			age = 0
+		}
+		parts = append(parts, fmt.Sprintf("%s window stale (rolled %s ago, resets_at %s)",
+			w.Name, formatStaleAge(int64(age/time.Second)), w.ResetsAt.UTC().Format("2006-01-02 15:04 UTC")))
+	}
+	if len(parts) == 0 {
+		return "plan reading stale (window rolled over)"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func formatStaleAge(ageSeconds int64) string {
+	if ageSeconds < 60 {
+		return fmt.Sprintf("%ds", ageSeconds)
+	}
+	if ageSeconds < 3600 {
+		return fmt.Sprintf("%dm", ageSeconds/60)
+	}
+	return fmt.Sprintf("%dh%dm", ageSeconds/3600, (ageSeconds%3600)/60)
 }

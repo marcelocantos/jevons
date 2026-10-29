@@ -1,37 +1,11 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package planusage is the jevons-side consumer of claudia's plan-usage API
-// (🎯T390): how much of each backend's subscription allowance is left, and
-// when it rolls over.
-//
-// The producer already existed. claudia 🎯T18 landed QueryPlanUsage /
-// QueryAllPlanUsage — Claude OAuth five_hour→session and seven_day→weekly,
-// Codex windows classified by duration, and an explicit unavailable verdict
-// for Grok and Bedrock. It landed as a library API, which is what that
-// target asked for, and nothing in jevons ever called it. So the owner ran a
-// fleet of dozens of agents with no view of the allowance they were spending,
-// and had to ask whether the metering he commissioned existed at all.
-//
-// This package is the missing consumer, and it is deliberately thin:
-//
-//   - claudia stays the single implementation. Nothing here parses a vendor
-//     usage response or knows an endpoint; Convert only re-shapes what
-//     claudia already decided.
-//   - Unavailable is a first-class answer, never a zero. A backend that
-//     publishes nothing renders as "unavailable" with the provider's own
-//     reason attached. A blank or a 0% would read as "you have nothing
-//     left", which is a different and false statement. Grok and Cursor
-//     unofficial billing surfaces are always fetched; a break degrades
-//     to unavailable with a reason, never a fabricated percent. Bedrock
-//     still has no subscription window and stays off the bar unless a
-//     fleet agent is running on it.
-//   - A cached reading that has aged out is marked stale rather than served
-//     as current. A number that was true forty minutes ago is not a lie, but
-//     presenting it as now is.
-//
-// Everything in this file is pure: readings and a clock in, a Snapshot out.
-// The polling seam lives in reader.go.
+// Package planusage consumes Claudia's replicated subscription observations.
+// The shipped payload comes from one sqldeep subscription (projection.sql).
+// The Go types and pure conversion/classification functions support policy
+// consumers and fixtures; this package never polls a provider.
+
 package planusage
 
 import (
@@ -69,10 +43,6 @@ const (
 // Claude's five-hour window moves slowly enough that a few minutes is fine;
 // a quarter hour is where "current" stops being an honest word.
 const DefaultStaleAfter = 15 * time.Minute
-
-// DefaultRefresh is the poll interval. Plan windows are hours long, so this
-// is about freshness on the owner's screen, not about resolution.
-const DefaultRefresh = 5 * time.Minute
 
 // Window is one published allowance window for one backend.
 type Window struct {
@@ -121,7 +91,8 @@ type Window struct {
 	// History is stored vendor remaining samples for this window's current
 	// period (🎯T634). Omitted when none have been recorded. Never a
 	// reconstructed spend curve and never a fabricated 100% at t=0.
-	History []HistoryPoint `json:"history,omitempty"`
+	History     []HistoryPoint `json:"history,omitempty"`
+	BurnProfile *BurnProfile   `json:"burn_profile,omitempty"`
 }
 
 // HistoryPoint is one stored vendor remaining reading (🎯T634).
@@ -148,6 +119,8 @@ type Backend struct {
 	Windows []Window `json:"windows,omitempty"`
 	// FetchedAt is when this reading was taken.
 	FetchedAt time.Time `json:"fetched_at"`
+	// StaleAt is the query-owned deadline, evaluated by policy and display clocks.
+	StaleAt *time.Time `json:"stale_at,omitempty"`
 	// Stale is true when the reading is older than the staleness bound. A
 	// stale reading is still shown — with its age — because "we last saw
 	// 62% forty minutes ago" beats showing nothing.
@@ -160,12 +133,8 @@ type Backend struct {
 	FleetAgents int `json:"fleet_agents,omitempty"`
 	// Override is the owner's band for this plan, when set (🎯T948).
 	Override *Override `json:"override,omitempty"`
-	// CreditsBalance is a supplementary provider-published balance
-	// alongside (not instead of) the subscription window — e.g. Codex
-	// reports non-zero credits even while the weekly window is 0%. Nil
-	// means the provider published no such balance. Reported as a raw
-	// number for now; no banding/thresholds (🎯 owner: raw number only).
-	CreditsBalance *float64 `json:"credits_balance,omitempty"`
+	// CreditsBalance was a raw Codex credits hint; retired under 🎯T967.3 /
+	// parent 🎯T967 (non-money units are never shown on usage surfaces).
 	// Spend is the extra/overage-usage reading (🎯T967.1), gated at
 	// serve time. At a full Claude plan window a missing/malformed spend
 	// block is explicitly unavailable, never silently interpreted as zero.
@@ -295,10 +264,6 @@ func Convert(readings []claudia.PlanUsage, load map[string]int, now time.Time, s
 			PlanType:    r.PlanType,
 			FetchedAt:   r.FetchedAt,
 			FleetAgents: norm[provider],
-		}
-		if r.Credits != nil && r.Credits.HasCredits {
-			bal := r.Credits.Balance
-			b.CreditsBalance = &bal
 		}
 		b.rawSpend = r.Spend
 		if b.Status == "" {

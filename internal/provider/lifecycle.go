@@ -47,6 +47,10 @@ type Lifecycle struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// authAnnounced: one owner-visible auth diagnosis per provider id (🎯T607).
+	authMu        sync.Mutex
+	authAnnounced map[string]bool
 }
 
 // LifecycleArgs configures a Lifecycle. Every field is optional; the
@@ -75,6 +79,7 @@ func NewLifecycle(args LifecycleArgs) *Lifecycle {
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &Lifecycle{
 		runners:       make(map[string]*runner),
+		authAnnounced: make(map[string]bool),
 		launcher:      args.Launcher,
 		connector:     args.Connector,
 		backoff:       args.Backoff.withDefaults(),
@@ -239,6 +244,32 @@ func (l *Lifecycle) Shutdown(ctx context.Context) error {
 	case <-ctx.Done():
 		return fmt.Errorf("provider lifecycle: shutdown timed out: %w", ctx.Err())
 	}
+}
+
+func (l *Lifecycle) noteAuthBackoff(id string, err error) {
+	if l == nil || err == nil {
+		return
+	}
+	l.authMu.Lock()
+	if l.authAnnounced[id] {
+		l.authMu.Unlock()
+		return
+	}
+	l.authAnnounced[id] = true
+	l.authMu.Unlock()
+	l.log.Error("PROVIDER NOT AUTHENTICATED — backing off until credentials work",
+		"provider", id,
+		"fix", "sign in (`grok login` or set XAI_API_KEY for Grok; provider-specific login for others)",
+		"err", err)
+}
+
+func (l *Lifecycle) clearAuthBackoff(id string) {
+	if l == nil {
+		return
+	}
+	l.authMu.Lock()
+	delete(l.authAnnounced, id)
+	l.authMu.Unlock()
 }
 
 // specOf fingerprints the parts of a declaration that require a restart

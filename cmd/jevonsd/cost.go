@@ -35,8 +35,8 @@ type costGuard struct {
 	config func() *cost.BudgetConfig
 	// collector ingests the sqlpipe replica. It does not poll the usage socket.
 	collector *cost.Collector
-	// replica is Jevons' own control-plane file. Its broker link ends with
-	// the daemon context; nil when the control plane is unavailable.
+	// replica is borrowed from the daemon's control-plane service; the
+	// collector consumes it but accounting never owns its lifetime.
 	replica *cost.ReplicaSource
 }
 
@@ -44,7 +44,7 @@ type costGuard struct {
 // nil (with a logged warning) rather than failing the daemon if the
 // usage DB can't open — cost monitoring is important but must not be a
 // single point of failure for the whole cockpit.
-func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watcher, registry *claudia.Registry, _ *discovery.Scanner, srv *server.Server, mcp *mcpserver.Server) *costGuard {
+func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watcher, registry *claudia.Registry, _ *discovery.Scanner, srv *server.Server, mcp *mcpserver.Server, replica *cost.ReplicaSource) *costGuard {
 	budgetPath := filepath.Join(jc.StateDir, "budget.json")
 	// 🎯T574: budget.json is hot — limits, protected workers, and the
 	// accounting mode swap in ≤5 s. The configured overseer is always
@@ -110,24 +110,15 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 		return ""
 	}
 
-	replica, err := cost.OpenReplica(ctx, jc.StateDir)
-	if err != nil {
-		slog.Error("cost: control plane unavailable — usage socket poll stays off", "err", err)
-	}
 	collector := cost.NewCollector(&cost.CollectorArgs{
 		Store:        store,
 		ProjectsRoot: jc.SessionsDir,
 		Attribute:    attribute,
 		Replica:      replica,
 	})
-	if collector != nil {
-		if mcp != nil {
-			collector.BindSendReceiptQuery(mcp.SetSendReceiptQuery)
-		}
-		if srv != nil {
-			collector.BindSendReceiptQuery(srv.SetSendReceiptQuery)
-		}
-	}
+	// Per-seat catch-up executes tool effects. Keep its existing startup
+	// predicate until T1074.10 supplies safe independent execution/recovery;
+	// it is not part of the read-only shared control-plane service.
 	if mcp != nil {
 		if err := seatpair.CatchUpDir(ctx, filepath.Join(jc.StateDir, seatpair.DirName), mcp.ExecuteSeatPair); err != nil {
 			slog.Error("cost: seat pair catch-up failed", "err", err)

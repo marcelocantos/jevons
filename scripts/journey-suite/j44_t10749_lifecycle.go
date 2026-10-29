@@ -73,9 +73,6 @@ func (s *suite) jControlPlaneLifecycle() error {
 	if err != nil {
 		return err
 	}
-	if calls < 1 {
-		return fmt.Errorf("canonical usage calls for %s = 0", session)
-	}
 	if err := s.bounceDrain(); err != nil {
 		return fmt.Errorf("jevons restart: %w", err)
 	}
@@ -295,6 +292,13 @@ func canonicalUsageCalls(stateDir, session string) (int, error) {
 		return 0, err
 	}
 	defer db.Close()
+	// The cost collector writes this database while J44 reads it. Without a
+	// busy timeout a read that meets a write fails at once with SQLITE_BUSY
+	// (the 2026-10-29 sharded gate), as the daemon's own stores already
+	// guard against (internal/cost/store.go).
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		return 0, err
+	}
 	var n int
 	err = db.QueryRow(`SELECT COUNT(*) FROM usage_calls WHERE session_id = ?`, session).Scan(&n)
 	return n, err
@@ -305,9 +309,10 @@ func canonicalUsageCalls(stateDir, session string) (int, error) {
 // broker after the turn that made it ends.
 const usageSettle = 2 * time.Second
 
-// settledUsageCalls returns the session's canonical usage count once two
-// reads usageSettle apart agree, or an error naming the last two counts when
-// it is still moving at timeout.
+// settledUsageCalls waits for at least one canonical row before settling a
+// baseline. The control-plane file can replicate before the cost collector's
+// next three-second poll: zero held for usageSettle is not a stable usage
+// baseline. An absent row remains a failure when the bounded wait expires.
 func settledUsageCalls(stateDir, session string, settle, timeout time.Duration) (int, error) {
 	deadline := time.Now().Add(timeout)
 	prev, err := canonicalUsageCalls(stateDir, session)
@@ -315,16 +320,23 @@ func settledUsageCalls(stateDir, session string, settle, timeout time.Duration) 
 		return 0, err
 	}
 	for {
-		time.Sleep(settle)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return 0, fmt.Errorf("canonical usage calls for %s did not settle after %s (last %d)", session, timeout, prev)
+		}
+		// A zero count has not yet reached the cost collector. Poll it
+		// promptly; only a positive count earns the full settling period.
+		pause := settle
+		if prev == 0 {
+			pause = min(settle, 100*time.Millisecond)
+		}
+		time.Sleep(min(pause, remaining))
 		cur, err := canonicalUsageCalls(stateDir, session)
 		if err != nil {
 			return 0, err
 		}
-		if cur == prev {
+		if cur > 0 && cur == prev && pause == settle {
 			return cur, nil
-		}
-		if time.Now().After(deadline) {
-			return 0, fmt.Errorf("canonical usage calls for %s still moving after %s (%d then %d)", session, timeout, prev, cur)
 		}
 		prev = cur
 	}

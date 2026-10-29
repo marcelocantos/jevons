@@ -358,12 +358,32 @@ func dueRung(dwell time.Duration, now time.Time, st *agentState, ceiling Rung) R
 		if s.rung == RungHumanAlert && st.acked {
 			continue
 		}
+		// The overseer hears a gap twice: impatient, then failing ("still
+		// stuck after I was told"). Every later shout was a model turn that
+		// could only ratify noise — 18 overseer turns on 2026-10-27 for one
+		// seat stuck 38 h (jv-parked-salvage-b). The owner rung carries on.
+		if s.rung == RungOverseerNoise && overseerShouts(st) >= maxOverseerShouts {
+			continue
+		}
 		if last, ok := st.lastFire[s.rung]; ok && now.Sub(last) < s.every {
 			continue
 		}
 		return s.rung
 	}
 	return RungNone
+}
+
+// maxOverseerShouts bounds overseer-rung fires per gap episode.
+const maxOverseerShouts = 2
+
+func overseerShouts(st *agentState) int {
+	n := 0
+	for _, r := range st.rungs {
+		if r == RungOverseerNoise {
+			n++
+		}
+	}
+	return n
 }
 
 func satisfiedIn(set []Gap, agent string) bool {

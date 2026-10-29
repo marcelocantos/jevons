@@ -59,6 +59,12 @@ var structuredFlagKinds = []FlagKind{
 	// FlagForeignRepoGate resolves cited ids against the store and asks the
 	// citing repository's git whether it holds the measured commit (🎯T1027).
 	FlagForeignRepoGate,
+	// FlagLandingUnreachable checks a parsed oracle SHA or an explicit landing
+	// citation against the shared checkout tip, not a hazard substring.
+	FlagLandingUnreachable,
+	// This flag diffs the declared oracle commit against its merge-base and
+	// checks the changed paths, not a hazard substring (🎯T1122).
+	FlagOwnerImpactMissingKind,
 	// 🎯T765 ledger-achieve flags. They never scan a finish report: CheckAchieve
 	// runs on a ledger attestation, which is a claim rather than narrative.
 	// Precedes-fix and tree-unknown read the record and git; uncited fires on
@@ -66,6 +72,11 @@ var structuredFlagKinds = []FlagKind{
 	FlagAchieveGateUncited,
 	FlagAchieveGatePrecedesFix,
 	FlagAchieveTreeUnknown,
+	FlagAchieveGateNarrowRun,
+	FlagAchieveGateMissingPackages,
+	// FlagAchieveProductPathUnrun compares ledger acceptance to attestation
+	// text; it does not substring-scan a finish report (🎯T703).
+	FlagAchieveProductPathUnrun,
 }
 
 func scanHazards(quoted, shaped string) []Flag {

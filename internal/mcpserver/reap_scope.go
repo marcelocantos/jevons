@@ -245,6 +245,6 @@ func (s *Server) notifyParentOutstandingScope(parent, worker, targetID string, s
 	if _, err := s.deliverByName(p, msg, OriginAgent, false); err != nil {
 		slog.Warn("T972 outstanding-scope notice undelivered to parent; escalating to overseer",
 			"parent", p, "worker", worker, "target", targetID, "err", err)
-		s.notifyFleetHealth(worker, fmt.Sprintf("parent %s unreachable (%v) for: %s", p, err, msg))
+		s.notifyFleetHealth(noticeAct, worker, fmt.Sprintf("parent %s unreachable (%v) for: %s", p, err, msg))
 	}
 }

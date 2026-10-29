@@ -4,6 +4,7 @@
 package seatstop
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -95,5 +96,22 @@ func TestT662LedgerRecordsAndForgets(t *testing.T) {
 	}
 	if n := len(l.Recent(now, time.Minute)); n != 1 {
 		t.Fatal("Forget must not erase history a mass-stop reading needs")
+	}
+}
+
+func TestT662AlertLineCapsTheSeatList(t *testing.T) {
+	var seats []string
+	for i := range 67 {
+		seats = append(seats, fmt.Sprintf("jv-t%d-auto", 700+i))
+	}
+	base := time.Date(2026, 10, 22, 8, 39, 22, 0, time.UTC)
+	line := FormatAlert(Alert{Seats: seats, From: base, To: base.Add(18 * time.Second), Window: DefaultWindow, Shared: "mixed"})
+	for _, want := range []string{"67 seats", "jv-t700-auto", "jv-t707-auto", "and 59 more"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("alert missing %q: %s", want, line)
+		}
+	}
+	if strings.Contains(line, "jv-t708-auto") {
+		t.Fatalf("alert names more than %d seats: %s", AlertNamedSeats, line)
 	}
 }

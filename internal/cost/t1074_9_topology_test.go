@@ -194,7 +194,7 @@ func requireTopology(t *testing.T, broker *brokerfixture.Broker, replicaPath str
 
 func requireUsageCalls(t *testing.T, c *Collector, store *Store, want int64) {
 	t.Helper()
-	if err := c.CatchUpReplicas(context.Background()); err != nil {
+	if _, err := c.CatchUpReplicas(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.StructuredUsage(context.Background(), time.Unix(0, 0), time.Now().Add(time.Hour))

@@ -86,6 +86,8 @@ func TestT1085InspectHydrationReadsSeatBytesOnly(t *testing.T) {
 	for _, line := range chatWireFromSpool(recs) {
 		want = append(want, stampConversationName(line, seat))
 	}
+	// accepted spool rows are not chat-wire; each turn contributes text,
+	// tool_call, and turn_end (3 days × 4 turns × 3 kinds).
 	if len(want) != 3*4*3 {
 		t.Fatalf("fixture: full read paints %d lines", len(want))
 	}

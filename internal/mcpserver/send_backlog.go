@@ -97,6 +97,7 @@ func (s *Server) SetSendQueueDir(stateDir string) {
 	s.agentSendQ = sendq.NewStore(dir)
 	s.mu.Unlock()
 	s.setBirthStoreDir(stateDir)
+	s.ReapInterruptedStartFlights()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		slog.Error("send queue unavailable: state directory unusable; enqueue will fail",
 			"component", "agent_send", "dir", dir, "err", err)
@@ -145,7 +146,7 @@ func (s *Server) ReportRecoveredBacklog() {
 	if len(lines) == 0 {
 		return
 	}
-	s.notifyFleetHealth(strings.Join(keys, ","), fmt.Sprintf(
+	s.notifyFleetHealth(noticeAct, strings.Join(keys, ","), fmt.Sprintf(
 		"Recovered %d queued message(s) with outstanding delivery obligations: %s. "+
 			"Pending entries are offered at an agent's next turn boundary. Unresolved attempts remain held; "+
 			"their outcome is uncertain and they must be reconciled before any retry.",
@@ -186,6 +187,9 @@ func (s *Server) SweepSendBacklogs() {
 		// query or settle it on this pass.
 		if b.Uncertain > 0 {
 			s.reconcileHeldReceipts(receiptCtx, b.Agent)
+			// Codex has no transcript; 🎯T772 checks the session log on this
+			// same sweep cadence before TurnInput rows age out (~30m).
+			s.confirmCodexReceipts(b.Agent)
 			// The query can race arrivals, claims and operator dispositions.
 			// Refresh the cohort rather than subtracting from the old snapshot.
 			b, err = q.Backlog(b.Agent)
@@ -354,7 +358,7 @@ func (s *Server) reportHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record
 	// repeat — so the second, genuinely new backlog would be suppressed by the
 	// delivery path even though the seam released it. Naming the hold makes the
 	// second notice new information rather than an echo.
-	s.notifyFleetHealth(hold, fmt.Sprintf(
+	s.notifyFleetHealth(noticeAct, hold, fmt.Sprintf(
 		"Held backlog on reaped agent %q (hold %s): %d message(s) waiting %s (%s). "+
 			"Recover with jevons_agent_start name=%q … — queued gate feedback drains on start. "+
 			"Do not interrupt; the seat is finished-and-reaped, not stuck mid-turn. "+
@@ -414,7 +418,7 @@ func (s *Server) reapBacklogForMissingAgent(b sendq.Backlog, now time.Time) {
 		"agent": b.Agent, "entry_id": head.ID, "bytes": len(head.Text),
 		"queued": len(rows), "reason": "addressee no longer registered",
 	})
-	s.notifyFleetHealth(head.ID, fmt.Sprintf("HELD: queued message %s (%d bytes) for %q has no registered addressee. "+
+	s.notifyFleetHealth(noticeAct, head.ID, fmt.Sprintf("HELD: queued message %s (%d bytes) for %q has no registered addressee. "+
 		"It waited %s. The payload stays. Record a drop with jevons_sendq_reconcile, "+
 		"or an overseer kill discards it. The daemon will not discard it.",
 		head.ID, len(head.Text), b.Agent, head.Age(now).Round(time.Second)))
@@ -425,6 +429,26 @@ func (s *Server) reapBacklogForMissingAgent(b sendq.Backlog, now time.Time) {
 func (s *Server) backlogHeldByIntent(name string) bool {
 	dec := s.AllowFleetControl(name, fleetintent.ControlDeliverStart)
 	return !dec.Allow && dec.Blocking != fleetintent.Reaped
+}
+
+// noticedStalledBacklogWarn reports whether a stood-down stall WARN was already
+// emitted for this hold id (🎯T1187). The first call marks the hold warned.
+func (s *Server) noticedStalledBacklogWarn(hold string) bool {
+	hold = strings.TrimSpace(hold)
+	if hold == "" {
+		return false
+	}
+	s.mu.Lock()
+	if s.stalledBacklogWarned == nil {
+		s.stalledBacklogWarned = map[string]struct{}{}
+	}
+	if _, seen := s.stalledBacklogWarned[hold]; seen {
+		s.mu.Unlock()
+		return true
+	}
+	s.stalledBacklogWarned[hold] = struct{}{}
+	s.mu.Unlock()
+	return false
 }
 
 // reportStalledBacklog names a queue waiting longer than StalledBacklogAfter.
@@ -441,7 +465,29 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 	// name the park, never prescribe interrupt (that fights 🎯T414).
 	dec := s.AllowFleetControl(b.Agent, fleetintent.ControlDeliverStart)
 	if !dec.Allow {
+		hold := heldBacklogKey(b)
+		if rec, ok := LookupReapedRecord(s.fleetIntent(), b.Agent); ok && reapRoutable(rec) && age >= heldReapedRouteAfter {
+			s.routeHeldReapedBacklog(b, rec, now)
+			if refreshed, err := s.sendQueue().Backlog(b.Agent); err == nil {
+				if refreshed.Depth == 0 {
+					return
+				}
+				b = refreshed
+				age = b.OldestAge(now)
+				hold = heldBacklogKey(b)
+			}
+		}
 		reason := "stood down: " + fleetintent.Describe(dec.Blocking)
+		if s.noticedStalledBacklogWarn(hold) {
+			slog.Debug("🎯T1187 stood-down backlog stall already warned",
+				"component", "agent_send",
+				"agent", b.Agent,
+				"queued", b.Depth,
+				"oldest_age", age.Round(time.Second).String(),
+				"reason", reason,
+				"intent", dec.Reason)
+			return
+		}
 		slog.Warn("🎯T418 backlog stalled",
 			"component", "agent_send",
 			"agent", b.Agent,
@@ -458,7 +504,7 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 		"queued", b.Depth,
 		"oldest_age", age.Round(time.Second).String(),
 		"reason", why)
-	s.notifyFleetHealth(heldBacklogKey(b), fmt.Sprintf(
+	s.notifyFleetHealth(noticeAct, heldBacklogKey(b), fmt.Sprintf(
 		"Stalled backlog on %q: %d message(s) held by the daemon, the oldest waiting %s, because %s. "+
 			"They are on disk and will be delivered when it next takes a turn. If that agent should not still be busy, "+
 			"confirm from ITS transcript (terminal assistant message + turn_duration, file not growing) and then "+
@@ -576,6 +622,35 @@ func FormatQueueStoppage(name string, st seatstate.State, now time.Time) string 
 	return msg
 }
 
+// queueStoppageForList does not turn a pre-stop, policy-held message into
+// a perpetual alarm. The message remains in sendq for reconciliation; a
+// newly queued message or an unresolved delivery attempt remains visible.
+func (s *Server) queueStoppageForList(name string, now time.Time) string {
+	st := s.seatState(name)
+	if st.QueueDepth > 0 && (s.autoSeatHold(name) != "" ||
+		!s.fleetIntent().Allow(name, fleetintent.ControlDeliverSubmit).Allow) {
+		_, stopped, ok := s.SeatStopReason(name)
+		if ok && !stopped.IsZero() {
+			entries, err := s.sendQueue().Snapshot(name)
+			if err == nil && len(entries) > 0 {
+				stale := true
+				for _, e := range entries {
+					// A fresh message or an unresolved attempt is never silently hidden.
+					if !e.EnqueuedAt.Before(stopped) || e.State != sendq.Pending || e.AttemptID != "" ||
+						!strings.Contains(e.Detail, "intent says do not deliver") {
+						stale = false
+						break
+					}
+				}
+				if stale {
+					return ""
+				}
+			}
+		}
+	}
+	return FormatQueueStoppage(name, st, now)
+}
+
 // FormatSendqPinLine is the operator-facing account of a pinned seat, shared
 // by agent_list and the fleet-health notice so the two never drift.
 // Those callers have no owned-attempt argument, so they keep the flow-past
@@ -662,7 +737,7 @@ func (s *Server) MarkSendqPinned(name string, e sendq.Entry, reason string) {
 	s.sendqPin[name] = pin
 	s.mu.Unlock()
 	if !already {
-		s.notifyFleetHealth(pin.EntryID, FormatSendqPinLine(name, pin))
+		s.notifyFleetHealth(noticeAct, pin.EntryID, FormatSendqPinLine(name, pin))
 	}
 }
 
@@ -772,6 +847,6 @@ func (s *Server) noticeUncertainAttempt(name string, pin SendqPin, line string) 
 	s.sendqAttemptNoticed[name] = pin.AttemptID
 	s.mu.Unlock()
 	if !noticed {
-		s.notifyFleetHealth(pin.AttemptID, line)
+		s.notifyFleetHealth(noticeAct, pin.AttemptID, line)
 	}
 }

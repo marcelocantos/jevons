@@ -25,10 +25,10 @@ import (
 // the build it was loaded with, and reloads when a mux hello names another.
 const BuildMetaName = "jevons-build"
 
-// stampBuildMeta inserts the build meta tag right after <head>. An index
+// StampBuildMeta inserts the build meta tag right after <head>. An index
 // without <head>, or an unknown ("") build, is served unchanged: the client
 // then adopts the first hello's id as its baseline rather than guessing.
-func stampBuildMeta(index []byte, buildID string) []byte {
+func StampBuildMeta(index []byte, buildID string) []byte {
 	if buildID == "" {
 		return index
 	}
@@ -75,7 +75,7 @@ func registerReactUIRoutes(mux *http.ServeMux, files fs.FS, buildID string) erro
 	if err != nil {
 		return fmt.Errorf("React index: %w", err)
 	}
-	index = stampBuildMeta(index, buildID)
+	index = StampBuildMeta(index, buildID)
 	if !bytes.Contains(index, []byte(`id="root"`)) {
 		return fmt.Errorf("React bundle has no root mount")
 	}

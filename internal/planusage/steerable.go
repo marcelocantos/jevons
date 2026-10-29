@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // unsteerableReasonFn backs UnsteerableReason. It is a var (not a
@@ -27,8 +28,14 @@ var unsteerableReasonFn = claudiaSteerableReason
 // copy of a fact claudia itself is in a better position to know and
 // keep current. The capability table now lives in claudia; this
 // function is a thin adapter.
+//
+// Claudia's capability table is keyed by plan name (claude, codex, grok,
+// cursor). A launch-name spelling (anthropic, openai-codex, xai-oauth) has
+// no row there, so asking with it read "no mcp_tools capability claim" and
+// an explicit openai-codex request was silently minted on claude
+// (🎯T1275). seatprovider.Resolve maps either vocabulary to the plan.
 func claudiaSteerableReason(provider string) string {
-	ok, reason := claudia.Steerable(claudia.Provider(strings.ToLower(strings.TrimSpace(provider))))
+	ok, reason := claudia.Steerable(seatprovider.Resolve(claudia.Provider(provider)).Plan.AsProvider())
 	if ok {
 		return ""
 	}

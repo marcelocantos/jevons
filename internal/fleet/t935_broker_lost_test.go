@@ -69,7 +69,7 @@ func TestT935SeatStillDownIsFlaggedOnceWithinTheBound(t *testing.T) {
 	var flaggedAt time.Time
 	now := start
 	for ; now.Before(start.Add(20 * time.Minute)); now = now.Add(10 * time.Second) {
-		res := reattachWith(reg, fleetintent.Snapshot{}, now, lost)
+		res := reattachWith(reg, fleetintent.Snapshot{}, now, lost, nil)
 		if len(res.Back) != 0 || len(res.Fresh) != 0 {
 			t.Fatalf("a seat whose relaunch fails came back: %+v", res)
 		}
@@ -101,14 +101,14 @@ func TestT935SeatStillDownIsFlaggedOnceWithinTheBound(t *testing.T) {
 	// The broker recovers: the seat comes back and the outage ends.
 	reg.relaunch = func(string) (*LostSession, error) { return nil, nil }
 	now = now.Add(brokerReattachCooldown)
-	if res := reattachWith(reg, fleetintent.Snapshot{}, now, lost); len(res.Back) != 1 {
+	if res := reattachWith(reg, fleetintent.Snapshot{}, now, lost, nil); len(res.Back) != 1 {
 		t.Fatalf("recovered broker did not bring the seat back: %+v", res)
 	}
 	// Lost again later: a new outage, flagged on its own clock, not at once.
 	reg.alive[name] = false
 	reg.relaunch = func(string) (*LostSession, error) { return nil, errors.New("still down") }
 	again := now.Add(time.Hour)
-	if res := reattachWith(reg, fleetintent.Snapshot{}, again, lost); len(res.Stuck) != 0 {
+	if res := reattachWith(reg, fleetintent.Snapshot{}, again, lost, nil); len(res.Stuck) != 0 {
 		t.Fatalf("a new outage was flagged on the old outage's clock: %+v", res.Stuck)
 	}
 }
@@ -125,7 +125,7 @@ func TestT935FreshRelaunchIsReported(t *testing.T) {
 			return &LostSession{Name: n, Parent: "jevons-po", OldSession: "old", NewSession: "new"}, nil
 		},
 	}
-	res := reattachWith(reg, fleetintent.Snapshot{}, time.Now(), func(n string) bool { return n == name })
+	res := reattachWith(reg, fleetintent.Snapshot{}, time.Now(), func(n string) bool { return n == name }, nil)
 	if len(res.Back) != 1 || len(res.Fresh) != 1 || res.Fresh[0].NewSession != "new" || res.Fresh[0].Parent != "jevons-po" {
 		t.Fatalf("fresh relaunch not reported: %+v", res)
 	}
@@ -143,11 +143,11 @@ func TestT935DeliberateStopEndsTheOutage(t *testing.T) {
 	isLost := true
 	lost := func(n string) bool { return isLost && n == name }
 	start := time.Date(2026, 9, 30, 1, 0, 0, 0, time.UTC)
-	reattachWith(reg, fleetintent.Snapshot{}, start, lost)
+	reattachWith(reg, fleetintent.Snapshot{}, start, lost, nil)
 	isLost = false // the owner stopped it: the stop record is no longer the broker's
-	reattachWith(reg, fleetintent.Snapshot{}, start.Add(time.Minute), lost)
+	reattachWith(reg, fleetintent.Snapshot{}, start.Add(time.Minute), lost, nil)
 	isLost = true
-	if res := reattachWith(reg, fleetintent.Snapshot{}, start.Add(brokerLostFlagAfter+time.Minute), lost); len(res.Stuck) != 0 {
+	if res := reattachWith(reg, fleetintent.Snapshot{}, start.Add(brokerLostFlagAfter+time.Minute), lost, nil); len(res.Stuck) != 0 {
 		t.Fatalf("an outage that ended was flagged: %+v", res.Stuck)
 	}
 }

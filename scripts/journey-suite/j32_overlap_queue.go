@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // jOverseerOverlapQueue proves the owner can send again while a real provider
@@ -101,11 +103,22 @@ func (s *suite) jOverseerOverlapQueue() error {
 	if err := waitOwnerMuxReply(ctx, frames, second, secondToken); err != nil {
 		return fmt.Errorf("second owner message: %w", err)
 	}
+	// 🎯T832: the shared overseer is not a seat this journey minted. An
+	// earlier journey may have moved it (J13 once migrated it in place), so
+	// its expectation is its CURRENT provider from /api/agents — not the
+	// suite's PROVIDER. Its latest runtime launch must match that.
+	overseer, err := s.registryProvider(overseerName)
+	if err != nil {
+		return err
+	}
+	if seatprovider.Resolve(overseer).Plan != seatprovider.Resolve(s.provider).Plan {
+		fmt.Printf("NOTE %s is on %s, not the suite's %s: an earlier journey moved it; its checks follow its current provider (T832)\n", overseerName, overseer, s.provider)
+	}
 	logs, err := os.ReadFile(s.logPath)
 	if err != nil {
 		return err
 	}
-	return queueJourneyProvider(logs, overseerName, string(s.provider))
+	return latestLaunchProvider(logs, overseerName, overseer)
 }
 
 // ownerEscalations counts the daemon's owner-urgency escalating sends

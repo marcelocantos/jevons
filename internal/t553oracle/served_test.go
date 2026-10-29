@@ -9,6 +9,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/server"
 )
 
 func bundleOf(t *testing.T, members map[string]string) []byte {
@@ -54,9 +56,25 @@ func serve(files map[string]string) func(string) ([]byte, error) {
 	}
 }
 
+func TestServedMatchesBundleAcceptsStampedIndex(t *testing.T) {
+	files, zipBytes := committed(t)
+	stamped := map[string]string{}
+	for k, v := range files {
+		stamped[k] = v
+	}
+	stamped["index.html"] = string(server.StampBuildMeta([]byte(files["index.html"]), "feedfacecafebeef"))
+	checked, err := ServedMatchesBundle(zipBytes, serve(stamped), "feedfacecafebeef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(checked) < 2 {
+		t.Fatalf("checked %v", checked)
+	}
+}
+
 func TestServedMatchesBundleAcceptsCommittedServe(t *testing.T) {
 	files, zipBytes := committed(t)
-	checked, err := ServedMatchesBundle(zipBytes, serve(files))
+	checked, err := ServedMatchesBundle(zipBytes, serve(files), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +93,7 @@ func TestServedMatchesBundleRejectsWorkingTreeScript(t *testing.T) {
 		wip[k] = v
 	}
 	wip["assets/index-1.js"] = "closeProviderMenu()"
-	if _, err := ServedMatchesBundle(zipBytes, serve(wip)); err == nil || !strings.Contains(err.Error(), "/assets/index-1.js") {
+	if _, err := ServedMatchesBundle(zipBytes, serve(wip), ""); err == nil || !strings.Contains(err.Error(), "/assets/index-1.js") {
 		t.Fatalf("err = %v; want a mismatch naming /assets/index-1.js", err)
 	}
 }
@@ -83,18 +101,18 @@ func TestServedMatchesBundleRejectsWorkingTreeScript(t *testing.T) {
 func TestServedMatchesBundleRejectsForeignIndexAndMissingAsset(t *testing.T) {
 	files, zipBytes := committed(t)
 	other := map[string]string{"index.html": strings.Replace(testIndex, "index-1", "index-2", 2), "assets/index-2.js": "x", "assets/index-2.css": "y", "favicon.svg": "<svg/>"}
-	if _, err := ServedMatchesBundle(zipBytes, serve(other)); err == nil || !strings.Contains(err.Error(), "GET /") {
+	if _, err := ServedMatchesBundle(zipBytes, serve(other), ""); err == nil || !strings.Contains(err.Error(), "GET /") {
 		t.Fatalf("foreign index: err = %v", err)
 	}
 	delete(files, "assets/index-1.css")
-	if _, err := ServedMatchesBundle(zipBytes, serve(files)); err == nil || !strings.Contains(err.Error(), "index-1.css") {
+	if _, err := ServedMatchesBundle(zipBytes, serve(files), ""); err == nil || !strings.Contains(err.Error(), "index-1.css") {
 		t.Fatalf("missing served asset: err = %v", err)
 	}
 }
 
 func TestServedMatchesBundleRefusesVacuousPage(t *testing.T) {
 	m := map[string]string{"index.html": `<!doctype html><div id="root"></div>`}
-	if _, err := ServedMatchesBundle(bundleOf(t, m), serve(m)); err == nil || !strings.Contains(err.Error(), "no script") {
+	if _, err := ServedMatchesBundle(bundleOf(t, m), serve(m), ""); err == nil || !strings.Contains(err.Error(), "no script") {
 		t.Fatalf("err = %v; want vacuous refusal", err)
 	}
 }

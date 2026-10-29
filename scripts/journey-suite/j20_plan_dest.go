@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -18,28 +17,23 @@ import (
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
-func (s *suite) writePlanFixture(rem, used float64) (string, error) {
-	return writePlanFixtureFile(s.stateDir, "plan-usage-j20.json", "grok", rem, used)
-}
-
 func (s *suite) j20PlanDest() (result error) {
 	if s.host == "" || strings.HasSuffix(s.host, ":13705") {
 		return fmt.Errorf("J20 refuses development port")
 	}
-	// Ahead: used 70 => burn 1.4 (ahead is 1.0-1.5; 55 measured ok). No dest → omit-provider must refuse.
-	path, err := s.writePlanFixture(30, 70)
-	if err != nil {
+	if err := s.ensureIsolatedBroker(); err != nil {
 		return err
 	}
-	s.daemonEnv = append(s.daemonEnv, planusage.FixtureEnv+"="+path)
-	// The daemon keeps reading this fixture for the rest of the run, and
+	// Ahead grok (used 70 => burn 1.4) plus the other three exhausted:
+	// no dest → omit-provider must refuse. Seeded through Claudia T234
+	// on the live isolate broker — not the retired fixture env.
+	if err := s.pushAndAwait(destEmptyOverrideReadings()); err != nil {
+		return fmt.Errorf("seed dest-empty usage: %w", err)
+	}
 	// J20 leaves grok exhausted. Every later journey then found no plan
 	// destination (J21, J35 and J36 in the 2026-10-05 gate). Leave the plan
 	// healthy again, and leave no seat parked by it: see restorePlanAfterJ20.
-	defer func() { result = errors.Join(result, s.restorePlanAfterJ20(path)) }()
-	if err := s.bounceDrain(); err != nil {
-		return fmt.Errorf("bounce with fixture: %w", err)
-	}
+	defer func() { result = errors.Join(result, s.restorePlanAfterJ20()) }()
 
 	resp, err := http.Get("http://" + s.host + "/api/plan-usage/thresholds")
 	if err != nil {
@@ -71,11 +65,11 @@ func (s *suite) j20PlanDest() (result error) {
 		return fmt.Errorf("jevons_plan_usage: %w", err)
 	}
 
-	// Mint an explicit grok worker while the feed is a destination band
+	// Mint an explicit grok worker while grok is a destination band
 	// (the product refuses a mint onto an exhausted dest even with an
 	// explicit provider), then exhaust the weekly window; sweep parks it.
-	if _, err := s.writePlanFixture(defaultPlanRemaining, defaultPlanUsed); err != nil {
-		return err
+	if err := s.pushAndAwait(grokDestOverrideReadings()); err != nil {
+		return fmt.Errorf("seed grok dest usage: %w", err)
 	}
 	// The worker hangs off an intermediate seat. When this fixture exhausts
 	// grok, that seat is on the hot provider too and the sweep parks it
@@ -105,12 +99,8 @@ func (s *suite) j20PlanDest() (result error) {
 	// placement defers ("destination plan readings incomplete") rather than
 	// parking, since a destination may exist; a park needs every plan read
 	// and none eligible.
-	all, err := json.Marshal(planFixtureSnapshotOf([]string{"grok", "claude", "codex", "cursor"}, 0, 100))
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, all, 0o600); err != nil {
-		return err
+	if err := s.pushAndAwait(exhaustedOverrideReadings()); err != nil {
+		return fmt.Errorf("seed exhausted usage: %w", err)
 	}
 	sweep, err := http.Post("http://"+s.host+"/api/plan-usage/sweep", "application/json", bytes.NewReader([]byte("{}")))
 	if err != nil {
@@ -158,16 +148,16 @@ const j20RecoverWait = 90 * time.Second
 // restorePlanAfterJ20 gives the isolate back the way J20 found it.
 //
 // Exhausting every plan parks every seat on one, the overseer included
-// (🎯T850). Restoring the fixture alone left those parks in place until the
+// (🎯T850). Restoring the readings alone left those parks in place until the
 // daemon's own periodic sweep reconsidered them, five minutes later. In gate
 // 252cf6ac that window held J30's owner turn ("chat: owner turn held by fleet
 // intent") past its 90 s paint deadline: J30 failed in the suite and passed
 // alone. So the restore sweeps at once and waits until no seat is still
 // parked by plan policy. That is also an assertion of the product's recovery
 // path: a park the plan forced is reconsidered when the plan recovers.
-func (s *suite) restorePlanAfterJ20(path string) error {
-	if _, err := s.writePlanFixtureFile(path); err != nil {
-		return fmt.Errorf("restore plan fixture: %w", err)
+func (s *suite) restorePlanAfterJ20() error {
+	if err := s.pushAndAwait(healthyOverrideReadings()); err != nil {
+		return fmt.Errorf("restore plan usage: %w", err)
 	}
 	deadline := time.Now().Add(j20RecoverWait)
 	for {
@@ -192,6 +182,16 @@ func (s *suite) restorePlanAfterJ20(path string) error {
 		}
 		time.Sleep(2 * time.Second)
 	}
+	// J45 must exercise a fleet turn on the recovered overseer. The turn
+	// started before exhaustion was interrupted by the plan-policy park;
+	// its old process cannot be assumed to resume after the re-mint.
+	// Start a fresh held fleet turn after recovery, before removing its sender.
+	if s.j45HoldOverseer {
+		poName, _ := s.j20SeatNames()
+		if err := s.j45HoldOverseerInFleetTurn(poName); err != nil {
+			return fmt.Errorf("hold recovered overseer for J45: %w", err)
+		}
+	}
 	// The worker J20 minted has done its job; a seat left running would do
 	// work of its own during every later journey.
 	poName, parkName := s.j20SeatNames()
@@ -209,15 +209,6 @@ func (s *suite) restorePlanAfterJ20(path string) error {
 		return fmt.Errorf("the overseer J20's recovery brought back never went idle: %w", err)
 	}
 	return nil
-}
-
-// writePlanFixtureFile rewrites path with the healthy default feed.
-func (s *suite) writePlanFixtureFile(path string) (string, error) {
-	got, err := s.writePlanFixture(defaultPlanRemaining, defaultPlanUsed)
-	if err == nil && got != path {
-		err = fmt.Errorf("plan fixture moved from %s to %s", path, got)
-	}
-	return got, err
 }
 
 // planPolicyParked names the seats whose recorded intent is a plan-policy park.

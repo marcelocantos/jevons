@@ -35,7 +35,10 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/escalate"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/ownercockpit"
+	"github.com/marcelocantos/jevons/internal/ownerquestionview"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
@@ -78,8 +81,11 @@ type Server struct {
 	// from a plain restart. "" means unknown; clients never reload on it.
 	buildID                  string
 	stateDir                 string                                          // jevons state root (config-driven, 🎯T44/T49)
+	ownerCockpit             *ownercockpit.Gate                              // 🎯T1129 owner-session cookie gate
 	overseerName             string                                          // registry name of the CEO agent (config-driven, 🎯T44)
 	overseerDownSince        time.Time                                       // start of the current down-reason streak; zero when none (🎯T775); guarded by mu
+	overseerPagingEpoch      time.Time                                       // daemon paging clock anchor (🎯T807); guarded by mu
+	overseerPageAfter        time.Duration                                   // 0 → DefaultOverseerPageAfter; isolate tests only (🎯T807)
 	ownerQuestionDigestCheck time.Time                                       // last standing owner-question digest check (T1028.3)
 	overseerPaged            bool                                            // owner already paged for this outage (🎯T775); guarded by mu
 	overseerPager            func(subject, body, key string, recovered bool) // out-of-band pager (🎯T775); nil → blurter
@@ -119,6 +125,8 @@ type Server struct {
 	// Pending (incomplete "[silent]" prefix). Flushed on Visible; dropped
 	// on Silent (🎯T240).
 	overseerStreamHold []string
+	// overseerTUIPreview holds live Claude pane preview suffixes (🎯T584).
+	overseerTUIPreview overseerTUIPreviewState
 
 	// overseerLastProgress is the last ACP/event/activity time for stuck-busy
 	// detection (🎯T204). Zero means never observed.
@@ -174,9 +182,6 @@ type Server struct {
 	// planUsageWaitReady blocks until the first plan-usage batch has landed
 	// (or ctx ends). Nil means handlePlanUsage returns pending immediately.
 	planUsageWaitReady func(ctx context.Context) error
-	// planUsageRefresh forces a producer poll (🎯T653). Nil means
-	// ?refresh=1 is a no-op besides returning the current snapshot.
-	planUsageRefresh func(ctx context.Context) error
 	// planSweep runs the 🎯T390.1.5 hot/exhausted migrate-or-park actuator.
 	planSweep func() any
 	// planRetryAfterReauth marks remembered failed moves to a provider as
@@ -197,6 +202,8 @@ type Server struct {
 	// Wired from main to mcpserver.ObserveProviderFailure / ObserveProviderOK.
 	onProviderFailure func(class agenterr.Class, raw string)
 	onProviderOK      func()
+	// fleetIntentSource supplies intent for 🎯T1121 panel classification.
+	fleetIntentSource func() fleetintent.Snapshot
 	// modelSwitcher backs POST /api/agents/switch-model — the owner's
 	// per-seat provider/model switch from the fleet tree (🎯T285.2).
 	modelSwitcher ModelSwitcher
@@ -268,15 +275,19 @@ type Server struct {
 	// never lands here.
 	notifyUntrackedOwnerIDs map[string]string
 	ownerUndelivered        map[string]bool
-	notifyRetryDelay        time.Duration
-	notifyRetryTimer        *time.Timer
-	notifyRetryN            int
-	overseerReattachWait    time.Duration
-	brokerFaultDir          string // 🎯T811 isolate-only fault seam
-	ownerQueueMu            sync.Mutex
-	ownerQueuePath          string
-	ownerDelivered          []string
-	overseerOwnerTurn       bool
+	// 🎯T1130: texts currently held behind a running turn (the daemon's own
+	// notifyQueue), so the cockpit can paint Steer / Cut-in on that row
+	// instead of leaving it a plain bubble until the FIFO drain.
+	ownerHeld            map[string]bool
+	notifyRetryDelay     time.Duration
+	notifyRetryTimer     *time.Timer
+	notifyRetryN         int
+	overseerReattachWait time.Duration
+	brokerFaultDir       string // 🎯T811 isolate-only fault seam
+	ownerQueueMu         sync.Mutex
+	ownerQueuePath       string
+	ownerDelivered       []string
+	overseerOwnerTurn    bool
 	// overseerPhase is the current reduce of the interleaved turn-state
 	// stream (🎯T555.1); overseerCorrespondent is the in-flight notify batch
 	// stamped onto non-idle samples.
@@ -303,13 +314,13 @@ type Server struct {
 	// frontierCwd is the primary workdir for bullseye ledger discovery (🎯T131).
 	// Path resolution always goes through bullseye CLI — never hard-coded yaml.
 	frontierCwd string
-	// frontierWatchCancel / frontierWatchPath: fsnotify on resolved ledger (🎯T131).
-	frontierWatchCancel context.CancelFunc
-	frontierWatchPath   string
-	// achievedTargetsSeen is the last-observed set of ledger status=achieved
-	// target IDs for 🎯T195 reap-on-achieve. Seeded on watch bind; only
-	// *newly* achieved IDs trigger implementer reaping (no mass-kill on boot).
-	achievedTargetsSeen map[string]bool
+	// frontierWatches holds one fsnotify goroutine per resolved ledger path
+	// (🎯T131). Concurrent frontier polls for different workdirs must not
+	// cancel each other's watcher (🎯T1219).
+	frontierWatches map[string]context.CancelFunc
+	// achievedTargetsSeen is the last-observed achieved target set per ledger
+	// for 🎯T195 reap-on-achieve. Outer key = cleaned ledger path.
+	achievedTargetsSeen map[string]map[string]bool
 
 	// workers is the 🎯T8.2 observability tracker (SQLite + SSE hub).
 	workers *workers.Tracker
@@ -373,6 +384,8 @@ type Server struct {
 	planAuth   planAuthCache
 	// The product hook owns admission and retains the speaker's origin.
 	agentSendOriginHook func(name, text, origin string, mode delivery.Mode) (AgentSendOutcome, error)
+	// ownerQuestionAnswerHook answers open owner questions from the cockpit (🎯T404.1).
+	ownerQuestionAnswerHook func(id ownerquestionview.Identity, answer string) (routed string, err error)
 	// ownerEscalation is the owner urgency ladder for a busy overseer
 	// (🎯T903); overseerEscalatorSeam stands in for its seat in tests.
 	ownerEscalation       func() (escalate.Ladder, bool)
@@ -410,15 +423,31 @@ type Server struct {
 	ownerUnanswered            map[string]string
 	// 🎯T662 decorations for /api/agents rows: why a seat stopped, and the
 	// fleet-wide mass-stop line. Nil = no ledger wired (tests).
-	seatStopReader func(name string) (reason string, at time.Time, ok bool)
+	seatStopReader        func(name string) (reason string, at time.Time, ok bool)
+	seatStopDetailsReader func(name string) (reason, actor string, at time.Time, ok bool)
 	// seatStartingReader reports a seat being brought up (🎯T970).
 	seatStartingReader func(name string) bool
+	// seatPauseControl is per-seat owner pause from the cockpit (🎯T981).
+	seatPauseControl SeatPauseControl
+	// fleetPauseControl is fleet-wide owner pause (🎯T966).
+	fleetPauseControl FleetPauseControl
 	// seatWaitClear withdraws a frontier target's wait for a seat (🎯T980).
-	seatWaitClear func(target string)
-	wedgedReader  func(name string) (string, bool)
+	seatWaitClear                func(target string)
+	wedgedReader                 func(name string) (string, bool)
+	inertReader                  func(name string) (string, bool)
+	emptyTurnFaultReader         func(name string) (string, bool)
+	emptyTurnBackoffReader       func(name string) string
+	queuedPromptsReader          func(name string) (depth int, ageSec float64, ok bool)
+	autoSeatHoldReader           func(name string) string
+	destinationModelValidator    func(provider, model string, explicitPin bool) error
+	providerRequestFailureReader func(name string) (class agenterr.Class, lastError string, failed bool)
 	// deadSeatNoter records a dead seat the fleet feed handled (🎯T925).
 	deadSeatNoter  func(name, cause, detail string)
 	massStopReader func() string
+	// poAuditorFaultReader surfaces 🎯T1192 on /api/agents (mcpserver in prod).
+	poAuditorFaultReader func(name string) (line string, ok bool)
+	// awaitingParentDirectionReader surfaces 🎯T1233 on /api/agents.
+	awaitingParentDirectionReader func(name string) (line string, ok bool)
 	// spawnOrderReader names a parent's open spawn orders (🎯T762).
 	spawnOrderReader func(parent string) ([]string, error)
 
@@ -552,6 +581,7 @@ func New(version, stateDir string) *Server {
 		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
 		historyGate:   newHistoryHydrateGate(maxHistoryHydrateConcurrent),
 		agentProgress: NewAgentProgressHub(),
+		ownerCockpit:  ownercockpit.NewGate(),
 	}
 
 	if rec, err := s.creds.Load(); err != nil {
@@ -664,6 +694,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	// rather than by its author remembering to call rejectCrossSite.
 	mux := newGuardedRouter(m, s.eventJournal())
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /api/owner-cockpit/session", s.handleOwnerCockpitSession) // 🎯T1129
 	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/mux", s.handleMux) // 🎯T537.1 one conversation API
@@ -679,25 +710,32 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("POST /api/reviews/{id}/answer", s.answerReview)   // fail closed until owner auth exists
 	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend) // 🎯T182: product agent_send proxy
 	mux.HandleFunc("POST /api/agents/{name}/auth/recover", s.handleAgentAuthRecover)
+	mux.HandleFunc("POST /api/agents/{name}/pause", s.handleAgentPause)     // 🎯T981
+	mux.HandleFunc("POST /api/agents/{name}/unpause", s.handleAgentUnpause) // 🎯T981
+	mux.HandleFunc("POST /api/fleet-pause", s.handleFleetPause)             // 🎯T966
 	// 🎯T198: stop workers engaged on a frontier target (TargetID equality).
 	mux.HandleFunc("POST /api/agents/engagement/stop", s.handleEngagementStop)
-	mux.HandleFunc("POST /api/asides", s.handleCreateAside)                  // 🎯T136: register purpose=aside in fleet
-	mux.HandleFunc("GET /api/asides/history", s.handleListClosedAsides)      // 🎯T270: closed/dismissed aside archive
-	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside)           // 🎯T152: dismiss fleet aside on target filed
-	mux.HandleFunc("POST /api/ideas", s.handleCaptureIdea)                   // 🎯T325.3: durable idea intake
-	mux.HandleFunc("GET /api/ideas", s.handleListIdeas)                      // 🎯T325.3: listable idea surface
-	mux.HandleFunc("PATCH /api/ideas/{id}", s.handleTriageIdea)              // 🎯T325.3: triage ceremony
-	mux.HandleFunc("POST /api/ideas/{id}/triage", s.handleTriageIdea)        // alias for clients without PATCH
-	mux.HandleFunc("GET /api/rsi/dispositions", s.handleRSIDispositions)     // 🎯T354: owner-visible coach judgments
-	mux.HandleFunc("GET /api/research/notes", s.handleResearchNotes)         // 🎯T356: durable research notes
-	mux.HandleFunc("GET /api/research/notes/{id}", s.handleResearchNote)     // 🎯T356: one note with revisions
-	mux.HandleFunc("GET /api/gates/{id}", s.handleGetGate)                   // 🎯T697: supervisor gate lookup
-	mux.HandleFunc("GET /api/security/status", s.handleSecurityStatus)       // 🎯T335
-	mux.HandleFunc("POST /api/security/confined-exec", s.handleConfinedExec) // 🎯T335 writ vertical
-	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)            // 🎯T200: domain portfolio groups
-	mux.HandleFunc("GET /api/frontier", s.handleFrontier)                    // 🎯T131: live bullseye frontier table
-	mux.HandleFunc("GET /api/frontier/target", s.handleFrontierTarget)       // 🎯T647: any ledger row for chat hover
-	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph)         // 🎯T185: unachieved dependency Mermaid
+	mux.HandleFunc("POST /api/asides", s.handleCreateAside)                              // 🎯T136: register purpose=aside in fleet
+	mux.HandleFunc("GET /api/asides/history", s.handleListClosedAsides)                  // 🎯T270: closed/dismissed aside archive
+	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside)                       // 🎯T152: dismiss fleet aside on target filed
+	mux.HandleFunc("POST /api/ideas", s.handleCaptureIdea)                               // 🎯T325.3: durable idea intake
+	mux.HandleFunc("GET /api/ideas", s.handleListIdeas)                                  // 🎯T325.3: listable idea surface
+	mux.HandleFunc("PATCH /api/ideas/{id}", s.handleTriageIdea)                          // 🎯T325.3: triage ceremony
+	mux.HandleFunc("POST /api/ideas/{id}/triage", s.handleTriageIdea)                    // alias for clients without PATCH
+	mux.HandleFunc("GET /api/rsi/dispositions", s.handleRSIDispositions)                 // 🎯T354: owner-visible coach judgments
+	mux.HandleFunc("GET /api/repowatch", s.handleRepoWatch)                              // 🎯T1022.2: PO repo-watch state
+	mux.HandleFunc("GET /api/research/notes", s.handleResearchNotes)                     // 🎯T356: durable research notes
+	mux.HandleFunc("GET /api/research/notes/{id}", s.handleResearchNote)                 // 🎯T356: one note with revisions
+	mux.HandleFunc("GET /api/gates/{id}", s.handleGetGate)                               // 🎯T697: supervisor gate lookup
+	mux.HandleFunc("GET /api/supervisor/notes", s.handleSupervisorNotes)                 // 🎯T704: supervisor memory read
+	mux.HandleFunc("POST /api/supervisor/notes/rolling", s.handleSupervisorNotesRolling) // 🎯T704: append ROLLING
+	mux.HandleFunc("POST /api/supervisor/escalate", s.handleSupervisorEscalate)          // 🎯T704: blurter from daemon
+	mux.HandleFunc("GET /api/security/status", s.handleSecurityStatus)                   // 🎯T335
+	mux.HandleFunc("POST /api/security/confined-exec", s.handleConfinedExec)             // 🎯T335 writ vertical
+	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)                        // 🎯T200: domain portfolio groups
+	mux.HandleFunc("GET /api/frontier", s.handleFrontier)                                // 🎯T131: live bullseye frontier table
+	mux.HandleFunc("GET /api/frontier/target", s.handleFrontierTarget)                   // 🎯T647: any ledger row for chat hover
+	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph)                     // 🎯T185: unachieved dependency Mermaid
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("GET /api/capacity", s.handleCapacity)    // 🎯T359: background admission
@@ -710,7 +748,8 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	// 🎯T285.2: fleet-tree icon menu — per-provider bands + models. The
 	// menu's choice goes to POST /api/agents/switch-model below.
 	mux.HandleFunc("GET /api/migrate/options", s.handleMigrateOptions)
-	mux.HandleFunc("POST /api/agents/switch-model", s.handleSwitchModel) // claudia 🎯T195
+	mux.HandleFunc("POST /api/overseer/migrate", s.handleOverseerMigrate) // 🎯T845
+	mux.HandleFunc("POST /api/agents/switch-model", s.handleSwitchModel)  // claudia 🎯T195
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
 	mux.HandleFunc("GET /api/logs", s.handleLogsTail)
 	mux.HandleFunc("GET /api/logs/stream", s.handleLogsStream)

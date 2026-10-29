@@ -30,6 +30,8 @@ const (
 	AgentStatusStopped      = "stopped"
 	AgentStatusNeverBriefed = "never_briefed"
 	AgentStatusRunning      = "running"
+	// AgentStatusRunningAgainstIntent is a live seat whose intent stood it down (🎯T1127).
+	AgentStatusRunningAgainstIntent = "intent_fault"
 )
 
 // ConfirmSendBeganTurn returns nil when a send/start-prompt outcome means
@@ -218,12 +220,7 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 			}
 		}
 	}
-	s.mu.Lock()
-	if s.fleetBriefed == nil {
-		s.fleetBriefed = map[string]bool{}
-	}
-	text, injected := EnsureFleetBriefWithRole(s.fleetBriefed, name, prompt, roleBody)
-	s.mu.Unlock()
+	text, injected := s.ensureFleetBrief(name, prompt, roleBody)
 	if injected {
 		// Same inject-once as first agent_send so start-with-prompt does
 		// not double the standing brief on a later send.

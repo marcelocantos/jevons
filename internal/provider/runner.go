@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/config"
 )
 
@@ -99,6 +100,7 @@ func (r *runner) runLaunch() {
 			return
 		}
 
+		r.l.clearAuthBackoff(r.id)
 		r.setRunning(proc.PID(), "")
 		r.l.log.Info("provider running", "provider", r.id, "transport", r.decl.Transport, "pid", proc.PID())
 
@@ -166,7 +168,12 @@ func (r *runner) runConnect() {
 // stopped phase.
 func (r *runner) backoffWait(attempt int, cause error) bool {
 	r.setPhase(PhaseBackoff, cause)
-	if !r.sleep(r.l.backoff.Delay(attempt)) {
+	delay := r.l.backoff.Delay(attempt)
+	if agenterr.LaunchAuthFailure(cause) {
+		r.l.noteAuthBackoff(r.id, cause)
+		delay = AuthLaunchBackoff.Delay(attempt)
+	}
+	if !r.sleep(delay) {
 		r.setPhase(PhaseStopped, nil)
 		return false
 	}

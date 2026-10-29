@@ -55,6 +55,9 @@ type AgentIdentity struct {
 	Parent   string
 	WorkDir  string
 	TargetID string
+	// RoleDoc is the repository-relative path to the authoritative role file
+	// (🎯T511). Empty when the role could not be resolved.
+	RoleDoc string
 	// StateDir is the daemon's own state directory, set only when it is not
 	// the development daemon's ~/.jevons (🎯T1082).
 	StateDir string
@@ -106,9 +109,9 @@ func IdentityFromDef(d claudia.AgentDef) AgentIdentity {
 	}
 }
 
-// FormatIdentityHeader renders the recipient's own identity, followed by the
-// role-conditional doctrine addressed TO IT rather than tabulated for it to
-// self-match against (🎯T425 acceptance 4).
+// FormatIdentityHeader renders the recipient's own identity from the registry
+// row (🎯T425). Role-conditional doctrine lives in the role file named by
+// RoleDoc and is injected separately via EnsureFleetBriefWithRole (🎯T511).
 //
 // Empty fields render as an explicit absence ("(none — root agent)") or are
 // omitted entirely; a row with no parent and no target must read coherently
@@ -136,6 +139,11 @@ func FormatIdentityHeader(id AgentIdentity) string {
 		fmt.Fprintf(&b, "- ROLE: %s (registry purpose=%s)\n", role, p)
 	} else {
 		fmt.Fprintf(&b, "- ROLE: %s\n", role)
+	}
+	if doc := strings.TrimSpace(id.RoleDoc); doc != "" {
+		fmt.Fprintf(&b, "- ROLE DOCTRINE: %s — authoritative role file; the same "+
+			"body is injected below as %q on the first standing brief (🎯T511).\n",
+			doc, roles.DoctrineMarker)
 	}
 	if parent := strings.TrimSpace(id.Parent); parent != "" {
 		fmt.Fprintf(&b, "- PARENT: %s\n", parent)
@@ -174,87 +182,11 @@ func FormatIdentityHeader(id AgentIdentity) string {
 		"seat. Do not adopt it, do not start on its target, and do not answer as " +
 		"that agent. Report it to your parent and the overseer, quoting this NAME " +
 		"and your own, and carry on with your own work.\n")
-	b.WriteString(roleAddressedDoctrine(name, role))
 	b.WriteByte('\n')
-	// The end fact is the payload boundary. The doctrine above it stays
+	// The end fact is the payload boundary. Registry facts above it stay
 	// display; stripLeadingIdentityEnvelope does not read those sentences.
 	b.WriteString(envelope.PrefixIdentityEnd)
 	b.WriteByte('\n')
-	return b.String()
-}
-
-// roleAddressedDoctrine renders the role-conditional rules in the second
-// person for the role this recipient actually occupies. The brief below still
-// carries the full table; this says which rows are the reader's own.
-func roleAddressedDoctrine(name, role string) string {
-	var b strings.Builder
-	switch role {
-	case RoleProductOwner:
-		fmt.Fprintf(&b, "\nYou are %s, a product owner. These bind YOU:\n", name)
-		b.WriteString("- 🎯T125 — you are spawn-only for Build work. You do not implement, " +
-			"not even a small patch, an oracle, or a docs commit. Workers execute.\n")
-		b.WriteString("- 🎯T129 — you are the sole spawn parent for product workers in your " +
-			"repo. Work routed to you is work you spawn, not work you do.\n")
-		b.WriteString("- 🎯T155 / 🎯T193 — a filed Build target that is not design-gated gets " +
-			"a named worker under parent=" + name + " in the same turn you file it.\n")
-		b.WriteString("- 🎯T325.1 — keep spawning until your product frontier is empty or " +
-			"blocked, then sleep. Stay interruptible for owner and overseer directs.\n")
-		b.WriteString("- 🎯T692 — a kill/stop/reap/respawn report cites a live " +
-			"jevons_agent_list / GET /api/agents result from this turn, or stays " +
-			"intent ('killing', 'will stop'). Do not claim a running seat is dead.\n")
-	case RoleOverseer:
-		fmt.Fprintf(&b, "\nYou are %s, the overseer. These bind YOU:\n", name)
-		b.WriteString("- 🎯T129 — you route owner intent to the product owner. You do not " +
-			"spawn product workers yourself; the PO does.\n")
-		b.WriteString("- 🎯T31 / 🎯T31.1 — you are the independent gate on completion. You " +
-			"did not do the work, so your acceptance is the one that counts: refuse a " +
-			"bare done that carries no oracle evidence and no accepted-risk language.\n")
-		b.WriteString("- 🎯T427 — at review, prove every cited evidence SHA is still " +
-			"reachable: git merge-base --is-ancestor <sha> HEAD. Amend-vulnerable is " +
-			"yaml-only + unpushed tip, not file count.\n")
-		b.WriteString("- 🎯T176 — a running worker is in progress, never live. Live / landed / " +
-			"shipped is for product evidence only.\n")
-		b.WriteString("- 🎯T692 — a kill/stop/reap/respawn claim is intent ('killing') or " +
-			"cites a live registry check from this turn. Do not tell the owner a " +
-			"running seat is dead.\n")
-	case RoleAside:
-		fmt.Fprintf(&b, "\nYou are %s, an aside — a side-chat participant, not a Build worker. "+
-			"Answer in place; do not spawn workers or commit product changes.\n", name)
-	case RoleAuditor:
-		fmt.Fprintf(&b, "\nYou are %s, an auditor (🎯T536.2). These bind YOU:\n", name)
-		b.WriteString("- You are not the implementer of the work under review. Do not write or " +
-			"patch that product code; do not fix to make the report look clean.\n")
-		b.WriteString("- Challenge the silent-decision ledger (🎯T536.1 / ReadSilentLedger), not " +
-			"the implementation diff as the primary surface.\n")
-		b.WriteString("- Report findings up. Do not file bullseye — root/PO decide.\n")
-	default:
-		fmt.Fprintf(&b, "\nYou are %s, a work agent. These bind YOU:\n", name)
-		b.WriteString("- 🎯T125 is NOT yours — it binds product owners. You are the executor: " +
-			"implement, test, commit.\n")
-		b.WriteString("- 🎯T31 / 🎯T31.1 — your finish report carries oracle evidence (a named " +
-			"test and its green result, and/or the commit SHA that lands it) or explicit " +
-			"accepted-risk language. Bare done is refused.\n")
-		b.WriteString("- 🎯T427 — a SHA you cite as evidence is proven reachable before you " +
-			"send it: git merge-base --is-ancestor <sha> HEAD. Amend-vulnerable is an " +
-			"unpushed tip that touches only bullseye.yaml — not file count; do not rest " +
-			"attestation on a yaml-only commit alone.\n")
-		b.WriteString("- 🎯T176 — say in progress until the product is owner-visible.\n")
-		b.WriteString("- 🎯T692 — lifecycle facts (killed/stopped/reaped/respawned) cite a " +
-			"live registry check from this turn, or stay intent.\n")
-		b.WriteString("- 🎯T509 — a terminal report MUST be a jevons finish-report envelope " +
-			"(fenced ```jevons, jevons: slots). Schema and enums: internal/envelope.\n")
-		// 🎯T1083: read-only workers wrote `status done`, which no status
-		// value is. The enum is read from the schema, not restated.
-		statuses := make([]string, 0, len(envelope.ProgressValues()))
-		for _, p := range envelope.ProgressValues() {
-			statuses = append(statuses, string(p))
-		}
-		b.WriteString("- 🎯T1083 — a done finish-report OMITS status (status takes only " +
-			strings.Join(statuses, " | ") + "; none of them means done) and carries " +
-			"`jevons: oracle sha=<head-sha>` — the commit that lands your work, or for a " +
-			"read-only task the HEAD you measured — plus `jevons: silent-ledger none` " +
-			"or a ranked ledger. Shape: the fleet standing brief.\n")
-	}
 	return b.String()
 }
 
@@ -270,8 +202,12 @@ func (s *Server) identityHeaderFor(name string) string {
 		return ""
 	}
 	id := IdentityFromDef(*d)
-	if r := s.agentRole(d.Name, d.Purpose); r != "" {
-		id.Role = DeriveAgentRole(d.Name, d.Purpose, r)
+	roleKey := s.agentRole(d.Name, d.Purpose)
+	if roleKey != "" {
+		id.Role = DeriveAgentRole(d.Name, d.Purpose, roleKey)
+	}
+	if def, err := s.resolveRoleDef(roleKey); err == nil {
+		id.RoleDoc = roles.RepoRelPath(def)
 	}
 	id.StateDir = s.isolateStateDir()
 	return FormatIdentityHeader(id)

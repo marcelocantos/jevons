@@ -58,7 +58,12 @@ func TestT921SupervisorPassesAreNotTheOwners(t *testing.T) {
 	s.RegisterRoutes(mux)
 	send := func(body string) {
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/agents/jevons/send", strings.NewReader(body)))
+		req := httptest.NewRequest(http.MethodPost, "/api/agents/jevons/send", strings.NewReader(body))
+		req.Header.Set("Sec-Fetch-Site", "same-origin") // sent from the cockpit
+		if s.ownerCockpit != nil {
+			req.AddCookie(s.ownerCockpit.TestCookie())
+		}
+		mux.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("send %s: %d %s", body, w.Code, w.Body.String())
 		}

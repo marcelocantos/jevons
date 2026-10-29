@@ -34,14 +34,14 @@ func listedFor(t *testing.T, url string, tools []mcp.Tool) map[string]bool {
 func TestCoreProfileListsFleetControlAndNotAmbientKnobs(t *testing.T) {
 	all := toolsNamed(
 		"jevons_agent_list", "jevons_agent_start", "jevons_agent_send", "jevons_target_file",
-		"jevons_gate_show", "jevons_sendq_reconcile", "jwork",
+		"jevons_gate_show", "jevons_reap_classify", "jevons_sendq_reconcile", "jwork",
 		"jevons_audit_configure", "jevons_research_cycle", "jevons_rsi_coach_status",
 		"jevons_idea_list", "jevons_thread_spawn", "self_test_run", "jevons_writ_exec",
 	)
 
 	core := listedFor(t, "/mcp?tools=core", all)
 	for _, want := range []string{"jevons_agent_list", "jevons_agent_start", "jevons_agent_send",
-		"jevons_target_file", "jevons_gate_show", "jevons_sendq_reconcile", "jwork"} {
+		"jevons_target_file", "jevons_gate_show", "jevons_reap_classify", "jevons_sendq_reconcile", "jwork"} {
 		if !core[want] {
 			t.Errorf("core profile does not list %s", want)
 		}
@@ -70,7 +70,7 @@ func liveSurface() []mcp.Tool {
 		"jevons_agent_report_read", "jevons_agent_send", "jevons_agent_start", "jevons_agent_stop",
 		"jevons_audit_configure", "jevons_audit_cycle", "jevons_audit_report",
 		"jevons_audit_residue", "jevons_audit_status", "jevons_capacity_status", "jevons_cost",
-		"jevons_event_push", "jevons_fleet_intent", "jevons_gate_show", "jevons_idea_capture",
+		"jevons_event_push", "jevons_fleet_intent", "jevons_gate_show", "jevons_reap_classify", "jevons_idea_capture",
 		"jevons_idea_list", "jevons_idea_triage", "jevons_job", "jevons_logs_tail",
 		"jevons_mcp_reconnect", "jevons_owner_gate", "jevons_plan_usage",
 		"jevons_research_configure", "jevons_research_cycle", "jevons_research_list",
@@ -90,12 +90,12 @@ func liveSurface() []mcp.Tool {
 func TestCoreProfileOfTheLiveSurfaceFitsFortyTools(t *testing.T) {
 	all := liveSurface()
 	core := listedFor(t, "/mcp?tools=core", all)
-	if len(all) != 55 || len(core) > 40 {
-		t.Fatalf("core profile lists %d of %d tools; want at most 40 of 55", len(core), len(all))
+	if len(all) != 56 || len(core) > 40 {
+		t.Fatalf("core profile lists %d of %d tools; want at most 40 of 56", len(core), len(all))
 	}
 	for _, want := range []string{"jevons_agent_list", "jevons_agent_start", "jevons_agent_send",
 		"jevons_agent_stop", "jevons_agent_report_read", "jevons_agent_switch_model", "jevons_target_file",
-		"jevons_gate_show", "jevons_sendq_reconcile", "jevons_spawn_order", "jevons_fleet_intent",
+		"jevons_gate_show", "jevons_reap_classify", "jevons_sendq_reconcile", "jevons_spawn_order", "jevons_fleet_intent",
 		"jevons_capacity_status", "jevons_plan_usage", "jevons_owner_gate"} {
 		if !core[want] {
 			t.Errorf("core profile does not list %s", want)

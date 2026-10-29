@@ -28,7 +28,7 @@ describe('AgentTree starting seats (🎯T970)', () => {
     expect(row).toBeTruthy();
     expect(row!.textContent).toContain('starting…');
     expect(row!.textContent).not.toContain('stopped');
-    expect(row!.querySelector('.agent-stop-reason')).toBeNull();
+    expect(row!.querySelector('.agent-stop-icon')).toBeNull();
   });
 
   it('never shows a stop reason on a starting seat, and still shows one on a stopped seat', () => {
@@ -49,7 +49,7 @@ describe('AgentTree starting seats (🎯T970)', () => {
         ]}
       />,
     );
-    const reasons = [...container.querySelectorAll('.agent-stop-reason')].map((n) => n.textContent);
-    expect(reasons).toEqual(['⛔ start failed: launch timed out']);
+    const reasons = [...container.querySelectorAll('.agent-stop-icon')].map((n) => n.textContent);
+    expect(reasons).toEqual(['⛔']);
   });
 });

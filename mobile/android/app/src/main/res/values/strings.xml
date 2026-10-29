@@ -1,0 +1,4 @@
+<resources>
+    <string name="usage_widget_label">Jevons usage</string>
+    <string name="usage_widget_description">Plan usage per backend, read with the app\'s sign-in</string>
+</resources>

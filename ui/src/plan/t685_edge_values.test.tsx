@@ -77,7 +77,8 @@ describe('the mark renders in front of the line (🎯T687)', () => {
     const { container } = render(<BurnChart window={win([0, 0, 0])} />);
     const svg = container.querySelector('svg.plan-burn-svg')!;
     const kids = [...svg.querySelectorAll('path')].map((p) => p.getAttribute('class'));
-    expect(kids).toEqual(['plan-burn-now']);
+    // 🎯T1283's on-track reference sits behind; the mark is still painted last.
+    expect(kids).toEqual(['plan-burn-pace', 'plan-burn-now']);
   });
 
   it('still marks a single sample, and does not draw a line', () => {

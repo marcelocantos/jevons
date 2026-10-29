@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -25,10 +26,11 @@ import (
 // than a sleep.
 
 type t582Fixture struct {
-	s      *Server
-	up     *upward
-	parent *recordingSender
-	now    time.Time
+	s       *Server
+	up      *upward
+	parent  *recordingSender
+	journal *eventlog.Journal
+	now     time.Time
 }
 
 func t582Server(t *testing.T, agent, parent, reason string) *t582Fixture {
@@ -42,12 +44,17 @@ func t582Server(t *testing.T, agent, parent, reason string) *t582Fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	journal, err := eventlog.Open(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := &Server{registry: reg}
 	s.SetFleetIntentStore(store)
 	s.SetSendQueueDir(dir)
 	s.SetRemovalAccount(fleetlog.New(nil))
+	s.SetEventJournal(journal)
 
-	f := &t582Fixture{s: s, up: &upward{}, parent: &recordingSender{}}
+	f := &t582Fixture{s: s, up: &upward{}, parent: &recordingSender{}, journal: journal}
 	f.now = time.Date(2026, 8, 29, 18, 43, 0, 0, time.UTC)
 	s.SetSweepClock(func() time.Time { return f.now })
 	s.SetOverseerDeliver(f.up.deliver)
@@ -110,6 +117,42 @@ func heldReapedNotices(lines []string) int {
 	return n
 }
 
+// heldReapedInformTexts returns finished-seat fleet-health lines written to the
+// event log only (🎯T1158 noticeInform), not delivered to the overseer.
+func heldReapedInformTexts(t *testing.T, j *eventlog.Journal) []string {
+	t.Helper()
+	evs, err := eventlog.Tail(j.Path(), eventlog.TailOptions{
+		Component: "fleet_health", Decision: "notice_inform", Limit: 200,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, ev := range evs {
+		line, _ := ev.Fields["line"].(string)
+		if strings.Contains(line, "Held backlog on") {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func finishedSeatInformText(t *testing.T, f *t582Fixture, want int) string {
+	t.Helper()
+	if got := heldReapedNotices(f.up.all()); got != 0 {
+		t.Fatalf("overseer fleet-health notices = %d; want 0 (🎯T1158)\n%s",
+			got, strings.Join(f.up.all(), "\n---\n"))
+	}
+	texts := heldReapedInformTexts(t, f.journal)
+	if len(texts) != want {
+		t.Fatalf("event-log inform notices = %d; want %d", len(texts), want)
+	}
+	if want == 0 {
+		return ""
+	}
+	return texts[0]
+}
+
 // The acceptance clause: exactly one overseer notice over ten minutes of
 // sweeps, and it does not advise starting the finished seat.
 func TestT582OneNoticePerReapedSeatOverTenMinutes(t *testing.T) {
@@ -126,45 +169,24 @@ func TestT582OneNoticePerReapedSeatOverTenMinutes(t *testing.T) {
 
 	f.sweepFor(10 * time.Minute)
 
-	lines := f.up.all()
-	if got := heldReapedNotices(lines); got != 1 {
-		t.Fatalf("overseer notices = %d over 10 simulated minutes; want exactly 1\n%s",
-			got, strings.Join(lines, "\n---\n"))
+	// Gate feedback about an achieve reap is dropped by the sweep (🎯T1187).
+	backlogs, err := f.s.sendQueue().Backlogs()
+	if err != nil {
+		t.Fatal(err)
 	}
-	notice := lines[0]
-	if strings.Contains(notice, "Recover with jevons_agent_start") {
-		t.Fatalf("notice still advises resurrecting a finished seat:\n%s", notice)
+	if len(backlogs) != 0 {
+		t.Fatalf("sendq after settle = %+v; want gate feedback dropped", backlogs)
 	}
-	if !strings.Contains(notice, "do NOT jevons_agent_start") {
-		t.Fatalf("notice does not say the seat is finished:\n%s", notice)
-	}
-	const payload = "GATE make-test-go exit=1 SUSPECT id=deadbeef — master is red on your commit"
-	rows, err := f.s.sendQueue().Snapshot(agent)
-	if err != nil || len(rows) != 1 || rows[0].State != sendq.Pending || rows[0].Text != payload {
-		t.Fatalf("sweep discarded the claimable payload: %+v %v", rows, err)
-	}
-	if _, err := f.s.sendQueue().ReadSupersession(rows[0].ID); err == nil {
-		t.Fatal("sweep archived the claimable payload")
-	}
-	if pending, depth := observedPendingSends(f.s, agent), observedQueueDepth(f.s, agent); pending != 1 || depth != 1 {
-		t.Fatalf("pending=%d depth=%d; want the payload still claimable", pending, depth)
-	}
-	if strings.Contains(notice, "Dropped") || strings.Contains(notice, payload) {
-		t.Fatalf("notice drops or quotes the payload:\n%s", notice)
-	}
-	if !strings.Contains(notice, "The payload stays") || !strings.Contains(notice, "daemon will not discard") {
-		t.Fatalf("notice does not say the payload stays:\n%s", notice)
-	}
-	// Gate feedback about the achieved target is not routed onward.
 	if got := len(f.parent.delivered()); got != 0 {
 		t.Fatalf("parent received %d message(s); gate feedback about an achieved target has no actor", got)
 	}
+	if got := heldReapedNotices(f.up.all()); got != 0 {
+		t.Fatalf("fleet-health notices = %d after drop; want none\n%s", got, strings.Join(f.up.all(), "\n"))
+	}
 }
 
-// 🎯T766.5: routeHeldReapedBacklog must not discard a claimable payload on a
-// finished-and-reaped seat. Gate feedback about the achieved target is not
-// delivered to the parent, and it is not removed. The payload stays until
-// jevons_sendq_reconcile records a drop or an overseer kill discards it.
+// 🎯T1187: routeHeldReapedBacklog drops gate feedback on an achieve reap.
+// It is not delivered to the parent and does not stay pending forever.
 func TestT7665FinishedReapedRouteKeepsTheClaimablePayload(t *testing.T) {
 	const agent, parent = "jv-t577-no-checkpoint-reap", "jevons-po"
 	const payload = "GATE make-test-go exit=1 SUSPECT id=deadbeef — master is red on your commit"
@@ -185,38 +207,14 @@ func TestT7665FinishedReapedRouteKeepsTheClaimablePayload(t *testing.T) {
 	f.s.routeHeldReapedBacklog(backlogs[0], rec, f.now)
 
 	rows, err := f.s.sendQueue().Snapshot(agent)
-	if err != nil || len(rows) != 1 || rows[0].State != sendq.Pending || rows[0].Text != payload {
-		t.Fatalf("route discarded the claimable payload: %+v %v", rows, err)
-	}
-	if _, err := f.s.sendQueue().ReadSupersession(rows[0].ID); err == nil {
-		t.Fatal("route archived the claimable payload")
-	}
-	if pending, depth := observedPendingSends(f.s, agent), observedQueueDepth(f.s, agent); pending != 1 || depth != 1 {
-		t.Fatalf("pending=%d depth=%d; want the payload still claimable", pending, depth)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("route left gate feedback on disk: %+v %v", rows, err)
 	}
 	if got := len(f.parent.delivered()); got != 0 {
 		t.Fatalf("parent received %d; gate feedback on an achieve reap is not delivered", got)
 	}
-	lines := f.up.all()
-	if got := heldReapedNotices(lines); got != 1 {
-		t.Fatalf("overseer notices = %d; want exactly 1 after two routes\n%s", got, strings.Join(lines, "\n---\n"))
-	}
-	notice := lines[0]
-	for _, banned := range []string{"Dropped", payload} {
-		if strings.Contains(notice, banned) {
-			t.Fatalf("notice contains %q:\n%s", banned, notice)
-		}
-	}
-	for _, want := range []string{
-		"Held backlog on",
-		"do NOT jevons_agent_start",
-		"The payload stays",
-		"jevons_sendq_reconcile",
-		"daemon will not discard",
-	} {
-		if !strings.Contains(notice, want) {
-			t.Errorf("notice missing %q:\n%s", want, notice)
-		}
+	if got := finishedSeatInformText(t, f, 0); got != "" {
+		t.Fatalf("unexpected fleet-health notice: %s", got)
 	}
 }
 
@@ -255,17 +253,10 @@ func TestT7665KeptClaimableHeadDoesNotBlockTheLaterRoute(t *testing.T) {
 		t.Fatalf("parent received %#v; want only the later message", got)
 	}
 	rows, err := f.s.sendQueue().Snapshot(agent)
-	if err != nil || len(rows) != 2 ||
-		rows[0].Text != gate || rows[0].State != sendq.Pending ||
-		rows[1].Text != follow || rows[1].State != sendq.Uncertain {
-		t.Fatalf("route did not keep the head and hand off the later message: %+v %v", rows, err)
+	if err != nil || len(rows) != 1 || rows[0].Text != follow || rows[0].State != sendq.Uncertain {
+		t.Fatalf("route dropped gate head and handed off the later message: %+v %v", rows, err)
 	}
-	if _, err := f.s.sendQueue().ReadSupersession(rows[0].ID); err == nil {
-		t.Fatal("route archived the kept head")
-	}
-	if got := heldReapedNotices(f.up.all()); got != 1 {
-		t.Fatalf("overseer notices = %d; want exactly 1\n%s", got, strings.Join(f.up.all(), "\n---\n"))
-	}
+	finishedSeatInformText(t, f, 1)
 }
 
 // A hold that is not gate feedback goes to the parent, tagged with the reaped
@@ -301,9 +292,7 @@ func TestT582NonGateHoldIsRoutedToTheParent(t *testing.T) {
 	if !strings.Contains(entries[0].Detail, "without a receipt") {
 		t.Fatalf("detail = %q", entries[0].Detail)
 	}
-	if got := heldReapedNotices(f.up.all()); got != 1 {
-		t.Fatalf("overseer notices = %d; want exactly 1", got)
-	}
+	finishedSeatInformText(t, f, 1)
 }
 
 // rehydrated_sent is the same non-receipt as sent. The held route passes
@@ -336,9 +325,7 @@ func TestT1074HeldRehydratedSentDoesNotConfirm(t *testing.T) {
 	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain {
 		t.Fatalf("rehydrated_sent confirmed the hold: %+v %v", entries, err)
 	}
-	if got := heldReapedNotices(f.up.all()); got != 1 {
-		t.Fatalf("overseer notices = %d; want exactly 1", got)
-	}
+	finishedSeatInformText(t, f, 1)
 }
 
 // 🎯T401 is not weakened: a genuinely new send to a reaped name is still

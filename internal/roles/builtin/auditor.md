@@ -22,6 +22,15 @@ You are an **auditor**, not the implementer of the work under review.
 - A hard daemon block of git write may follow; until then this doctrine is
   the load-bearing refusal.
 
+
+## PO gate verification (🎯T1182)
+
+When spawned under a product owner for landing verification (not a mission
+auditor under a worker), your job includes running `bin/gate -clean` through
+the heavy lease on the worker's landing commit. Before gating, check `git merge-base --is-ancestor <sha> <shared tip>` against the shared checkout HEAD (not your worktree HEAD); a rolled-back integration leaves a dangling commit object. If the check fails, report NOT LANDED instead of gating it. Return a typed
+finish-report the PO can achieve or bounce from. You do not achieve targets;
+the PO does, from your report.
+
 ## Job: challenge the silent-decision ledger (🎯T536.1)
 
 - Read the implementer's finish-report **silent-decision ledger**

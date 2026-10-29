@@ -75,4 +75,22 @@ if [ "${1:-}" = "--print-claudia-bin" ]; then
   exit 0
 fi
 echo "jevonsd: running $BIN" >&2
+# A stable instance ID survives supervisor restarts. Never derive it from a PID
+# or regenerate it on each start: the paired phone stores this ID.
+if [ -n "${JEVONS_RELAY_URL:-}" ]; then
+  STATE="${JEVONS_STATE_DIR:-$HOME/.jevons}"
+  mkdir -p "$STATE"
+  ID_FILE="$STATE/relay-instance-id"
+  if [ ! -s "$ID_FILE" ]; then
+    TMP="$(mktemp "$STATE/.relay-instance-id.XXXXXXXX")"
+    (umask 077; uuidgen | tr '[:upper:]' '[:lower:]' > "$TMP")
+    mv -n "$TMP" "$ID_FILE"
+    rm -f "$TMP"
+  fi
+  ID="$(cat "$ID_FILE")"
+  case "$ID" in
+    *[!a-zA-Z0-9_-]*|'') echo "jevonsd: invalid relay instance ID" >&2; exit 1 ;;
+  esac
+  exec "$BIN" -port 13705 -workdir "$ROOT" -relay "$JEVONS_RELAY_URL" -instance-id "$ID"
+fi
 exec "$BIN" -port 13705 -workdir "$ROOT"

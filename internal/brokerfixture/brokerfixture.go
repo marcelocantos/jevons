@@ -57,6 +57,14 @@ type Broker struct {
 // was built against (GOWORK, GOFLAGS and the cache are inherited) and starts
 // it on a fresh state directory and socket. Cleanup stops it.
 func Start(t testing.TB) *Broker {
+	b := StartStopped(t)
+	b.start()
+	return b
+}
+
+// StartStopped prepares the real broker fixture without listening yet.
+// Start it later with Restart to exercise a consumer booted offline.
+func StartStopped(t testing.TB) *Broker {
 	t.Helper()
 	work := t.TempDir()
 	bin := filepath.Join(work, "fixturebroker")
@@ -89,7 +97,6 @@ func Start(t testing.TB) *Broker {
 			}
 		}
 	})
-	b.start()
 	return b
 }
 
@@ -204,6 +211,12 @@ func (b *Broker) PublishUsage(fact claudia.UsageFact) {
 func (b *Broker) PublishReceipt(receipt claudia.RequestReceipt) {
 	b.t.Helper()
 	b.send(map[string]any{"op": "receipt", "receipt": receipt})
+}
+
+// PublishPlan records a provider observation through the broker's owner writer.
+func (b *Broker) PublishPlan(remaining float64) {
+	b.t.Helper()
+	b.send(map[string]any{"op": "plan", "remaining": remaining})
 }
 
 // Stop closes the broker the way a supervisor's SIGINT does: started

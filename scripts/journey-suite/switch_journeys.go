@@ -37,6 +37,15 @@ func switchJourneyDestination(from claudia.Provider) claudia.Provider {
 	return claudia.ProviderCodex
 }
 
+// overseerSwitchDestination is the overseer arm of the old migrate oracle
+// (🎯T838): claude ↔ grok on owner chat, not the codex worker pairing.
+func overseerSwitchDestination(from claudia.Provider) claudia.Provider {
+	if seatprovider.Resolve(from).Plan == seatprovider.Grok {
+		return claudia.ProviderClaude
+	}
+	return claudia.ProviderGrok
+}
+
 // switchedInPlace checks the registry row after a switch: on the
 // destination plan, on the same session.
 func switchedInPlace(source, after claudia.AgentDef, to claudia.Provider) error {
@@ -117,9 +126,10 @@ func (s *suite) providerSwitchWithBroker() error {
 	to := switchJourneyDestination(seatprovider.Resolve(source.Provider).Plan.AsProvider())
 	// owner_asked: the journey plays the owner requesting this move (🎯T561
 	// refuses an un-asked leave of a provider with weekly remaining).
-	out, err := s.mcpText("jevons_agent_switch_model", map[string]any{
+	switchArgs := map[string]any{
 		"name": id, "provider": string(to), "owner_asked": true,
-	})
+	}
+	out, err := s.switchModelUntilSettled(switchArgs)
 	if err != nil {
 		if authRefreshRefused(err, out) {
 			return s.authUnavailablePreserved(id, source, to, passphrase, err)
@@ -197,7 +207,7 @@ func (s *suite) stoppedProviderSwitchWithBroker() error {
 	}); err != nil {
 		return fmt.Errorf("stop seat: %w", err)
 	}
-	out, err := s.mcpText("jevons_agent_switch_model", map[string]any{
+	out, err := s.switchModelUntilSettled(map[string]any{
 		"name": id, "provider": string(to), "owner_asked": true,
 	})
 	if err != nil {
@@ -220,7 +230,7 @@ func (s *suite) stoppedProviderSwitchWithBroker() error {
 // The overseer switches from the fleet tree's route and keeps answering on
 // owner chat, which stays attached: there is no relaunch to re-attach.
 func (s *suite) overseerSwitchWithBroker() error {
-	to := switchJourneyDestination(s.provider)
+	to := overseerSwitchDestination(s.provider)
 	const codeword = "TANGERINEHARBOUR77"
 	ctx, cancel := context.WithTimeout(context.Background(), 3*turnTimeout)
 	defer cancel()
@@ -265,7 +275,34 @@ func (s *suite) overseerSwitchWithBroker() error {
 		}
 		_, text, _, err := waitTurn(ctx, frames, "codeword", true)
 		if err == nil && strings.Contains(strings.ToUpper(text), codeword) {
-			return nil
+			if err := s.bounceDrain(); err != nil {
+				return fmt.Errorf("restart after overseer switch: %w", err)
+			}
+			// 🎯T769: the daemon process restart restores the seat, not its
+			// WebSocket. The old /ws/chat connection belongs to the exited
+			// process; reconnect and drain replay before probing the restored
+			// conversation. Reusing it reports a broken pipe rather than recall.
+			conn.CloseNow()
+			conn, frames, err = dialChat(ctx, s.host)
+			if err != nil {
+				return fmt.Errorf("reconnect chat after restart: %w", err)
+			}
+			defer conn.CloseNow()
+			if _, err := drainReplay(frames, 800*time.Millisecond); err != nil {
+				return fmt.Errorf("replay after restart: %w", err)
+			}
+			for attempt := 1; attempt <= 5; attempt++ {
+				if err := conn.Write(ctx, websocket.MessageText,
+					[]byte("What is the project codeword? Reply with the codeword only.")); err != nil {
+					return err
+				}
+				_, text, _, err := waitTurn(ctx, frames, "codeword", true)
+				if err == nil && strings.Contains(strings.ToUpper(text), codeword) {
+					return nil
+				}
+				time.Sleep(10 * time.Second)
+			}
+			return fmt.Errorf("overseer on %s never recalled the codeword after restart", to)
 		}
 		time.Sleep(10 * time.Second)
 	}

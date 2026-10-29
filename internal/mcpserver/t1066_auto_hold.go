@@ -47,6 +47,9 @@ func (s *Server) autoSeatHold(name string) string {
 	if s == nil {
 		return ""
 	}
+	if s.SeatOwnerPaused(name) {
+		return OwnerHoldPaused
+	}
 	targetID := ""
 	if s.registry != nil {
 		if d := s.registry.Def(name); d != nil {

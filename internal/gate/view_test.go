@@ -3,7 +3,10 @@
 
 package gate
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestValidRecordID(t *testing.T) {
 	ok := []string{"c2b2e23b", "9f13c0a2", "A1", "0"}
@@ -21,14 +24,18 @@ func TestValidRecordID(t *testing.T) {
 }
 
 func TestViewOfRoundTripsCommandStatusVerdictTree(t *testing.T) {
+	start := time.Date(2026, 9, 20, 20, 0, 0, 0, time.UTC)
 	rec := &Record{
 		ID:          "c2b2e23b",
 		Name:        "make-test-go",
 		Command:     []string{"make", "test-go"},
 		Dir:         "/tmp/repo",
+		Started:     start,
+		Ended:       start.Add(42 * time.Second),
 		ExitStatus:  0,
 		StatusKnown: true,
 		Verdict:     VerdictGreen,
+		OutputPath:  "/tmp/jevons/gates/c2b2e23b.log",
 		Tree: &TreeProvenance{
 			Commit:     "ac753cbbdeadbeef",
 			Clean:      false,
@@ -50,6 +57,12 @@ func TestViewOfRoundTripsCommandStatusVerdictTree(t *testing.T) {
 	}
 	if v.Attestation == "" || v.ID != rec.ID {
 		t.Fatalf("attestation=%q id=%q", v.Attestation, v.ID)
+	}
+	if v.Duration != "42s" {
+		t.Fatalf("duration=%q want 42s", v.Duration)
+	}
+	if v.OutputPath != rec.OutputPath {
+		t.Fatalf("output_path=%q", v.OutputPath)
 	}
 }
 

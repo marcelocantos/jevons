@@ -6,6 +6,7 @@
 package ownerquestions
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -37,7 +38,9 @@ type Entry struct {
 	LastError   string    `json:"last_error,omitempty"`
 	LastAttempt time.Time `json:"last_attempt,omitempty"`
 	LastSpooled time.Time `json:"last_spooled,omitempty"`
-	Delivered   bool      `json:"delivered"` // always false: blurter exposes no delivery receipt
+	Delivered   bool      `json:"delivered"`
+	Sinks       []string  `json:"sinks,omitempty"`
+	Reason      string    `json:"reason,omitempty"`
 }
 
 // Sender returns the spool acknowledgement, or an error. It MUST NOT claim
@@ -206,8 +209,14 @@ func (s *Store) Snapshot() ([]Entry, string, error) {
 		failure = d.DigestError
 		return nil
 	})
+	if err != nil {
+		return nil, "", err
+	}
+	if err := reconcileAudit(entries, blurterAuditPath()); err != nil {
+		return nil, "", err
+	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Question.Key < entries[j].Question.Key })
-	return entries, failure, err
+	return entries, failure, nil
 }
 
 // Remind sends at most one digest per interval for still-open spooled
@@ -259,7 +268,7 @@ func (s *Store) Remind(now time.Time) error {
 		if len(keys) == 0 || (!d.LastDigest.IsZero() && now.Sub(d.LastDigest) < after) {
 			return nil
 		}
-		sort.Strings(keys)
+		sortDigestKeys(keys, d.Entries) // 🎯T404.2: stalling questions lead (🎯T1028.3 digest)
 		lines := make([]string, 0, len(keys))
 		for _, k := range keys {
 			lines = append(lines, "• "+d.Entries[k].Question.Text)
@@ -277,4 +286,81 @@ func (s *Store) Remind(now time.Time) error {
 		return err
 	}
 	return sendErr
+}
+
+// stallsOnSilence is true when paged question text carries no default-on-silence
+// line (ownerquestion.Question.NoticeBody). Those questions STALL their asker.
+func stallsOnSilence(pagedText string) bool {
+	return !strings.Contains(pagedText, "\nIf unanswered:")
+}
+
+func sortDigestKeys(keys []string, entries map[string]Entry) {
+	sort.Slice(keys, func(i, j int) bool {
+		si := stallsOnSilence(entries[keys[i]].Question.Text)
+		sj := stallsOnSilence(entries[keys[j]].Question.Text)
+		if si != sj {
+			return si // stalling questions first
+		}
+		return keys[i] < keys[j]
+	})
+}
+
+// blurterAuditPath follows blurter's XDG state convention. The spool path
+// identifies an event; its parent does not define where blurter keeps audit.
+func blurterAuditPath() string {
+	root := os.Getenv("XDG_STATE_HOME")
+	if root == "" {
+		root = filepath.Join(os.Getenv("HOME"), ".local", "state")
+	}
+	return filepath.Join(root, "blurter", "audit.jsonl")
+}
+
+// reconcileAudit reads blurter's append-only delivery decisions by event ID.
+// A spool acknowledgement alone never proves a sink received the event.
+func reconcileAudit(entries []Entry, path string) error {
+	byID := make(map[string][]int)
+	for i := range entries {
+		if entries[i].Status != "spooled" || entries[i].SpoolPath == "" {
+			continue
+		}
+		id := strings.TrimSuffix(filepath.Base(entries[i].SpoolPath), ".json")
+		byID[id] = append(byID[id], i)
+	}
+	if len(byID) == 0 {
+		return nil
+	}
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading blurter audit: %w", err)
+	}
+	defer f.Close()
+	type auditRecord struct {
+		ID      string   `json:"id"`
+		Outcome string   `json:"outcome"`
+		Reason  string   `json:"reason"`
+		Sinks   []string `json:"sinks"`
+	}
+	var rec auditRecord
+	scan := bufio.NewScanner(f)
+	scan.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scan.Scan() {
+		rec = auditRecord{}
+		if err := json.Unmarshal(scan.Bytes(), &rec); err != nil {
+			return fmt.Errorf("parsing blurter audit: %w", err)
+		}
+		for _, i := range byID[rec.ID] {
+			// Later audit records supersede earlier parked attempts.
+			entries[i].Status = rec.Outcome
+			entries[i].Delivered = rec.Outcome == "delivered"
+			entries[i].Reason = rec.Reason
+			entries[i].Sinks = rec.Sinks
+		}
+	}
+	if err := scan.Err(); err != nil {
+		return fmt.Errorf("reading blurter audit: %w", err)
+	}
+	return nil
 }

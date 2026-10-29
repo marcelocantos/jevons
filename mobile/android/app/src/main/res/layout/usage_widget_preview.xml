@@ -1,0 +1,69 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="5dp" android:background="#20252c">
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="PREVIEW ONLY · NOT LIVE USAGE" android:textSize="9sp" android:textColor="#ffc45b" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal" android:gravity="bottom">
+        <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:minWidth="43dp" android:paddingHorizontal="2dp" android:orientation="vertical" android:gravity="center_horizontal">
+            <ImageView android:layout_width="14dp" android:layout_height="14dp" android:src="@drawable/company_anthropic" android:contentDescription="claude mark" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="claude" android:textSize="8sp" android:textColor="#eeeeee" />
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
+                <LinearLayout android:layout_width="10dp" android:layout_height="wrap_content" android:orientation="vertical" android:gravity="bottom|center_horizontal">
+                    <FrameLayout android:layout_width="6dp" android:layout_height="32dp" android:background="#50545a">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="2dp" android:layout_gravity="bottom" android:background="#7acb7a" />
+                    </FrameLayout>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="S" android:textSize="8sp" android:textColor="#eeeeee" />
+                </LinearLayout>
+                <LinearLayout android:layout_width="10dp" android:layout_height="wrap_content" android:orientation="vertical" android:gravity="bottom|center_horizontal">
+                    <FrameLayout android:layout_width="6dp" android:layout_height="32dp" android:background="#50545a">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="8dp" android:layout_gravity="bottom" android:background="#7acb7a" />
+                    </FrameLayout>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="W" android:textSize="8sp" android:textColor="#eeeeee" />
+                </LinearLayout>
+                <LinearLayout android:layout_width="10dp" android:layout_height="wrap_content" android:orientation="vertical" android:gravity="bottom|center_horizontal">
+                    <FrameLayout android:layout_width="6dp" android:layout_height="32dp" android:background="#50545a">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="8dp" android:layout_gravity="bottom" android:background="#7acb7a" />
+                    </FrameLayout>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="F" android:textSize="8sp" android:textColor="#eeeeee" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:minWidth="43dp" android:paddingHorizontal="2dp" android:orientation="vertical" android:gravity="center_horizontal">
+            <ImageView android:layout_width="14dp" android:layout_height="14dp" android:src="@drawable/company_openai" android:contentDescription="codex mark" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="codex" android:textSize="8sp" android:textColor="#eeeeee" />
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
+                <LinearLayout android:layout_width="10dp" android:layout_height="wrap_content" android:orientation="vertical" android:gravity="bottom|center_horizontal">
+                    <FrameLayout android:layout_width="6dp" android:layout_height="32dp" android:background="#50545a">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="2dp" android:layout_gravity="bottom" android:background="#7acb7a" />
+                    </FrameLayout>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="W" android:textSize="8sp" android:textColor="#eeeeee" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:minWidth="43dp" android:paddingHorizontal="2dp" android:orientation="vertical" android:gravity="center_horizontal">
+            <ImageView android:layout_width="14dp" android:layout_height="14dp" android:src="@drawable/company_xai" android:contentDescription="grok mark" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="grok" android:textSize="8sp" android:textColor="#eeeeee" />
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
+                <LinearLayout android:layout_width="10dp" android:layout_height="wrap_content" android:orientation="vertical" android:gravity="bottom|center_horizontal">
+                    <FrameLayout android:layout_width="6dp" android:layout_height="32dp" android:background="#50545a">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="17dp" android:layout_gravity="bottom" android:background="#7acb7a" />
+                    </FrameLayout>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="W" android:textSize="8sp" android:textColor="#eeeeee" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:minWidth="43dp" android:paddingHorizontal="2dp" android:orientation="vertical" android:gravity="center_horizontal">
+            <ImageView android:layout_width="14dp" android:layout_height="14dp" android:src="@drawable/company_cursor" android:contentDescription="cursor mark" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="cursor" android:textSize="8sp" android:textColor="#eeeeee" />
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
+                <LinearLayout android:layout_width="10dp" android:layout_height="wrap_content" android:orientation="vertical" android:gravity="bottom|center_horizontal">
+                    <FrameLayout android:layout_width="6dp" android:layout_height="32dp" android:background="#50545a">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="13dp" android:layout_gravity="bottom" android:background="#7acb7a" />
+                    </FrameLayout>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="M" android:textSize="8sp" android:textColor="#eeeeee" />
+                </LinearLayout>
+                <LinearLayout android:layout_width="10dp" android:layout_height="wrap_content" android:orientation="vertical" android:gravity="bottom|center_horizontal">
+                    <FrameLayout android:layout_width="6dp" android:layout_height="32dp" android:background="#50545a" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="A" android:textSize="8sp" android:textColor="#eeeeee" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

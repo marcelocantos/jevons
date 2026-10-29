@@ -18,6 +18,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
+	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/internal/statedb"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
@@ -62,7 +63,11 @@ func (s *suite) jT952Hold() error {
 	if err := os.WriteFile(clock, []byte(t0.Format(time.RFC3339Nano)), 0o644); err != nil {
 		return err
 	}
-	s.daemonEnv = append(s.daemonEnv, mcpserver.IsolateSweepNowFileEnv+"="+clock)
+	// 🎯T1299: one fleet pass per 3 s converge tick instead of every tenth.
+	// The simulated clock decides every age this journey judges; the real
+	// 30 s between passes only made 21 simulated minutes take ten real ones.
+	s.daemonEnv = append(s.daemonEnv, mcpserver.IsolateSweepNowFileEnv+"="+clock,
+		server.IsolateFleetHookEveryEnv+"=1")
 	if err := s.signalStop(8 * time.Second); err != nil {
 		return fmt.Errorf("stop before planting the hold: %w", err)
 	}
@@ -73,7 +78,6 @@ func (s *suite) jT952Hold() error {
 		return fmt.Errorf("start with the simulated sweep clock: %w", err)
 	}
 
-	holdAge := 77*time.Hour + 6*time.Minute + 41*time.Second
 	for minute := 0; minute <= 20; minute++ {
 		if minute == 10 {
 			if err := s.bounceDrain(); err != nil {
@@ -85,8 +89,21 @@ func (s *suite) jT952Hold() error {
 			return err
 		}
 		after := s.logSize()
-		if err := s.waitForSweepAge(t952Hold, holdAge+time.Duration(minute)*time.Minute, after); err != nil {
+		// 🎯T1187 makes a stood-down backlog a single WARN per hold per
+		// daemon lifetime; the age advances at Debug on later sweeps. The
+		// working stall still logs each sweep, so it witnesses the clock.
+		stallAge := 10*time.Minute + 25*time.Second + time.Duration(minute)*time.Minute
+		if err := s.waitForSweepAge(t952Stall, stallAge, after); err != nil {
 			return fmt.Errorf("minute %d: %w", minute, err)
+		}
+		if minute == 9 || minute == 20 {
+			wantMax := 1
+			if minute == 20 {
+				wantMax = 2 // one more after the daemon restart is allowed
+			}
+			if err := s.checkT952HoldWarns(wantMax); err != nil {
+				return fmt.Errorf("minute %d: %w", minute, err)
+			}
 		}
 	}
 
@@ -175,6 +192,27 @@ func (s *suite) waitForSweepAge(agent string, age time.Duration, after int64) er
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("no sweep line %s %s; log tail: %s", wantAgent, wantAge, trim(last, 500))
+}
+
+// checkT952HoldWarns requires the first status warning but rejects a WARN
+// per sweep. The second daemon lifetime may emit one more after restart.
+func (s *suite) checkT952HoldWarns(max int) error {
+	body, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return err
+	}
+	count := 0
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.Contains(line, `msg="🎯T418 backlog stalled"`) &&
+			strings.Contains(line, "agent="+t952Hold) &&
+			strings.Contains(line, `reason="stood down:`) {
+			count++
+		}
+	}
+	if count < 1 || count > max {
+		return fmt.Errorf("stood-down hold WARNs=%d; want 1..%d across daemon lifetime(s)", count, max)
+	}
+	return nil
 }
 
 func (s *suite) t952QueueRows() (hold, stall []sendq.Entry, err error) {

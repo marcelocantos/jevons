@@ -253,13 +253,13 @@ func (s *suite) jTwoAgentsSameWorkdir() error {
 	}()
 
 	startA, err := s.mcpText("jevons_agent_start", map[string]any{
-		"name": a, "workdir": work,
+		"name": a, "workdir": work, "provider": string(s.provider),
 	})
 	if err != nil {
 		return fmt.Errorf("start %s: %w", a, err)
 	}
 	startB, err := s.mcpText("jevons_agent_start", map[string]any{
-		"name": b, "workdir": work,
+		"name": b, "workdir": work, "provider": string(s.provider),
 	})
 	if err != nil {
 		return fmt.Errorf("start %s: %w", b, err)
@@ -345,11 +345,13 @@ func (s *suite) jPOWorkerLineageFanout() error {
 
 	if _, err := s.mcpText("jevons_agent_start", map[string]any{
 		"name": po, "workdir": work, "actor": overseerName, "parent": overseerName,
+		"provider": string(s.provider),
 	}); err != nil {
 		return fmt.Errorf("start po: %w", err)
 	}
 	if _, err := s.mcpText("jevons_agent_start", map[string]any{
 		"name": worker, "workdir": work, "actor": po, "parent": po,
+		"provider": string(s.provider),
 	}); err != nil {
 		return fmt.Errorf("start worker: %w", err)
 	}
@@ -577,6 +579,7 @@ func (s *suite) jWorkerShellTool() error {
 
 	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": id, "workdir": work, "description": "journey shell-permission worker",
+		"provider": string(s.provider),
 	})
 	if out := asOutage("spawn", err); out != nil {
 		return out
@@ -675,6 +678,7 @@ func (s *suite) jWorkerTranscriptVisible() error {
 
 	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": id, "workdir": work, "description": "journey transcript worker",
+		"provider": string(s.provider),
 	}); err != nil {
 		return fmt.Errorf("spawn: %w", err)
 	}

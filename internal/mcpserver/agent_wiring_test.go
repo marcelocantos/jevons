@@ -128,6 +128,11 @@ func t426Fixture(t *testing.T, name string) (*Server, *wiredProcs, *recordingSen
 		t.Fatal(err)
 	}
 	s := &Server{registry: reg}
+	// attachAgentSink checks lost handles on a goroutine. Without teardown,
+	// T426QueuedSend can emit its T927 WARN (queued:2) into the next test
+	// that replaces slog.Default, making T426A fail on another fixture's log.
+	// Wait for THIS fixture's recovery before moving to the next test.
+	t.Cleanup(s.wireRecovery.Wait)
 	procs := newWiredProcs()
 	s.SetProcResolver(procs.get)
 	sender := &recordingSender{}

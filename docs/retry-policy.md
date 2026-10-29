@@ -6,10 +6,11 @@ determine the budget. A default of one across Claude, Codex, and Grok is not
 established by Jevons configuration or the Claudia v0.52.0 dependency.
 An unreported budget is unknown, rather than assumed to be one.
 
-When the transport reports exhaustion (including `retry_exhausted`,
-`retries exceeded`, or `max retries exceeded`), `internal/agenterr` classifies
-the outcome as `retry_exhausted` before examining the underlying timeout or
-backend failure. Owner copy retains the reported detail: for example,
+When the transport reports exhaustion with provider code `retry_exhausted` on
+the transcript `error` field (or `Event.Reason` carrying that cause),
+`internal/server/chat_wire` and `internal/agenterr` classify the outcome as
+`retry_exhausted` before examining the underlying timeout or backend failure.
+Prose alone (`retries exceeded`, `max retries exceeded`) is not a cause. Owner copy retains the reported detail: for example,
 `max retries exceeded after 1 retry: dial tcp timeout` keeps `after 1 retry`
 and states that the turn ended without finishing. This is not a successful
 turn, even if earlier steps produced useful work.

@@ -6,7 +6,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { MuxClient } from '../mux/client';
 import { transcriptChannel } from '../mux/protocol';
 import { applyConversationEvent, emptyConversation, type ConversationEvent } from './reduce';
-import { optimisticReceived, PHASE_IDLE, phaseSampleFromUnknown } from './overseerPhase';
+import { optimisticReceived, phaseAtRest, phaseSampleFromUnknown } from './overseerPhase';
 import type { MuxEnvelope } from '../mux/protocol';
 import { normalizeOwnerEchoText, shouldAckPendingSend } from './display';
 import { useDrafts } from '../store/drafts';
@@ -187,7 +187,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
   // is taken now, so the notice has nothing left to count down to.
   const idleNow = (() => {
     const phase = phaseSampleFromUnknown(state.meta);
-    return !!phase && phase.phase === PHASE_IDLE;
+    return !!phase && phaseAtRest(phase);
   })();
   useEffect(() => {
     if (escalation && idleNow) setEscalation(null);
@@ -204,6 +204,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
 
   return {
     frames: state.frames,
+    provisionalByStream: state.provisionalByStream,
     meta: state.meta,
     error: state.error,
     ready: state.ready,
@@ -262,6 +263,11 @@ export function useConversation(mux: MuxClient | null, name: string) {
     },
     rejoinLive,
     resend: (msgId: string) => mux?.resendTranscript(name, msgId),
+    // 🎯T1130: escalate a daemon-held message (queued behind a running
+    // turn) in place — never a fresh send of the same text.
+    removeHeld: (msgId: string) => mux?.removeHeldTranscript(name, msgId),
+    steerHeld: (msgId: string) => mux?.resendTranscript(name, msgId, 'steer'),
+    interruptHeld: (msgId: string) => mux?.resendTranscript(name, msgId, 'interrupt'),
     escalation,
     dismissEscalation: () => setEscalation(null),
   };

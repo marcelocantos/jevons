@@ -42,6 +42,7 @@ func (s *Server) ExecuteSeatPair(ctx context.Context, in seatpair.Intent) seatpa
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = withMCPOrigin(ctx, mcpOrigin{Seat: in.Seat})
 	out, err := h(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: in.Tool, Arguments: args}})
 	if err != nil {
 		return seatpair.Result{Outcome: seatpair.OutcomeUncertain, Reason: err.Error()}

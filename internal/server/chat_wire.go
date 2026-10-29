@@ -100,14 +100,30 @@ func chatWireFromSpool(recs []spool.Record) []string {
 		default:
 			continue
 		}
-		if line, ok := chatWireLine(ev); ok {
+		if line, ok := chatWireLineSidecar(ev); ok {
 			out = append(out, line)
 		}
 	}
 	return out
 }
 
-func chatWireLine(ev claudia.Event) (line string, ok bool) {
+// chatWireLineSidecar folds a sidecar spool record into chat wire. Seat
+// transcript prose is not overseer owner-chat (T1140) and must not be
+// suppressed by that classifier.
+func chatWireLineSidecar(ev claudia.Event) (line string, ok bool) {
+	return chatWireLineInner(ev, false, true, false)
+}
+
+func chatWireLineForDeliver(ev claudia.Event, ownerTurn, admissionEnabled bool) (string, bool) {
+	return chatWireLineInner(ev, ownerTurn, false, admissionEnabled)
+}
+
+func chatWireLine(ev claudia.Event, ownerTurn ...bool) (line string, ok bool) {
+	ot := len(ownerTurn) > 0 && ownerTurn[0]
+	return chatWireLineInner(ev, ot, false, false)
+}
+
+func chatWireLineInner(ev claudia.Event, ownerTurn, sidecarSeat, admissionPublish bool) (line string, ok bool) {
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 
 	switch ev.Type {
@@ -145,13 +161,18 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 	case "assistant":
 		// A stop token is a field on the turn record. It is not owner-visible text (🎯T870).
 		ev.Text = spool.VisibleAssistantText(ev.Text)
+		if isProviderTransportTurnDeath(ev) {
+			if line, ok := providerTransportWireLine(ts, ev); ok {
+				return line, true
+			}
+		}
 		if ev.Text != "" {
 			// 🎯T238 / 🎯T240: overseer ops replies marked [silent] must not
 			// paint as owner-visible assistant bubbles. Single-fragment
 			// Is() still applies here; multi-delta streams are suppressed
 			// in DeliverOverseerEvent via accumulated Classify (stream seal).
 			// Worker→overseer silent suppress remains on mcpserver notify.
-			if silentresponse.Is(ev.Text) {
+			if silentresponse.Is(ev.Text) || (!sidecarSeat && !admissionPublish && overseerOwnerWireSuppress(ev.Text, ev.IsTerminalStop(), ev, ownerTurn)) {
 				// Terminal silent still needs end_turn so the UI clears working.
 				if ev.IsTerminalStop() {
 					b, err := json.Marshal(map[string]any{
@@ -174,7 +195,7 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 			// so it carries the class; structured slog for T236.
 			// 🎯T455: authored prose is never classified, and neither is a
 			// transport sentence that carries no cause.
-			displayText := ev.Text
+			displayText := envelope.OverseerOwnerChatBody(ev.Text)
 			var failClass agenterr.Class
 			if class := classifyAssistantEvent(ev); class.IsFailure() {
 				failClass = class
@@ -268,6 +289,10 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 		return string(b), true
 
 	case "progress":
+		if ev.ProgressType == claudia.ProgressTUIPreview ||
+			ev.ProgressType == claudia.ProgressTUIPreviewFault {
+			return "", false
+		}
 		// Surface tool activity so the activity strip shows real work, not a
 		// row of bare "tool_use:" (🎯T63). claudia collapses every ACP
 		// tool_call/tool_call_update to ProgressType="tool_use"; the real
@@ -279,17 +304,24 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 		}
 		call := parseToolCall(ev.Raw)
 		if call.SessionUpdate != "tool_call" {
-			// A sidecar seat (claudia omp) publishes one progress event per
-			// call with no ACP Raw: the name in ToolTitle, the arguments as
-			// JSON in Text. Dropping it hid every sidecar seat's tool calls
-			// from the chat (journey J6c, 2026-10-05).
-			if len(ev.Raw) > 0 || strings.TrimSpace(ev.ToolTitle) == "" {
+			// Active native tool_call_update frames carry the running title
+			// before a terminal assistant tool_use block exists (🎯T1218).
+			if call.SessionUpdate == "tool_call_update" &&
+				toolExecutionActive(call.Status) &&
+				call.DisplayName() != "" {
+				// fall through to paint one KindSteps row
+			} else if len(ev.Raw) > 0 || strings.TrimSpace(ev.ToolTitle) == "" {
+				// A sidecar seat (claudia omp) publishes one progress event per
+				// call with no ACP Raw: the name in ToolTitle, the arguments as
+				// JSON in Text. Dropping it hid every sidecar seat's tool calls
+				// from the chat (journey J6c, 2026-10-05).
 				return "", false
-			}
-			call = toolCall{SessionUpdate: "tool_call", ID: ev.ToolCallID, Title: ev.ToolTitle}
-			var input map[string]any
-			if json.Unmarshal([]byte(ev.Text), &input) == nil {
-				call.Input = input
+			} else {
+				call = toolCall{SessionUpdate: "tool_call", ID: ev.ToolCallID, Title: ev.ToolTitle}
+				var input map[string]any
+				if json.Unmarshal([]byte(ev.Text), &input) == nil {
+					call.Input = input
+				}
 			}
 		}
 		name := call.DisplayName()
@@ -305,6 +337,11 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 		}
 		if len(call.Input) > 0 {
 			tu["input"] = call.Input
+		}
+		if st := strings.TrimSpace(call.Status); st != "" {
+			tu["execution_status"] = st
+		} else if st := strings.TrimSpace(ev.ToolStatus); st != "" {
+			tu["execution_status"] = st
 		}
 		b, err := json.Marshal(map[string]any{
 			"type":      "assistant",
@@ -351,6 +388,12 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 // the signal 🎯T406/🎯T407 read to decide whether the fleet may work at all.
 func assistantTextSource(ev claudia.Event) agenterr.Source {
 	if ev.IsError {
+		return agenterr.SourceTransport
+	}
+	if ev.Reason == agenterr.CauseProviderTransport {
+		return agenterr.SourceTransport
+	}
+	if isProviderTransportTurnDeath(ev) {
 		return agenterr.SourceTransport
 	}
 	if isRPCErrorFrame(ev.Raw) {
@@ -410,9 +453,12 @@ func classifyAssistantEvent(ev claudia.Event) agenterr.Class {
 func assistantProviderCause(ev claudia.Event) string {
 	switch ev.Reason {
 	case agenterr.CauseAuth, agenterr.CauseRateLimit, agenterr.CauseSpendWall, agenterr.CauseAccountWall,
-		agenterr.CauseBackendUnavailable, agenterr.CauseClientBug,
+		agenterr.CauseBackendUnavailable, agenterr.CauseClientBug, agenterr.CauseProviderTransport,
 		agenterr.CauseRetryExhausted, agenterr.CauseContextOverflow:
 		return ev.Reason
+	}
+	if isProviderTransportTurnDeath(ev) {
+		return agenterr.CauseBackendUnavailable
 	}
 	if ev.Reason != "" {
 		return ""
@@ -453,6 +499,8 @@ func providerCodeCause(raw []byte) string {
 		return agenterr.CauseClientBug
 	case "overloaded_error", "internal_error":
 		return agenterr.CauseBackendUnavailable
+	case "retry_exhausted":
+		return agenterr.CauseRetryExhausted
 	default:
 		return ""
 	}
@@ -527,8 +575,13 @@ func userTurnText(ev claudia.Event) (text string, prose bool) {
 		}
 		return s, true
 	}
-	// Typed blocks: prose only when every block is text. A single
-	// tool_result block makes the line structured, not a turn to paint.
+	// Typed blocks: prose when at least one block is text, ignoring any
+	// attachment blocks alongside it (🎯T1064 — a real multimodal turn is
+	// genuinely multipart: an image block next to the text block that
+	// carries the owner-turn fact, not inline-"[image: ref]" text). A
+	// structured line with NO text block at all (a single tool_result, a
+	// bare tool_use) still bails to the raw pass-through below, so that
+	// content keeps rendering verbatim.
 	var blocks []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -538,10 +591,16 @@ func userTurnText(ev claudia.Event) (text string, prose bool) {
 	}
 	texts := make([]string, 0, len(blocks))
 	for _, b := range blocks {
-		if b.Type != "text" {
+		switch b.Type {
+		case "text":
+			texts = append(texts, b.Text)
+		case "image":
+			// An attachment block does not make this line structured —
+			// it rides along with the prose, the same as inline "[image:
+			// ref]" text already does.
+		default:
 			return "", false
 		}
-		texts = append(texts, b.Text)
 	}
 	text = strings.Join(texts, "\n")
 	if text == "" {
@@ -651,6 +710,7 @@ type toolCall struct {
 	Name          string
 	ID            string
 	Kind          string
+	Status        string
 	Input         map[string]any
 }
 
@@ -678,6 +738,19 @@ func (c toolCall) DisplayName() string {
 func genericToolTitle(s string) bool {
 	t := strings.ToLower(strings.Join(strings.Fields(s), " "))
 	return t == "" || t == "tool" || t == "tool_use" || t == "mcp: tool" || t == "mcp:tool"
+}
+
+func toolExecutionActive(status string) bool {
+	s := strings.ToLower(strings.TrimSpace(status))
+	if s == "" {
+		return false
+	}
+	switch s {
+	case "completed", "complete", "succeeded", "success", "failed", "error", "cancelled", "canceled":
+		return false
+	default:
+		return true
+	}
 }
 
 // cleanMCPToolName strips a server prefix Cursor sometimes adds
@@ -735,6 +808,7 @@ func parseToolCall(raw []byte) toolCall {
 		SessionUpdate string          `json:"sessionUpdate"`
 		Title         string          `json:"title"`
 		Name          string          `json:"name"`
+		Status        string          `json:"status"`
 		ToolCallID    string          `json:"toolCallId"`
 		Kind          string          `json:"kind"`
 		RawInput      json.RawMessage `json:"rawInput"`
@@ -743,6 +817,7 @@ func parseToolCall(raw []byte) toolCall {
 			SessionUpdate string          `json:"sessionUpdate"`
 			Title         string          `json:"title"`
 			Name          string          `json:"name"`
+			Status        string          `json:"status"`
 			ToolCallID    string          `json:"toolCallId"`
 			Kind          string          `json:"kind"`
 			RawInput      json.RawMessage `json:"rawInput"`
@@ -772,6 +847,10 @@ func parseToolCall(raw []byte) toolCall {
 	if kind == "" {
 		kind = probe.Kind
 	}
+	status := strings.TrimSpace(probe.Update.Status)
+	if status == "" {
+		status = strings.TrimSpace(probe.Status)
+	}
 	input := decodeToolInput(probe.Update.RawInput)
 	if input == nil {
 		input = decodeToolInput(probe.Update.Arguments)
@@ -788,6 +867,7 @@ func parseToolCall(raw []byte) toolCall {
 		Name:          name,
 		ID:            id,
 		Kind:          kind,
+		Status:        status,
 		Input:         input,
 	}
 }
@@ -808,6 +888,88 @@ func decodeToolInput(raw json.RawMessage) map[string]any {
 		}
 	}
 	return nil
+}
+
+// isProviderTransportTurnDeath reports a turn that ended with only a typed
+// transport failure — not an agent-authored reply (🎯T782). Evidence is the
+// event shape (terminal stop, no ACP chunk) plus a closed vocabulary of
+// whole-turn error bodies, or an explicit Reason from claudia.
+func isProviderTransportTurnDeath(ev claudia.Event) bool {
+	if ev.Type != "assistant" {
+		return false
+	}
+	if ev.Reason == agenterr.CauseProviderTransport {
+		return true
+	}
+	if !agenterr.IsProviderTransportTurnDeath(ev.Text) {
+		return false
+	}
+	if isACPAuthoredAssistantChunk(ev) {
+		return false
+	}
+	if ev.StopReason != "" && ev.StopReason != "end_turn" && ev.StopReason != "stop_sequence" && ev.StopReason != "max_tokens" {
+		return false
+	}
+	return ev.IsTerminalStop() || ev.StopReason == "end_turn" || ev.IsError
+}
+
+// isACPAuthoredAssistantChunk reports streamed agent_message_chunk frames.
+// They carry the same words a transport error might quote (🎯T455).
+func isACPAuthoredAssistantChunk(ev claudia.Event) bool {
+	if len(ev.Raw) == 0 {
+		return false
+	}
+	if isRPCErrorFrame(ev.Raw) {
+		return false
+	}
+	if isClaudeShaped(ev.Raw) {
+		return true
+	}
+	var probe struct {
+		SessionUpdate string `json:"sessionUpdate"`
+		Update        struct {
+			SessionUpdate string `json:"sessionUpdate"`
+		} `json:"update"`
+	}
+	if err := json.Unmarshal(ev.Raw, &probe); err != nil {
+		return false
+	}
+	if probe.SessionUpdate == "agent_message_chunk" || probe.Update.SessionUpdate == "agent_message_chunk" {
+		return true
+	}
+	return probe.SessionUpdate != "" || probe.Update.SessionUpdate != ""
+}
+
+func providerTransportWireLine(ts string, ev claudia.Event) (string, bool) {
+	raw := strings.TrimSpace(ev.Text)
+	class := classifyAssistantEvent(ev)
+	if !class.IsFailure() {
+		class = agenterr.ClassBackendUnavailable
+	}
+	display := agenterr.OwnerCopy(class, raw)
+	if display == "" {
+		display = agenterr.OwnerCopy(class, "provider transport error")
+	}
+	slog.Warn("provider_failure",
+		"component", "provider_failure",
+		"failure_class", class.String(),
+		"transient", class.IsTransient(),
+		"surface", "chat_wire",
+		"raw", raw,
+	)
+	b, err := json.Marshal(map[string]any{
+		"type":          "provider_transport",
+		"timestamp":     ts,
+		"text":          display,
+		"raw":           raw,
+		"failure_class": class.String(),
+		"transient":     class.IsTransient(),
+		"retryable":     class.IsTransient(),
+	})
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
 }
 
 // isClaudeShaped reports whether raw already carries a top-level "type"

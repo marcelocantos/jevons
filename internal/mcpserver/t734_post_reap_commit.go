@@ -42,10 +42,18 @@ import (
 // The fleet-health sweep then lists commits after that SHA. Product commits
 // that mention the closed target raise one parent notice naming the actor
 // (or "unattributed"). A reap with nothing in flight produces no notice.
+//
+// 🎯T1074.7.1 — a parent notice is a model turn. Only a violation earns one:
+// the reaped seat's own commit, escalated once per reap episode. Unattributed
+// commits (the owner, another harness, a seat without trailers) and any later
+// commits from the same seat are recorded in the event log and wake no model.
 
 const (
-	postReapCommitPrefix = "[post-reap-commit "
-	postReapCommitWindow = 30 * time.Minute
+	postReapCommitPrefix   = "[post-reap-commit "
+	postReapCommitWindow   = 30 * time.Minute
+	postReapEventComponent = "post_reap_commit"
+	postReapObserve        = "observe"
+	postReapEscalate       = "violation_escalated"
 )
 
 // gitCommit is one commit landed after a reap snapshot.
@@ -66,6 +74,8 @@ type postReapWatch struct {
 	Head     string
 	ReapedAt time.Time
 	Notified map[string]struct{}
+	// Escalated is set once the episode's single violation notice is sent.
+	Escalated bool
 }
 
 // commitMentionsTarget is true when text names targetID as a token
@@ -363,7 +373,7 @@ func (s *Server) sweepOnePostReapWatch(w postReapWatch, now time.Time) {
 			"component", "post_reap_commit", "agent", w.Seat, "err", err)
 		return
 	}
-	hits, unattributed := SelectPostReapNoticeCommits(commits, w)
+	hits, _ := SelectPostReapNoticeCommits(commits, w)
 	if len(hits) == 0 {
 		return
 	}
@@ -376,24 +386,53 @@ func (s *Server) sweepOnePostReapWatch(w postReapWatch, now time.Time) {
 	if cur.Notified == nil {
 		cur.Notified = map[string]struct{}{}
 	}
-	var fresh []gitCommit
-	batchUnattributed := unattributed
+	var violation, observed []gitCommit
 	for _, c := range hits {
 		if _, seen := cur.Notified[c.SHA]; seen {
 			continue
 		}
 		cur.Notified[c.SHA] = struct{}{}
-		fresh = append(fresh, c)
+		// SelectPostReapNoticeCommits already dropped other actors, so a
+		// non-empty actor here is the reaped seat itself.
 		if strings.TrimSpace(c.Actor) == "" {
-			batchUnattributed = true
+			observed = append(observed, c)
+		} else {
+			violation = append(violation, c)
 		}
+	}
+	escalate := len(violation) > 0 && !cur.Escalated
+	if escalate {
+		cur.Escalated = true
+	} else {
+		observed = append(observed, violation...)
+		violation = nil
 	}
 	s.postReapWatches[w.Seat] = cur
 	s.mu.Unlock()
-	if len(fresh) == 0 {
-		return
+	if len(observed) > 0 {
+		s.LogEvent(postReapEventComponent, postReapObserve, map[string]any{
+			"agent":   cur.Seat,
+			"target":  cur.TargetID,
+			"commits": postReapCommitSHAs(observed),
+			"line":    FormatPostReapCommitNotice(cur.Seat, cur.TargetID, "", observed, observed[0].Actor == ""),
+		})
 	}
-	s.deliverPostReapCommitNotice(cur, fresh, batchUnattributed)
+	if escalate {
+		s.LogEvent(postReapEventComponent, postReapEscalate, map[string]any{
+			"agent":   cur.Seat,
+			"target":  cur.TargetID,
+			"commits": postReapCommitSHAs(violation),
+		})
+		s.deliverPostReapCommitNotice(cur, violation, false)
+	}
+}
+
+func postReapCommitSHAs(commits []gitCommit) []string {
+	out := make([]string, 0, len(commits))
+	for _, c := range commits {
+		out = append(out, c.SHA)
+	}
+	return out
 }
 
 func (s *Server) dropPostReapWatch(name string) {
@@ -411,6 +450,6 @@ func (s *Server) deliverPostReapCommitNotice(w postReapWatch, commits []gitCommi
 	if _, err := s.deliverByName(parent, msg, OriginAgent, false); err != nil {
 		slog.Warn("T734 post-reap commit notice undelivered to parent; escalating to overseer",
 			"component", "post_reap_commit", "parent", parent, "agent", w.Seat, "err", err)
-		s.notifyFleetHealth(w.Seat, fmt.Sprintf("PO %s unreachable (%v) for: %s", parent, err, msg))
+		s.notifyFleetHealth(noticeAct, w.Seat, fmt.Sprintf("PO %s unreachable (%v) for: %s", parent, err, msg))
 	}
 }

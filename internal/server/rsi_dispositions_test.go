@@ -175,3 +175,20 @@ func TestRSIDispositionsRejectsUnknownFilter(t *testing.T) {
 		t.Fatalf("status=%d, want 400", resp.StatusCode)
 	}
 }
+
+// The list says whether the coach still runs, so stale pending judgments from
+// a coach the owner turned off do not read as live work.
+func TestRSIDispositionsReportCoachEnabled(t *testing.T) {
+	srv, state := rsiDispositionsServer(t)
+	if got := getRSIJudgments(t, srv.URL+"/api/rsi/dispositions"); !got.CoachEnabled {
+		t.Fatalf("default coach config is enabled: %+v", got)
+	}
+	off := false
+	if _, err := rsi.PatchCoachConfig(state, rsi.CoachConfigPatch{Enabled: &off}); err != nil {
+		t.Fatal(err)
+	}
+	got := getRSIJudgments(t, srv.URL+"/api/rsi/dispositions")
+	if got.CoachEnabled || got.CoachUpdatedAt == "" {
+		t.Fatalf("disabled coach not reported: %+v", got)
+	}
+}

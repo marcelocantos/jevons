@@ -69,6 +69,9 @@ func Classify(err error) Class {
 	}
 	switch cause := ProviderCause(err); cause {
 	case "":
+		if c := classifyLaunchHandshakeText(err.Error()); c != ClassNone {
+			return c
+		}
 		return ClassNone
 	case CauseTurnInFlight, CauseBusy, CauseProcessNotRunning, CauseSteerUnsupported, CauseTurnIdle:
 		return ClassNone
@@ -93,7 +96,7 @@ func ClassFromCause(cause string) Class {
 		return ClassSpendWall
 	case CauseAccountWall:
 		return ClassAccountWall
-	case CauseBackendUnavailable:
+	case CauseBackendUnavailable, CauseProviderTransport:
 		return ClassBackendUnavailable
 	case CauseClientBug:
 		return ClassClientBug
@@ -106,10 +109,13 @@ func ClassFromCause(cause string) Class {
 	}
 }
 
-// ClassifyText reports the class of a rendered sentence. A sentence is not
-// a provider-failure cause, so this is ClassNone. Retry-exhausted and
-// context-overflow are causes read by Classify.
-func ClassifyText(string) Class {
+// ClassifyText reports the class of a rendered sentence. Provider causes
+// are read by Classify; this path covers launch-handshake prose (🎯T709
+// workspace trust, historical startup_stall) when no typed cause is present.
+func ClassifyText(msg string) Class {
+	if c := classifyLaunchHandshakeText(msg); c != ClassNone {
+		return c
+	}
 	return ClassNone
 }
 
@@ -124,7 +130,7 @@ func ClassifyMessage(msg string) Class {
 // ClassUnknown is re-pressure-worthy residual (T236).
 func TransientBackend(c Class) bool {
 	switch c {
-	case ClassBackendUnavailable, ClassRateLimit, ClassUnknown:
+	case ClassBackendUnavailable, ClassRateLimit, ClassUnknown, ClassStartupStall:
 		return true
 	case ClassRetryExhausted:
 		// Not transient in the poll-and-hope sense: the CLI already spent
@@ -170,6 +176,10 @@ func OwnerCopy(class Class, raw string) string {
 		return "Provider retry budget exhausted (retry_exhausted). The provider/harness retry loop gave up; the turn ended without finishing. Retry budgets are provider-specific, not configured by Jevons. Start a new turn when the underlying failure is resolved. " + detailSuffix(raw)
 	case ClassContextOverflow:
 		return contextOverflowCopy(raw)
+	case ClassWorkspaceTrust:
+		return workspaceTrustCopy(raw)
+	case ClassStartupStall:
+		return startupStallCopy(raw)
 	case ClassUnknown:
 		return "Provider failure (unknown). Class not pinned from the error string; see detail. " +
 			detailSuffix(raw)

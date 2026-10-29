@@ -479,6 +479,17 @@ func observeTurnForCancelableFiltered(obs turnObserver, payload string, window t
 // calls this directly; it always goes through the fixed-constant wrapper
 // above, which is what docratchet's TestT956MaxWindowConstantIsWired locks.
 func observeTurnForCancelableFilteredBounded(obs turnObserver, payload string, window, maxWindow time.Duration, filter func(claudia.Event) bool, alive ...func() seatstate.Tri) (turnWatch, func()) {
+	return observeTurnWithClock(obs, payload, window, maxWindow, filter, turnWatchClock{now: time.Now, after: time.After}, alive...)
+}
+
+// turnWatchClock is local to one watch. Tests can model a delayed scheduler
+// wake without changing production deadlines or sharing mutable clock state.
+type turnWatchClock struct {
+	now   func() time.Time
+	after func(time.Duration) <-chan time.Time
+}
+
+func observeTurnWithClock(obs turnObserver, payload string, window, maxWindow time.Duration, filter func(claudia.Event) bool, clock turnWatchClock, alive ...func() seatstate.Tri) (turnWatch, func()) {
 	if obs == nil {
 		return func() TurnEvidence {
 			return TurnEvidence{Detail: "no live agent process to observe"}
@@ -530,7 +541,7 @@ func observeTurnForCancelableFilteredBounded(obs turnObserver, payload string, w
 	}
 	return func() TurnEvidence {
 		defer cancel()
-		start := time.Now()
+		start := clock.now()
 		deadline := start.Add(window)
 		// hardDeadline is the 🎯T956 upper bound: the deadline above may be
 		// extended toward it, never past it, and only while the process
@@ -562,10 +573,10 @@ func observeTurnForCancelableFilteredBounded(obs turnObserver, payload string, w
 					TranscriptAbsent: turnev.Missing(path),
 					Detail: fmt.Sprintf(
 						"the agent process exited before it did anything (after %s, process state=dead)",
-						time.Since(start).Round(time.Millisecond)),
+						clock.now().Sub(start).Round(time.Millisecond)),
 				})
 			}
-			if time.Now().After(deadline) {
+			if clock.now().After(deadline) {
 				// One last look before condemning it, because the queue
 				// records are written by the receiver at its own pace and a
 				// message can be accepted without the file growing in a way
@@ -585,7 +596,7 @@ func observeTurnForCancelableFilteredBounded(obs turnObserver, payload string, w
 				// this still condemns — defaultTurnConfirmWindow unchanged
 				// for every caller that does not pass one, and even a
 				// reporting-alive process does not wait forever.
-				if len(alive) > 0 && !extended && time.Now().Before(hardDeadline) {
+				if len(alive) > 0 && !extended && clock.now().Before(hardDeadline) {
 					deadline = hardDeadline
 					extended = true
 					continue
@@ -600,11 +611,13 @@ func observeTurnForCancelableFilteredBounded(obs turnObserver, payload string, w
 					}
 				}
 				detail := describePayloadAbsent(path, hadTranscript, baseline, grew, needle != "", window)
-				elapsed := time.Since(start).Round(time.Millisecond)
+				elapsed := clock.now().Sub(start).Round(time.Millisecond)
 				if extended {
 					detail = fmt.Sprintf(
 						"%s (extended to %s while the process reported alive; elapsed=%s, process state=%s)",
 						detail, maxWindow, elapsed, state)
+				} else if len(alive) > 0 && !clock.now().Before(hardDeadline) {
+					detail = fmt.Sprintf("%s (hard bound %s reached before extension; elapsed=%s, process state=%s)", detail, maxWindow, elapsed, state)
 				} else {
 					detail = fmt.Sprintf("%s (elapsed=%s, process state=%s)", detail, elapsed, state)
 				}
@@ -617,11 +630,11 @@ func observeTurnForCancelableFilteredBounded(obs turnObserver, payload string, w
 				select {
 				case <-seen:
 					return measured(TurnEvidence{SessionEvent: true, Detail: "the agent published a session event"})
-				case <-time.After(turnEvidencePoll):
+				case <-clock.after(turnEvidencePoll):
 				}
 				continue
 			}
-			time.Sleep(turnEvidencePoll)
+			<-clock.after(turnEvidencePoll)
 		}
 	}, cancel
 }
@@ -708,12 +721,21 @@ func (s *Server) releaseSeatAfterFailedBrief(name string, existed bool, rel seat
 	seatstate.ObserveStopped(s.registry, name)
 	// 🎯T662: the release is a recorded reason on the seat.
 	s.noteSeatStop(name, rel.Source, rel.StopReason, "daemon", "")
-	if existed {
+	def := s.registry.Def(name)
+	retire := !existed
+	// A reaped-name remint preserves the registry row (🎯T560), so existed is
+	// true even though this start is a fresh frontier mint. An auto-start
+	// worker whose opening brief never landed must still leave the registry so
+	// the target is not engaged and T1139 cannot re-adopt a briefless zombie
+	// (🎯T1150).
+	if !retire && def != nil && def.AutoStart {
+		retire = true
+	}
+	if !retire {
 		return false
 	}
 	// Read the row before it goes: the frontier wait below needs the target
 	// and parent the registry is about to forget (🎯T990).
-	def := s.registry.Def(name)
 	// 🎯T435: the seat leaving the registry is accounted for. A seat retired
 	// here never began a turn, so its row vanishing is exactly the kind of
 	// diff a watcher would otherwise read as an agent lost mid-flight.

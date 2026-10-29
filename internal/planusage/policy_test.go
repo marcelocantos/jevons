@@ -258,7 +258,7 @@ func TestPickPlanDestWasteThenLoad(t *testing.T) {
 		{Provider: "claude", Backend: be("claude", 80, 20), Load: 5},
 		{Provider: "grok", Backend: be("grok", 50, 50), Load: 1},
 	}
-	got, ok := PickPlanDest(cands, now, th)
+	got, ok := PickPlanDest(cands, now, th, nil)
 	if !ok || got != "claude" {
 		t.Fatalf("more slack wins dest: dest=%q ok=%v", got, ok)
 	}
@@ -267,14 +267,14 @@ func TestPickPlanDestWasteThenLoad(t *testing.T) {
 		{Provider: "grok", Backend: be("grok", 50, 50), Load: 4},
 		{Provider: "codex", Backend: be("codex", 80, 20), Load: 1},
 	}
-	got, ok = PickPlanDest(cands, now, th)
+	got, ok = PickPlanDest(cands, now, th, nil)
 	if !ok || got != "codex" {
 		t.Fatalf("more slack wins dest (load is not the chooser): dest=%q ok=%v", got, ok)
 	}
 
 	// all hot
 	hot := be("grok", 20, 80)
-	got, ok = PickPlanDest([]DestCand{{Provider: "grok", Backend: hot, Load: 2}}, now, th)
+	got, ok = PickPlanDest([]DestCand{{Provider: "grok", Backend: hot, Load: 2}}, now, th, nil)
 	if ok || got != "" {
 		t.Fatalf("all-hot dest empty, got %q ok=%v", got, ok)
 	}
@@ -408,7 +408,7 @@ func TestT850PlanActionsHotControlPlaneOnce(t *testing.T) {
 		{Provider: "codex", Backend: codex},
 		{Provider: "grok", Backend: grok},
 		{Provider: "cursor", Backend: cursor},
-	}, now, th)
+	}, now, th, nil)
 	if !ok || dest != "codex" {
 		t.Fatalf("fixture dest=%q ok=%v, want codex", dest, ok)
 	}

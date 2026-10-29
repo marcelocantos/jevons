@@ -5,12 +5,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
-	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/server"
@@ -20,45 +23,51 @@ import (
 // evidence that its login works, reviving peers that broke on it.
 const planAuthReviveInterval = 30 * time.Second
 
-// startPlanUsage wires the subscription plan-usage reader (🎯T390): how much
-// of each backend's allowance is left and when it rolls over, polled from
-// claudia and served at GET /api/plan-usage for the cockpit.
-//
-// claudia 🎯T18 built the producer and nothing ever called it, so the owner
-// ran dozens of agents with no view of the allowance they were spending. This
-// is the consumer. It is deliberately unconditional — it does not hang off the
-// cost guard, because the cost guard is switched off (budget.json
-// disabled=true, owner, 2026-08-03) and plan remaining is exactly the number
-// that stays meaningful when dollars do not.
-func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.Server, stateDir string, serveReady <-chan struct{}) *planusage.Reader {
-	var hist planusage.History
-	if path := planusage.DefaultReadingsPath(stateDir); path != "" {
-		store, err := planusage.OpenReadingStore(path)
-		if err != nil {
-			slog.Warn("plan usage readings store", "err", err, "path", path)
-		} else {
-			hist = store
-			go func() {
-				<-ctx.Done()
-				_ = store.Close()
-			}()
-		}
+// startPlanUsage subscribes to the one SQL projection on the existing
+// control-plane replica. Claudia owns collection and its schedule.
+func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.Server, stateDir string, serveReady <-chan struct{}, replica *cost.ReplicaSource) (*planusage.Projection, error) {
+	var projection *planusage.Projection
+	updates := make(chan struct{}, 1)
+	sourceReady := make(chan struct{})
+	overrides, err := planusage.OpenReplicaOverrides(replica, stateDir)
+	if err != nil {
+		return nil, fmt.Errorf("plan usage replica setup: %w", err)
 	}
-	reader := planusage.NewReader(planusage.ReaderArgs{
-		Load:     mcpSrv.HarnessLoad,
-		History:  hist,
-		OnUpdate: srv.FanPlanUsage,
+	var burnMu sync.Mutex
+	var burnProfiles map[string]planusage.BurnProfile
+	var burnProfileAt time.Time
+	projection, err = planusage.SubscribeProjection(ctx, replica, func() {
+		// Browser delivery must not wait behind a migration/policy sweep.
+		// Closing sourceReady publishes the registered source to this goroutine.
+		select {
+		case <-sourceReady:
+			srv.FanPlanUsage()
+		default:
+		}
+		select {
+		case updates <- struct{}{}:
+		default:
+		}
 	})
-	// 🎯T948: the owner's band overrides ride the snapshot from its source,
-	// so the bars, the sweep and the mint pick read one verdict.
-	overrides := planusage.NewOverrideStore(filepath.Join(stateDir, planusage.OverrideFile))
-	snapshot := func() planusage.Snapshot { return overrides.Apply(reader.Snapshot()) }
-	overrides.OnChange(srv.FanPlanUsage)
+	if err != nil {
+		return nil, fmt.Errorf("plan usage subscription: %w", err)
+	}
 	mcpSrv.SetPlanOverrides(overrides)
-	srv.SetPlanUsageSource(func() any { return snapshot() })
-	srv.SetPlanUsageWaitReady(reader.WaitReady)
-	srv.SetPlanUsageRefresh(reader.RefreshNow)
-	mcpSrv.SetPlanUsageSource(snapshot)
+	// The local replica opens and subscribes even when the broker is absent.
+	// Its link already retries with bounded backoff; do not mistake the empty
+	// local projection for a connected (zero-usage) broker observation.
+	srv.SetPlanUsageSource(func() any {
+		burnMu.Lock()
+		if time.Since(burnProfileAt) > 5*time.Minute {
+			burnProfiles = planusage.MineBurnProfiles(replica)
+			burnProfileAt = time.Now()
+		}
+		profiles := burnProfiles
+		burnMu.Unlock()
+		return servedPlanUsage(replica.LinkState().Linked, planusage.WithBurnProfilesJSON(projection.JSON(), profiles), projection.Snapshot().Backends)
+	})
+	close(sourceReady)
+	mcpSrv.SetPlanUsageSource(projection.Snapshot)
 	srv.SetPlanSweep(func() any { return mcpSrv.SweepPlanPolicy() })
 	srv.SetPlanDecisions(mcpSrv.PlanPolicyDecisions)
 	srv.SetPlanRetryAfterReauth(mcpSrv.MarkPlanRetryAfterReauth)
@@ -88,45 +97,66 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 			}
 		}
 	}()
-	go reader.Run(ctx)
-	// A daemon restart clears the in-memory execution result. Re-evaluate
-	// after both the first plan reading and HTTP/MCP setup, so a rejected
-	// destination login is visible again without waiting for the next tick.
-	ready := make(chan struct{}, 1)
+	// Policies react to the same subscribed data after server setup. A
+	// subscription notification is never a request to collect a provider.
 	go func() {
-		if reader.WaitReady(ctx) != nil {
-			return
-		}
 		select {
-		case <-serveReady:
-			ready <- struct{}{}
 		case <-ctx.Done():
+			return
+		case <-serveReady:
 		}
-	}()
-	go func() {
-		tick := time.NewTicker(planusage.DefaultRefresh)
-		defer tick.Stop()
+		srv.FanPlanUsage()
+		mcpSrv.SweepPlanPolicy()
+		mcpSrv.NoteCapacity()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ready:
-				ready = nil // The first reading gets one sweep; later ticks continue it.
+			case <-updates:
 				mcpSrv.SweepPlanPolicy()
-				mcpSrv.NoteCapacity() // 🎯T977: the first reading only records
-			case <-tick.C:
-				mcpSrv.SweepPlanPolicy()
-				// 🎯T977: a plan that came back wakes whoever stood down for it.
 				mcpSrv.NoteCapacity()
 			}
 		}
 	}()
+	// A newly linked broker can have no plan rows yet. Publish the link
+	// transition itself, not just subsequent changesets, to mux watchers.
+	go func() {
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+		linked := replica.LinkState().Linked
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				now := replica.LinkState().Linked
+				if now != linked {
+					linked = now
+					srv.FanPlanUsage()
+				}
+			}
+		}
+	}()
+	slog.Info("plan usage subscribed", "api", "GET /api/plan-usage", "source", "control-plane replica")
+	return projection, nil
+}
 
-	slog.Info("plan usage ready (🎯T390)",
-		"api", "GET /api/plan-usage",
-		"refresh", planusage.DefaultRefresh,
-		"stale_after", planusage.DefaultStaleAfter,
-		"readings", planusage.DefaultReadingsPath(stateDir),
-	)
-	return reader
+// planUsageDisconnected is served while the broker link is down and the
+// replica has never observed a provider: an empty projection is not zero usage.
+var planUsageDisconnected = json.RawMessage(`{"disabled":true,"error":"plan usage unavailable: control plane disconnected"}`)
+
+// servedPlanUsage keeps last-good readings through a link drop. They render
+// neutral and age by their own timestamps; replacing them with "disconnected"
+// flipped every bar on each broker restart. Only a replica with no
+// observation at all (🎯T1228's boot without a broker) reports disconnected.
+func servedPlanUsage(linked bool, raw json.RawMessage, backends []planusage.Backend) json.RawMessage {
+	if linked {
+		return raw
+	}
+	for _, be := range backends {
+		if !be.FetchedAt.IsZero() {
+			return raw
+		}
+	}
+	return planUsageDisconnected
 }

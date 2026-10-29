@@ -20,6 +20,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/escalate"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/reportcollapse"
 	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 )
@@ -97,15 +98,58 @@ func (s *Server) enqueueAgentSend(name, text string) (int, error) {
 }
 
 func (s *Server) enqueueAgentSendWithRequestID(name, text, requestID string) (int, error) {
+	return s.enqueueAgentSendOriginWithRequestID(name, text, requestID, false)
+}
+
+// enqueueAgentSendOriginWithRequestID is enqueueAgentSendWithRequestID with
+// the sender's origin threaded onto the queued entry (🎯T1257): an
+// owner-spoken message is held as sendq.Entry.OwnerOrigin so
+// jevons_agent_stop refuses to park or reap the seat while it is still
+// undelivered.
+func (s *Server) enqueueAgentSendOriginWithRequestID(name, text, requestID string, ownerOrigin bool) (int, error) {
 	if IsIdleNudgeText(text) {
 		// 🎯T821: a held idle nudge is stale the moment the next one is
 		// composed; keep one pending nudge per seat, not a growing stack.
-		_, depth, replaced, err := s.sendQueue().AppendSupersedingWithRequestID(name, text, requestID, time.Now(),
-			func(e sendq.Entry) bool { return IsIdleNudgeText(e.Text) })
+		var (
+			depth, replaced int
+			err             error
+		)
+		if ownerOrigin {
+			_, depth, replaced, err = s.sendQueue().AppendSupersedingOwnerOriginWithRequestID(name, text, requestID, time.Now(),
+				func(e sendq.Entry) bool { return IsIdleNudgeText(e.Text) })
+		} else {
+			_, depth, replaced, err = s.sendQueue().AppendSupersedingWithRequestID(name, text, requestID, time.Now(),
+				func(e sendq.Entry) bool { return IsIdleNudgeText(e.Text) })
+		}
 		if replaced > 0 {
 			slog.Info("idle nudge superseded held nudge",
 				"component", "agent_send", "name", name, "replaced", replaced)
 		}
+		return depth, err
+	}
+	if _, ok := reportcollapse.RouteSender(text); ok {
+		// 🎯T826: one pending non-terminal progress report per worker; terminal
+		// and oracle/ask/refusal payloads are never dropped.
+		incoming := text
+		var (
+			depth, replaced int
+			err             error
+		)
+		if ownerOrigin {
+			_, depth, replaced, err = s.sendQueue().AppendSupersedingOwnerOriginWithRequestID(name, text, requestID, time.Now(),
+				func(e sendq.Entry) bool { return reportcollapse.PendingSupersededBy(incoming, e.Text) })
+		} else {
+			_, depth, replaced, err = s.sendQueue().AppendSupersedingWithRequestID(name, text, requestID, time.Now(),
+				func(e sendq.Entry) bool { return reportcollapse.PendingSupersededBy(incoming, e.Text) })
+		}
+		if replaced > 0 {
+			slog.Info("worker report superseded stale progress",
+				"component", "agent_send", "receiver", name, "replaced", replaced)
+		}
+		return depth, err
+	}
+	if ownerOrigin {
+		_, depth, err := s.sendQueue().AppendOwnerOriginWithRequestID(name, text, requestID, time.Now())
 		return depth, err
 	}
 	_, depth, err := s.sendQueue().AppendWithRequestID(name, text, requestID, time.Now())
@@ -264,6 +308,18 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 	if hold := s.autoSeatHold(name); hold != "" {
 		s.noteRevive(name, "send", hold, nil)
 		return nil, false, fmt.Errorf("agent %q is not running and is held (%s, 🎯T1066) — lift the pause or start it explicitly with jevons_agent_start", name, hold)
+	}
+	// 🎯T1112: a rehydrate is a mint for admission purposes — the same
+	// spawn governor (seat-count, memory grind, capacity) a fresh
+	// jevons_agent_start goes through, not a free pass because the row
+	// already existed.
+	var purpose string
+	if def := s.registry.Def(name); def != nil {
+		purpose = def.Purpose
+	}
+	if err := s.admitRehydrate(purpose, name); err != nil {
+		s.noteRevive(name, "send", "spawn_governor", err)
+		return nil, false, err
 	}
 	p2, err := fleet.LaunchRecovering(s.registry, name)
 	s.noteRevive(name, "send", "", err)
@@ -589,6 +645,13 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 }
 
 func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, mode delivery.Mode, proc agentSender, rehydrated bool, confirm sendConfirmation) (res agentSendResult, err error) {
+	return deliverToSenderModeOriginWithRequestID(s, name, text, requestID, false, mode, proc, rehydrated, confirm)
+}
+
+// deliverToSenderModeOriginWithRequestID is deliverToSenderModeWithRequestID
+// with the sender's origin threaded through to every sendq.Entry it may
+// create for name (🎯T1257).
+func deliverToSenderModeOriginWithRequestID(s *Server, name, text, requestID string, ownerOrigin bool, mode delivery.Mode, proc agentSender, rehydrated bool, confirm sendConfirmation) (res agentSendResult, err error) {
 	s.observeQueue(name)
 	// A sidecar socket write returns before the provider accepts or rejects
 	// the prompt. Serialize sends to one seat through the witness verdict so
@@ -663,7 +726,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 	// ordinary submit is held.
 	if !interrupt && seam == nil {
 		if dec := s.AllowFleetControl(name, fleetintent.ControlDeliverSubmit); !dec.Allow {
-			n, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
+			n, qerr := s.enqueueAgentSendOriginWithRequestID(name, text, requestID, ownerOrigin)
 			if qerr != nil {
 				return agentSendResult{}, undeliverableQueueError(name, qerr)
 			}
@@ -681,6 +744,38 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightIdle, TurnEvidence{})
 			return res, nil
 		}
+	}
+
+	// 🎯T785: a tool_call_id mid-flight is a turn that flightState can miss
+	// (stale after bounce, or a Claude seat whose progress events never
+	// flipped the ledger). Offering text to the provider would cancel the
+	// tool the way an owner Esc would — the 2026-09-21 jv-t762/jv-t763
+	// specimens. Queue like client_queue; interrupt=true still cuts (after
+	// deliverByName demotes fleet interrupts against a fresh tool).
+	if !interrupt && seam == nil && s.toolCallFresh(name) && s.flightState(name) != FlightInFlight {
+		id, since, _ := s.toolCallProgress(name)
+		n, qerr := s.enqueueAgentSendOriginWithRequestID(name, text, requestID, ownerOrigin)
+		if qerr != nil {
+			return agentSendResult{}, undeliverableQueueError(name, qerr)
+		}
+		pending := s.pendingAgentSends(name)
+		if pending < 0 {
+			pending = n
+		}
+		mm.Mechanism = delivery.MechanismClientQueue
+		if mode == delivery.ModeSteer {
+			mm.Mechanism = delivery.MechanismQueueUntilIdle
+		}
+		msg := fmt.Sprintf(
+			"busy: %q has tool %s in flight (since %s); message queued (%d pending) until the tool returns — "+
+				"held by the daemon so the running call is not cancelled (🎯T785). "+
+				"To cut the turn short instead: jevons_agent_send with mode=interrupt.",
+			name, id, since.Round(time.Second), pending)
+		res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: pending, Mode: mode, Mechanism: mm.Mechanism}
+		logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightUnknown, TurnEvidence{
+			Detail: fmt.Sprintf("tool_call_id=%s since=%s (🎯T785)", id, since),
+		})
+		return res, nil
 	}
 
 	// A turn known to be running is not offered to the provider CLI at all.
@@ -706,7 +801,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// reporting a cheerful "queued" over a dark event stream is the exact
 		// silence that let six messages stack behind a compacted jevons-po.
 		darkStream := s.EnsureAgentEventsWired(name)
-		n, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
+		n, qerr := s.enqueueAgentSendOriginWithRequestID(name, text, requestID, ownerOrigin)
 		if qerr != nil {
 			return agentSendResult{}, undeliverableQueueError(name, qerr)
 		}
@@ -764,7 +859,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 	preFlight := s.flightState(name)
 	interrupted := false
 	if interrupt {
-		if ierr := readoptDeliver(name, proc, func(a agentSender) error { return a.Interrupt() }); ierr != nil {
+		if ierr := s.deliverWithReadopt(name, proc, func(a agentSender) error { return a.Interrupt() }); ierr != nil {
 			// A turn this daemon watched begin is a turn the caller asked to
 			// cut. Failing that is an error, never a graceful enqueue (🎯T424).
 			if preFlight == FlightInFlight {
@@ -823,7 +918,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			}
 			return use(wire, mode)
 		}
-		return sendModeOutcome{Mechanism: delivery.MechanismSubmit}, readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, wire, id) })
+		return sendModeOutcome{Mechanism: delivery.MechanismSubmit}, s.deliverWithReadopt(name, proc, func(a agentSender) error { return sendWithRequestID(a, wire, id) })
 	}
 
 	// Opened BEFORE the send so "the payload arrived" is measured against a
@@ -1130,7 +1225,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		logAgentSendResult(name, res, rehydrated)
 		return res, nil
 	}
-	n, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
+	n, qerr := s.enqueueAgentSendOriginWithRequestID(name, text, requestID, ownerOrigin)
 	if qerr != nil {
 		return agentSendResult{}, undeliverableQueueError(name, qerr)
 	}
@@ -1222,9 +1317,33 @@ func (s *Server) drainAgentSendQueueWithReceiptContext(ctx context.Context, name
 
 func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string) bool {
 	s.reconcileHeldReceipts(receiptCtx, name)
+	s.confirmCodexReceipts(name)
 	q := s.sendQueue()
 	// 🎯T774: a pile of pending messages is one digest, not one turn apiece.
 	entry, claimed, err := q.ClaimDigest(name)
+	// 🎯T1252: a small backlog (below DigestThreshold, too few for a
+	// collapsing digest) still drains together as one turn at this terminal
+	// stop, each message delivered in full — not one per turn boundary. On
+	// SUCCESS this behaves exactly like a digest (archived, removed
+	// together). On FAILURE it must not cost the per-entry retry/hold
+	// guarantees a lone ClaimFront claim already gives (🎯T418 / 🎯T623):
+	// claimedViaAll below routes a non-Confirmed outcome to
+	// ResolveClaimAllFailure, which unpacks back to independent entries
+	// instead of leaving one failed blob the way ClaimDigest deliberately
+	// does at its own (much larger) scale.
+	claimedViaAll := false
+	// 🎯T1252: only merge when the process can carry a host request id —
+	// the one path that can come back Confirmed rather than Unverified. An
+	// incapable sender can never give a trustworthy receipt for the merged
+	// send, and resending its unpacked remainder next drain would risk
+	// duplicating content that may have silently landed the first time.
+	// ClaimFront's existing one-entry-at-a-time, never-resend-the-uncertain
+	// discipline (🎯T418 / 🎯T623 / 🎯T726 / 🎯T766.5) is exactly right there
+	// and is left untouched.
+	if peekProc, peekLive := s.liveSender(name); err == nil && !claimed && peekLive && supportsRequestID(peekProc) {
+		entry, claimed, err = q.ClaimAll(name)
+		claimedViaAll = claimed
+	}
 	if err == nil && !claimed {
 		entry, claimed, err = q.ClaimFront(name)
 	}
@@ -1236,11 +1355,17 @@ func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string
 		return false // Empty, or an unresolved attempt which must never be replayed.
 	}
 	resolve := func(outcome sendq.AttemptOutcome, detail string) bool {
-		if err := q.Resolve(name, entry, outcome, detail); err != nil {
+		var rerr error
+		if claimedViaAll && outcome != sendq.Confirmed {
+			rerr = q.ResolveClaimAllFailure(name, entry, outcome, detail)
+		} else {
+			rerr = q.Resolve(name, entry, outcome, detail)
+		}
+		if rerr != nil {
 			slog.Error("agent send queue: cannot record delivery outcome", "name", name,
-				"entry_id", entry.ID, "attempt_id", entry.AttemptID, "err", err)
-			s.notifyFleetHealth(entry.ID, fmt.Sprintf("Delivery outcome for %q message %s could not be recorded: %v. "+
-				"Reconcile the held attempt before sending another copy.", name, entry.ID, err))
+				"entry_id", entry.ID, "attempt_id", entry.AttemptID, "err", rerr)
+			s.notifyFleetHealth(noticeAct, entry.ID, fmt.Sprintf("Delivery outcome for %q message %s could not be recorded: %v. "+
+				"Reconcile the held attempt before sending another copy.", name, entry.ID, rerr))
 			return false
 		}
 		return true
@@ -1310,7 +1435,7 @@ func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string
 		transportID = bound.TransportRequestID
 	}
 	generation := s.terminalGeneration(name)
-	sendErr := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, transportID) })
+	sendErr := s.deliverWithReadopt(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, transportID) })
 	// A bound host request settles from its Claudia receipt. PayloadSeen,
 	// transcript growth, and assistant prose do not confirm it.
 	if entry.TransportRequestID != "" {
@@ -1320,7 +1445,13 @@ func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string
 			}
 			return false
 		}
-		return s.settleBoundDrainReceipt(receiptCtx, name, entry, generation, resolve)
+		if ended := s.settleBoundDrainReceipt(receiptCtx, name, entry, generation, resolve); ended {
+			return ended
+		}
+		if n := s.confirmCodexReceipts(name); n > 0 {
+			return true
+		}
+		return false
 	}
 	// An incapable sender has no receipt. A transcript watch cannot confirm
 	// the handoff, and it must not start the turn or clear the pin. A
@@ -1338,6 +1469,12 @@ func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string
 	}
 	if resolve(sendq.Unverified, detail) {
 		s.reportDrainedSendNotBegun(name, entry, TurnEvidence{}, time.Now())
+		// 🎯T772: check the codex session log while the TurnInput row still
+		// exists. Waiting for the next drain loses receipts on idle seats
+		// (codex prunes ~30 minutes of submissions).
+		if n := s.confirmCodexReceipts(name); n > 0 {
+			return true // held entries cleared; retry drain for pending behind them
+		}
 	}
 	return false
 }
@@ -1348,11 +1485,20 @@ func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string
 // "not sent" duplicates a delivery, a false "uncertain" only stalls one
 // entry behind a pin the owner can see. So doubt resolves to uncertain.
 //
-// The cause is agenterr.ProviderCause. A rendered sentence, including
-// "401 unauthorized" and a report that quotes a refusal, is not a cause.
-// Turn-in-flight and process-not-running are the only definite non-sends.
+// Broker-relayed refusals are recognised with claudia.AgentFailed over the
+// typed agent_failed frame (🎯T767), not by peeling Error() text. A rendered
+// sentence, including "401 unauthorized" and a report that quotes a refusal,
+// is not a cause. Turn-in-flight and process-not-running are the only
+// definite non-sends, read from agenterr.ProviderCause on the same error.
 func queueSendDefinitelyNotSent(err error) bool {
-	switch agenterr.ProviderCause(err) {
+	if err == nil {
+		return false
+	}
+	cause := agenterr.ProviderCause(err)
+	if _, brokerRelay := claudia.AgentFailed(err); !brokerRelay && cause == "" {
+		return false
+	}
+	switch cause {
 	case agenterr.CauseTurnInFlight, agenterr.CauseProcessNotRunning:
 		return true
 	default:

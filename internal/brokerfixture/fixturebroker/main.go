@@ -27,16 +27,19 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 	_ "github.com/marcelocantos/claudia/controlplane" // links the broker's control-file publisher
 	"github.com/marcelocantos/claudia/daemon"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 type command struct {
-	Op      string                  `json:"op"`
-	Usage   *claudia.UsageFact      `json:"usage,omitempty"`
-	Receipt *claudia.RequestReceipt `json:"receipt,omitempty"`
+	Op        string                  `json:"op"`
+	Usage     *claudia.UsageFact      `json:"usage,omitempty"`
+	Receipt   *claudia.RequestReceipt `json:"receipt,omitempty"`
+	Remaining *float64                `json:"remaining,omitempty"`
 }
 
 func main() {
@@ -95,6 +98,19 @@ func run(line string) string {
 		claudia.RecordObservedUsage(cmd.Usage)
 	case cmd.Op == "receipt" && cmd.Receipt != nil:
 		claudia.RecordObservedReceipt(cmd.Receipt)
+	case cmd.Op == "plan" && cmd.Remaining != nil:
+		left := *cmd.Remaining
+		used := 100 - left
+		reset := time.Now().UTC().Add(7 * 24 * time.Hour)
+		_, err := claudia.PollBrokerPlanUsage(context.Background(), claudia.SystemClock{}, func(_ context.Context, p claudia.Provider) (claudia.PlanUsage, error) {
+			if seatprovider.Resolve(p).Plan != seatprovider.Claude {
+				return claudia.PlanUsage{Status: claudia.PlanUsageUnavailable, Reason: "fixture"}, nil
+			}
+			return claudia.PlanUsage{Status: claudia.PlanUsageAvailable, Windows: []claudia.PlanWindow{{Name: claudia.PlanWindowWeekly, RemainingPercent: &left, UsedPercent: &used, ResetsAt: &reset, LimitWindow: 7 * 24 * time.Hour}}}, nil
+		})
+		if err != nil {
+			return "ERR " + err.Error()
+		}
 	default:
 		return "ERR unknown command " + cmd.Op
 	}

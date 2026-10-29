@@ -140,6 +140,10 @@ type Observation struct {
 	// does not count: a verification worktree is expected to be full of it.
 	DirtyTracked bool
 
+	// StatusErr means tracked changes could not be observed. Unknown is never
+	// permission to remove a checkout, including when the host cannot fork git.
+	StatusErr error
+
 	// Hollow is true when DirtyTracked is true and every one of those
 	// changes is a tracked file that has simply vanished from disk. That is
 	// the signature of a cleanup that was killed partway through its own
@@ -286,6 +290,9 @@ func Decide(o Observation, live Liveness, pol Policy) Decision {
 	}
 	if !o.Entry.Detached {
 		return Decision{ActionHold, fmt.Sprintf("checked out on %s, not a detached verification worktree", shortRef(o.Entry.Branch))}
+	}
+	if o.StatusErr != nil {
+		return Decision{ActionHold, fmt.Sprintf("cannot establish tracked-file status: %v", o.StatusErr)}
 	}
 
 	switch o.Owner.Kind {

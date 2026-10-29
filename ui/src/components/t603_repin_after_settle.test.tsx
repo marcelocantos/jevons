@@ -139,5 +139,6 @@ it('the settle observer is guarded by follow and paging (T603)', () => {
   expect(effect).toContain('new ResizeObserver');
   expect(effect).toContain('!followRef.current || pagingRef.current');
   expect(effect).toContain('canvasRef.current');
+  expect(effect).toContain('settlePinGapPx');
   expect(effect).not.toContain("querySelector('#messages-canvas')");
 });

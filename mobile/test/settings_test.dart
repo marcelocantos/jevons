@@ -1,9 +1,36 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jevons_mobile/settings.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  TestWidgetsFlutterBinding.ensureInitialized();
+  final values = <String, String>{};
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(const MethodChannel('jevons/device_store'), (
+    call,
+  ) async {
+    final args = Map<String, dynamic>.from(call.arguments as Map);
+    if (call.method == 'get') return values[args['key']];
+    if (call.method == 'put') {
+      values[args['key'] as String] = args['value'] as String;
+      return null;
+    }
+    throw MissingPluginException();
+  });
+  setUp(() {
+    values.clear();
+    CockpitSettings.androidOverrideForTests = true;
+  });
+  tearDown(() => CockpitSettings.androidOverrideForTests = null);
+
+  test('iOS retains existing settings backend', () async {
+    CockpitSettings.androidOverrideForTests = false;
+    SharedPreferences.setMockInitialValues({});
+    final settings = await CockpitSettings.load();
+    expect(await settings.setUrl('https://ios.example.test'), isTrue);
+    expect((await CockpitSettings.load()).url, 'https://ios.example.test');
+  });
 
   test('defaults to the canonical cockpit URL', () async {
     final settings = await CockpitSettings.load();

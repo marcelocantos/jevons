@@ -383,6 +383,56 @@ func (p *Portfolio) Route(taskType string, load LoadCounts) RouteDecision {
 	}
 }
 
+// TieBreakHarnessOrder is the host harness preference order passed to
+// claudia.Resolve TieBreak (🎯T1023): route Prefer, then Secondary, then
+// DefaultProvider — deduped. Consulted only when slack is undecided
+// (within catalogTieBreakReach); never outranks dest-band ranking.
+func (p *Portfolio) TieBreakHarnessOrder(taskType string) []string {
+	if p == nil {
+		p = DefaultPortfolio()
+	}
+	tt := NormalizeTaskType(taskType)
+	route, ok := p.Routes[tt]
+	if !ok {
+		route = p.Routes[TaskCodeImplement]
+	}
+	var order []string
+	order = append(order, route.Prefer...)
+	order = append(order, route.Secondary...)
+	if def := strings.TrimSpace(p.DefaultProvider); def != "" {
+		order = append(order, def)
+	} else {
+		order = append(order, HarnessGrok)
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, h := range order {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" || seen[h] {
+			continue
+		}
+		seen[h] = true
+		out = append(out, h)
+	}
+	return out
+}
+
+// TieBreakProviders maps [Portfolio.TieBreakHarnessOrder] to claudia
+// catalog providers for resolvePlanCandidates (🎯T1023).
+func (p *Portfolio) TieBreakProviders(taskType string) []claudia.Provider {
+	var out []claudia.Provider
+	seen := map[claudia.Provider]bool{}
+	for _, h := range p.TieBreakHarnessOrder(taskType) {
+		prov := seatprovider.Resolve(claudia.Provider(h)).Plan.AsProvider()
+		if prov == "" || seen[prov] {
+			continue
+		}
+		seen[prov] = true
+		out = append(out, prov)
+	}
+	return out
+}
+
 func (r TaskRoute) modelFor(provider string) string {
 	p := strings.ToLower(strings.TrimSpace(provider))
 	if r.Models != nil {

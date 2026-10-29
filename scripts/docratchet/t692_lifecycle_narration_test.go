@@ -12,7 +12,6 @@ import (
 // narration matches the live registry. Doctrine names the specimen
 // (claiming a running seat is dead) and the classifier helpers.
 func TestLifecycleNarrationDoctrineMarkers(t *testing.T) {
-	persona := readRepo(t, "internal/config/persona.md")
 	agents := readRepo(t, "AGENTS.md")
 	guide := readRepo(t, "agents-guide.md")
 	brief := readRepo(t, "internal/mcpserver/fleet_brief.go")
@@ -31,10 +30,11 @@ func TestLifecycleNarrationDoctrineMarkers(t *testing.T) {
 		"jevons_agent_list",
 		"GET /api/agents",
 	}
+	overseerRole := readRepo(t, "internal/roles/builtin/overseer.md")
 	for _, doc := range []struct {
 		name, body string
 	}{
-		{"internal/config/persona.md", persona},
+		{"internal/roles/builtin/overseer.md", overseerRole},
 		{"AGENTS.md", agents},
 		{"agents-guide.md", guide},
 		{"internal/mcpserver/fleet_brief.go", brief},

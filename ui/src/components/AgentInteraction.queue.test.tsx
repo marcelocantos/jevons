@@ -327,3 +327,26 @@ describe('send queue wiring (T657 / T113)', () => {
     });
   });
 });
+
+it('stale-idle daemon-held message shares the queue strip and all controls reach the daemon', async () => {
+  const view = render(<AgentInteraction mux={client} name="jevons" escalate={false} density="comfortable" connected />);
+  const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
+  act(() => {
+    emit('frame', { type: 'user', msg_id: 'om-held', turn_origin: 'owner', timestamp: 1000, message: { role: 'user', content: [{ type: 'text', text: 'first' }] } });
+    emit('frame', { type: 'send_error', msg_id: 'om-held', state: 'held', text: 'queued behind turn' });
+    emit('meta', { start: 1, older: 0, total: 2, n: 2, following: true, phase: 'idle' });
+  });
+  await waitFor(() => expect(view.container.querySelectorAll('.send-queue-item')).toHaveLength(1));
+  expect(view.container.querySelector('.msg.user')).toBeNull();
+  const row = view.container.querySelector('.send-queue-item')!;
+  fireEvent.click(row.querySelector('.sq-send-now')!);
+  fireEvent.click(row.querySelector('.sq-interrupt')!);
+  const messages = () => Socket.latest.sent.map((s) => JSON.parse(s));
+  expect(messages().filter((m) => m.t === 'resend').map((m) => m.body)).toEqual([
+    { msg_id: 'om-held', mode: 'steer' }, { msg_id: 'om-held', mode: 'interrupt' },
+  ]);
+  fireEvent.click(row.querySelector('.sq-remove')!);
+  expect(messages().filter((m) => m.t === 'remove_held').map((m) => m.body)).toEqual([{ msg_id: 'om-held' }]);
+  act(() => emit('frame', { type: 'send_error', msg_id: 'om-held', state: 'removed', text: 'removed' }));
+  await waitFor(() => expect(view.container.querySelector('.send-queue-item')).toBeNull());
+});

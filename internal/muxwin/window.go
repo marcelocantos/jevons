@@ -53,6 +53,15 @@ func CapFollowingLo(lo, n, max int) int {
 	return lo
 }
 
+// FloorLoToOwner pulls lo back to include the latest owner turn when a
+// connect cap would leave only machine noise past it (🎯T1159).
+func FloorLoToOwner(lo, ownerLo int) int {
+	if ownerLo > 0 && ownerLo < lo {
+		return ownerLo
+	}
+	return lo
+}
+
 // Kind is a coalesced display event class.
 type Kind int
 

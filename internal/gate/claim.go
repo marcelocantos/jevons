@@ -70,6 +70,13 @@ const (
 	// work. The store is one namespace for every repo on the machine, and
 	// this is the only flag that asks whose run a cited id was.
 	FlagForeignRepoGate FlagKind = "foreign_repo_gate"
+	// FlagLandingUnreachable: the declared landing SHA is not on the shared checkout tip.
+	FlagLandingUnreachable FlagKind = "landing_unreachable"
+	// FlagOwnerImpactMissing: the declared oracle commit touches owner-
+	// visible surface (non-test ui/src, ui/index.html, the overseer persona
+	// files) and the report carries no owner-impact slot, or an explicit
+	// "none" (🎯T1122 clause 3).
+	FlagOwnerImpactMissingKind FlagKind = "owner_impact_missing"
 )
 
 // CitationRole is what a finish report is doing with a gate it cites.

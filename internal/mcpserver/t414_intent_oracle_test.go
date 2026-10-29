@@ -140,7 +140,7 @@ func t414Controls() []t414Control {
 			control: fleetintent.ControlRevive,
 			acts: func(t *testing.T, fleet, agent fleetintent.State) bool {
 				reg := &t414SweepReg{}
-				reps := sweepDeadAgents(reg, "jevons", t414Snapshot(fleet, agent), nil)
+				reps := sweepDeadAgents(reg, "jevons", t414Snapshot(fleet, agent), nil, nil)
 				// The sweep must still *report* the dead handle under every
 				// intent — the owner should see that a process is gone. Only
 				// the re-launch is gated.

@@ -1350,3 +1350,71 @@ func TestT5625MuxSendErrorEchoesCorrelationID(t *testing.T) {
 		t.Fatalf("error id = %+v, want s8-def", body["id"])
 	}
 }
+
+func TestT1159WriteMuxWindowFloorsOwnerTurn(t *testing.T) {
+	const total = 750
+	db, err := statedb.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	rows := make([]statedb.Event, 0, total)
+	ownerBody := `{"type":"user","turn_origin":"owner","message":{"content":[{"type":"text","text":"owner ack check"}]}}`
+	replyBody := `{"type":"assistant","message":{"content":[{"type":"text","text":"sealed reply"}]},"stop_reason":"end_turn"}`
+	rows = append(rows, statedb.Event{Index: 1, ID: "e:1", Type: "user", Kind: 1, Body: ownerBody})
+	rows = append(rows, statedb.Event{Index: 2, ID: "e:2", Type: "assistant", Kind: 2, Body: replyBody})
+	for i := 3; i <= total; i++ {
+		body := fmt.Sprintf(
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t%d","name":"jevons_agent_list","input":{}}]}}`,
+			i,
+		)
+		rows = append(rows, statedb.Event{Index: i, ID: "e:" + itoa(i), Type: "assistant", Kind: 2, Body: body})
+	}
+	if err := db.ReplaceAll("jevons", rows); err != nil {
+		t.Fatal(err)
+	}
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	s.SetStateDB(db)
+	s.mux = newMuxHub()
+
+	buf := &replayBuf{}
+	if err := s.writeMuxWindow(t.Context(), buf, nil, "jevons", -30, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]any
+	sawOwner := false
+	for _, m := range buf.frames {
+		if m["t"] == "meta" {
+			meta, _ = m["body"].(map[string]any)
+			continue
+		}
+		if m["t"] != "frame" {
+			continue
+		}
+		body, _ := m["body"].(map[string]any)
+		ev, _ := body["event"].(map[string]any)
+		if ev == nil {
+			continue
+		}
+		if ev["type"] == "user" && strings.Contains(fmt.Sprint(ev["message"]), "owner ack check") {
+			sawOwner = true
+		}
+	}
+	if meta == nil {
+		t.Fatal("missing meta")
+	}
+	start := 0
+	switch v := meta["start"].(type) {
+	case float64:
+		start = int(v)
+	case int:
+		start = v
+	}
+	if start != 1 {
+		t.Fatalf("meta start=%v want 1 (owner turn included)", meta["start"])
+	}
+	if !sawOwner {
+		t.Fatal("connect window did not deliver the owner user turn")
+	}
+}

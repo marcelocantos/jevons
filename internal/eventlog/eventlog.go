@@ -8,8 +8,6 @@
 package eventlog
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,6 +36,11 @@ type Journal struct {
 	f        *os.File
 	path     string
 	writeErr error
+	// Rotation (🎯T1131): when the live file reaches maxSegmentBytes it
+	// becomes .1 and a fresh live file is opened; up to keepSegments files
+	// are retained (live plus .1 …).
+	maxSegmentBytes int64
+	keepSegments    int
 }
 
 // Open creates or appends the journal at path (parents created). A nonempty
@@ -70,7 +73,22 @@ func Open(path string) (*Journal, error) {
 			return nil, fmt.Errorf("eventlog: unterminated journal tail; existing bytes preserved")
 		}
 	}
-	return &Journal{f: f, path: path}, nil
+	j := &Journal{
+		f:               f,
+		path:            path,
+		maxSegmentBytes: DefaultMaxSegmentBytes,
+		keepSegments:    DefaultKeepSegments,
+	}
+	if info.Size() >= j.maxSegmentBytes {
+		j.mu.Lock()
+		err := j.rotateLocked()
+		j.mu.Unlock()
+		if err != nil {
+			_ = j.Close()
+			return nil, err
+		}
+	}
+	return j, nil
 }
 
 // Path returns the journal file path.
@@ -146,6 +164,10 @@ func (j *Journal) Append(ev Event) error {
 		j.writeErr = fmt.Errorf("eventlog: fsync: %w", err)
 		return j.writeErr
 	}
+	if err := j.maybeRotate(); err != nil {
+		j.writeErr = err
+		return err
+	}
 	return nil
 }
 
@@ -164,83 +186,18 @@ type TailOptions struct {
 }
 
 // Tail reads the journal and returns the last matching events newest-first.
-// Safe when the file is missing (returns empty).
+// Safe when the file is missing (returns empty). Walks rotated segments
+// newest-first (🎯T1131).
 func Tail(path string, opt TailOptions) ([]Event, error) {
-	limit := opt.Limit
-	if limit <= 0 {
-		limit = 100
+	if _, err := os.Stat(path); err != nil && os.IsNotExist(err) {
+		return nil, nil
 	}
-	if limit > 2000 {
-		limit = 2000
-	}
-	f, err := os.Open(path)
+	ev, err := Collect(path, opt)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("eventlog: open for tail: %w", err)
+		return nil, err
 	}
-	defer f.Close()
-
-	// For desk-scale files, scan all lines; keep a ring of matches.
-	ring := make([]Event, 0, limit)
-	sc := bufio.NewScanner(f)
-	// 1 MiB lines max (decisions are small; guard against corruption).
-	sc.Buffer(make([]byte, 0, 64*1024), maxEventLineBytes)
-	comp := strings.TrimSpace(opt.Component)
-	dec := strings.TrimSpace(opt.Decision)
-	src := strings.TrimSpace(opt.Source)
-	sub := strings.ToLower(strings.TrimSpace(opt.Contains))
-
-	// A line whose raw bytes lack a wanted value cannot match it, so it is
-	// skipped before decoding (🎯T936). Decoding every line of a journal
-	// that had reached 100 MB, under a caller's lock, held /api/agents for
-	// 22 s. The exact field match below still decides. Values are the plain
-	// identifiers callers pass; one JSON would escape needs its escaped form.
-	var need [][]byte
-	for _, v := range []string{comp, dec, src} {
-		if v != "" {
-			need = append(need, []byte(v))
-		}
+	if len(ev) == 0 {
+		return nil, nil
 	}
-scan:
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		for _, n := range need {
-			if !bytes.Contains(line, n) {
-				continue scan
-			}
-		}
-		var ev Event
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue // skip corrupt lines
-		}
-		if comp != "" && ev.Component != comp {
-			continue
-		}
-		if dec != "" && ev.Decision != dec {
-			continue
-		}
-		if src != "" && ev.Source != src {
-			continue
-		}
-		if sub != "" && !strings.Contains(strings.ToLower(ev.Msg), sub) {
-			continue
-		}
-		ring = append(ring, ev)
-		if len(ring) > limit {
-			ring = ring[len(ring)-limit:]
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return ring, fmt.Errorf("eventlog: scan: %w", err)
-	}
-	// Newest first for operator convenience.
-	for i, j := 0, len(ring)-1; i < j; i, j = i+1, j-1 {
-		ring[i], ring[j] = ring[j], ring[i]
-	}
-	return ring, nil
+	return ev, nil
 }

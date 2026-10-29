@@ -61,16 +61,18 @@ type FrontierLeaf struct {
 }
 
 type frontierLedgerTarget struct {
-	Name       string           `yaml:"name"`
-	Status     string           `yaml:"status"`
-	DependsOn  []string         `yaml:"depends_on"`
-	Context    string           `yaml:"context"`
-	Tags       []string         `yaml:"tags"`
-	Acceptance []string         `yaml:"acceptance"`
-	Cost       float64          `yaml:"cost"`
-	Value      float64          `yaml:"value"`
-	OwnedBy    *frontierOwnedBy `yaml:"owned_by"`
-	Discovered string           `yaml:"discovered"`
+	Name        string           `yaml:"name"`
+	Status      string           `yaml:"status"`
+	Achieved    string           `yaml:"achieved"`
+	Attestation string           `yaml:"attestation"`
+	DependsOn   []string         `yaml:"depends_on"`
+	Context     string           `yaml:"context"`
+	Tags        []string         `yaml:"tags"`
+	Acceptance  []string         `yaml:"acceptance"`
+	Cost        float64          `yaml:"cost"`
+	Value       float64          `yaml:"value"`
+	OwnedBy     *frontierOwnedBy `yaml:"owned_by"`
+	Discovered  string           `yaml:"discovered"`
 }
 
 // frontierOwnedBy mirrors bullseye's ownership exclusion (🎯T449).
@@ -133,10 +135,18 @@ func IsParkedUmbrellaTag(tags []string) bool {
 // FrontierLeaves extracts ready leaves from ledger YAML, ordered by natural
 // target-id compare (T2 < T10 < T10.2).
 func FrontierLeaves(data []byte) ([]FrontierLeaf, error) {
-	var doc frontierLedgerDoc
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("parse ledger: %w", err)
+	doc, ok := parsedFrontierDoc(data)
+	if !ok {
+		var probe frontierLedgerDoc
+		if err := yaml.Unmarshal(data, &probe); err != nil {
+			return nil, fmt.Errorf("parse ledger: %w", err)
+		}
+		return nil, nil
 	}
+	return frontierLeavesFromDoc(doc)
+}
+
+func frontierLeavesFromDoc(doc frontierLedgerDoc) ([]FrontierLeaf, error) {
 	if doc.Targets == nil {
 		return nil, nil
 	}
@@ -228,11 +238,7 @@ func FrontierLeaves(data []byte) ([]FrontierLeaf, error) {
 // LoadFrontierLeavesFromCwd discovers the nearest in-repo ledger and returns
 // its ready leaves plus the ledger path used.
 func LoadFrontierLeavesFromCwd(cwd string) ([]FrontierLeaf, string, error) {
-	path, err := DiscoverLedgerPath(cwd)
-	if err != nil {
-		return nil, "", err
-	}
-	data, err := os.ReadFile(path)
+	data, path, err := ReadLedgerFromCwd(cwd)
 	if err != nil {
 		return nil, path, err
 	}
@@ -292,4 +298,108 @@ func targetIDNaturalLess(a, b string) bool {
 		ib++
 	}
 	return len(a)-ia < len(b)-ib
+}
+
+// ReadLedgerFromCwd discovers the nearest in-repo ledger and reads it once.
+func ReadLedgerFromCwd(cwd string) ([]byte, string, error) {
+	path, err := DiscoverLedgerPath(cwd)
+	if err != nil {
+		return nil, "", err
+	}
+	recordLedgerRead()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, path, err
+	}
+	return data, path, nil
+}
+
+// LedgerSnapshot is one read of bullseye.yaml parsed once. Frontier leaves and
+// gate-row lookups share this document for the lifetime of the snapshot
+// (🎯T1152).
+type LedgerSnapshot struct {
+	doc frontierLedgerDoc
+}
+
+// NewLedgerSnapshot parses data at most once per distinct content (🎯T1067 cache).
+func NewLedgerSnapshot(data []byte) (*LedgerSnapshot, bool) {
+	doc, ok := parsedFrontierDoc(data)
+	if !ok {
+		return nil, false
+	}
+	return &LedgerSnapshot{doc: doc}, true
+}
+
+// FrontierLeaves on a snapshot does not re-parse the ledger.
+func (s *LedgerSnapshot) FrontierLeaves() ([]FrontierLeaf, error) {
+	if s == nil {
+		return nil, nil
+	}
+	return frontierLeavesFromDoc(s.doc)
+}
+
+// GateRow returns the narrow gate-row view for id.
+func (s *LedgerSnapshot) GateRow(id string) (GateRow, bool) {
+	if s == nil {
+		return GateRow{}, false
+	}
+	return gateRowFromDocTarget(id, s.doc)
+}
+
+// TargetIDs lists every target id in the ledger document.
+func (s *LedgerSnapshot) TargetIDs() []string {
+	if s == nil || s.doc.Targets == nil {
+		return nil
+	}
+	out := make([]string, 0, len(s.doc.Targets))
+	for id := range s.doc.Targets {
+		out = append(out, id)
+	}
+	return out
+}
+
+// GateRowIndex is a stable gate-row lookup table built from one ledger parse
+// (🎯T1152).
+type GateRowIndex struct {
+	snap *LedgerSnapshot
+}
+
+// BuildGateRowIndex parses data once and indexes rows by target id.
+func BuildGateRowIndex(data []byte) (GateRowIndex, bool) {
+	snap, ok := NewLedgerSnapshot(data)
+	if !ok {
+		return GateRowIndex{}, false
+	}
+	return GateRowIndex{snap: snap}, true
+}
+
+// Lookup returns one gate row from the index.
+func (idx GateRowIndex) Lookup(id string) (GateRow, bool) {
+	if idx.snap == nil {
+		return GateRow{}, false
+	}
+	return idx.snap.GateRow(id)
+}
+
+func gateRowFromDocTarget(id string, doc frontierLedgerDoc) (GateRow, bool) {
+	id = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(id), "🎯"))
+	if id == "" || doc.Targets == nil {
+		return GateRow{}, false
+	}
+	t, found := doc.Targets[id]
+	if !found {
+		return GateRow{}, false
+	}
+	row := GateRow{
+		ID:          id,
+		Status:      strings.TrimSpace(t.Status),
+		Achieved:    strings.TrimSpace(t.Achieved),
+		Attestation: t.Attestation,
+		Context:     t.Context,
+	}
+	if t.OwnedBy != nil {
+		row.OwnedByOwner = strings.TrimSpace(t.OwnedBy.Owner)
+		row.OwnedByReason = t.OwnedBy.Reason
+	}
+	return row, true
 }

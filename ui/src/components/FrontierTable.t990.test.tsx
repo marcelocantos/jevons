@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FrontierTable } from './FrontierTable';
 import type { PlayAgent, SeatWaits } from '../frontier/play';
@@ -63,7 +63,7 @@ describe('FrontierTable force-start (🎯T990)', () => {
   });
 
   it('a retired seat shows as a failure with its reason, and force-play retries via the owning PO', async () => {
-    const { calls, btn } = setup(failed, 'yourworld2-po');
+    const { view, calls, btn } = setup(failed, 'yourworld2-po');
     await waitFor(() => expect(btn().getAttribute('data-play-mode')).toBe('waiting'));
     expect(btn().getAttribute('data-seat-wait-kind')).toBe('seat_failed');
     expect(btn().className).toContain('ft-seat-failed-btn');
@@ -71,7 +71,10 @@ describe('FrontierTable force-start (🎯T990)', () => {
     expect(btn().title).toContain('unbriefed_seat');
     expect(btn().title).toContain('jv-t989-mobile-webview');
 
-    await act(async () => btn().click());
+    const wrap = view.container.querySelector('.ft-play-wrap')!;
+    fireEvent.mouseEnter(wrap);
+    const force = view.container.querySelector<HTMLButtonElement>('.ft-wait-force')!;
+    await act(async () => force.click());
     await waitFor(() => expect(calls.length).toBe(1));
     expect(calls[0].url).toBe('/api/agents/jevons-po/send');
     expect(calls[0].body).toContain('Owner force-play');

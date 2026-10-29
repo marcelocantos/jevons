@@ -38,6 +38,17 @@ type ObserveInput struct {
 	// internal/pofanout; staffops keeps the verdict as a string so the pure
 	// policy layer stays a leaf package.
 	POFanout []POFanoutObs
+	// POAuditorMutualWait carries 🎯T1192 stalls: PO and auditor both idle
+	// while children hold finish-reports on open targets.
+	POAuditorMutualWait []POAuditorMutualWaitObs
+	// POOwnerMissions carries 🎯T1195: idle PO with an open bounded owner mission.
+	POOwnerMissions []POOwnerMissionObs
+	// POUnactedChildReports carries 🎯T1193: idle PO with typed child terminal
+	// reports stored after its last turn (live or reaped children).
+	POUnactedChildReports []POUnactedChildReportObs
+	// POQueueBacklog carries 🎯T1182: a product owner's inbound queue held
+	// longer than the direct responsiveness budget.
+	POQueueBacklog []POQueueBacklogObs
 	// FleetBlock is daemon-held evidence the fleet cannot run (🎯T407):
 	// auto-spawn paused, provider auth/quota. Empty means it can. Ready-
 	// leaf count is not this field — a blocked fleet can have many ready
@@ -88,6 +99,53 @@ type POFanoutObs struct {
 // that evaporated. Escalated above a plain stall: the PO was demonstrably
 // awake.
 const POFanoutTurnNoFanout = "turn_no_fanout"
+
+// POAuditorMutualWaitObs is one 🎯T1192 fault for staffops signal shaping.
+type POAuditorMutualWaitObs struct {
+	PO       string
+	Auditor  string
+	Handoffs []POAuditorHandoffObs
+	Detail   string
+}
+
+// POAuditorHandoffObs names one pending child handoff in the stall list.
+type POAuditorHandoffObs struct {
+	Agent  string
+	Target string
+}
+
+// POOwnerMissionObs is one 🎯T1195 fault for staffops signal shaping.
+type POOwnerMissionObs struct {
+	PO        string
+	RequestID string
+	Remaining int
+	Total     int
+	ItemCount int
+	Detail    string
+}
+
+// POUnactedChildReportObs is one 🎯T1193 fault for staffops signal shaping.
+type POUnactedChildReportObs struct {
+	PO      string
+	Reports []POUnactedChildReportItemObs
+	Detail  string
+}
+
+// POUnactedChildReportItemObs is one pending child report in the wake list.
+type POUnactedChildReportItemObs struct {
+	Agent    string
+	Target   string
+	Kind     string
+	ReportID string
+}
+
+// POQueueBacklogObs is one 🎯T1182 queue-age fault for staffops signal shaping.
+type POQueueBacklogObs struct {
+	PO        string
+	Depth     int
+	OldestAge time.Duration
+	Detail    string
+}
 
 // FrontierStallObs derives ObserveInput frontier stall fields from an
 // unattended-ready leaf count (🎯T346). readyCount must already exclude
@@ -401,6 +459,68 @@ func BuildSignals(in ObserveInput) []Signal {
 					fmt.Sprintf("%s: %s ready=%d", p.Verdict, p.Reason, p.ReadyCount)),
 			})
 		}
+
+		for _, p := range in.POAuditorMutualWait {
+			name := strings.TrimSpace(p.PO)
+			if name == "" {
+				continue
+			}
+			out = append(out, Signal{
+				Kind:       "po_auditor_mutual_wait",
+				Symptom:    "stall:po_auditor:" + name,
+				Severity:   "critical",
+				Mechanical: false,
+				Intent:     in.agentIntent(name),
+				Detail:     firstNonEmpty(p.Detail, fmt.Sprintf("auditor=%s handoffs=%d", p.Auditor, len(p.Handoffs))),
+			})
+		}
+
+		for _, p := range in.POUnactedChildReports {
+			name := strings.TrimSpace(p.PO)
+			if name == "" {
+				continue
+			}
+			out = append(out, Signal{
+				Kind:       "po_unacted_child_reports",
+				Symptom:    "stall:po_unacted_child_reports:" + name,
+				Severity:   "critical",
+				Mechanical: false,
+				Intent:     in.agentIntent(name),
+				Detail:     firstNonEmpty(p.Detail, fmt.Sprintf("unacted_reports=%d", len(p.Reports))),
+			})
+		}
+
+		for _, p := range in.POOwnerMissions {
+			name := strings.TrimSpace(p.PO)
+			if name == "" {
+				continue
+			}
+			out = append(out, Signal{
+				Kind:       "po_owner_mission",
+				Symptom:    "stall:po_owner_mission:" + name,
+				Severity:   "critical",
+				Mechanical: false,
+				Intent:     in.agentIntent(name),
+				Detail: firstNonEmpty(p.Detail,
+					fmt.Sprintf("request_id=%s remaining=%d", p.RequestID, p.Remaining)),
+			})
+		}
+
+		for _, p := range in.POQueueBacklog {
+			name := strings.TrimSpace(p.PO)
+			if name == "" {
+				continue
+			}
+			out = append(out, Signal{
+				Kind:       "po_queue_backlog",
+				Symptom:    "stall:po_queue_backlog:" + name,
+				Severity:   "critical",
+				Mechanical: false,
+				Intent:     in.agentIntent(name),
+				Detail: firstNonEmpty(p.Detail,
+					fmt.Sprintf("depth=%d oldest=%s", p.Depth, p.OldestAge.Round(time.Second))),
+			})
+		}
 	}
 
 	// Cost residual.
@@ -436,6 +556,8 @@ func BuildSignals(in ObserveInput) []Signal {
 // EventRow is a minimal eventlog projection for pure anomaly clustering.
 type EventRow struct {
 	Msg       string
+	// ErrorMessage is fields.message on browser window.onerror rows (🎯T1194).
+	ErrorMessage string
 	Component string
 	Decision  string
 	Level     string
@@ -477,6 +599,21 @@ func normalizeDrillToken(s string) string {
 //
 // Pure: the explicit Drill field, or source/component exactly rsi-drill /
 // rsi_drill. A rendered message is not a drill.
+const resizeObserverLoopBenign = "ResizeObserver loop completed with undelivered notifications"
+
+// IsBenignResizeObserverWindowError reports Chromium's benign ResizeObserver
+// loop warning journaled as window.onerror (🎯T1194). Pure classifier.
+func IsBenignResizeObserverWindowError(r EventRow) bool {
+	if strings.ToLower(strings.TrimSpace(r.Component)) != "window" {
+		return false
+	}
+	msg := strings.TrimSpace(r.ErrorMessage)
+	if msg == "" {
+		msg = strings.TrimSpace(r.Msg)
+	}
+	return strings.Contains(msg, resizeObserverLoopBenign)
+}
+
 func IsSyntheticDrillRow(r EventRow) bool {
 	if r.Drill {
 		return true
@@ -525,6 +662,10 @@ func ClusterEventAnomalies(rows []EventRow, now time.Time, window time.Duration)
 		if IsSyntheticDrillRow(r) {
 			continue
 		}
+		// Benign browser quirk — must not cluster as daemon_error (🎯T1194).
+		if IsBenignResizeObserverWindowError(r) {
+			continue
+		}
 		// Provider auth/quota walls are 🎯T407 fleet-run evidence, not
 		// daemon_error residuals that file+PO a spawn mission.
 		if providerBlockClass(r) != "" {
@@ -541,8 +682,12 @@ func ClusterEventAnomalies(rows []EventRow, now time.Time, window time.Duration)
 		case comp == anomalyBusyStorm || dec == anomalyBusyStorm:
 			bump("busy_storm", "busy_storm", "event:busy_storm", r.Msg)
 		case level == anomalyLevelError:
+			sample := r.Msg
+			if em := strings.TrimSpace(r.ErrorMessage); em != "" {
+				sample = em
+			}
 			bump("daemon_error:"+r.Component, "daemon_error",
-				"event:error:"+firstNonEmpty(r.Component, "daemon"), r.Msg)
+				"event:error:"+firstNonEmpty(r.Component, "daemon"), sample)
 		}
 	}
 

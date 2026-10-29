@@ -52,7 +52,7 @@ func TestT938BlockedFinishReportRoundTrips(t *testing.T) {
 // TestT938QualifiedBlockedStatusParses: the 2026-09-30 incident spelling
 // (status=blocked_design) reads as blocked; the reason rides the blocker slot.
 func TestT938QualifiedBlockedStatusParses(t *testing.T) {
-	for _, raw := range []string{"blocked", "Blocked", "blocked_design", "blocked-on-owner", "blocked on owner"} {
+	for _, raw := range []string{"blocked", "Blocked", "blocked_design", "blocked-on-owner", "blocked on owner", "needs-direction", "needs_direction"} {
 		p, ok := ParseProgress(raw)
 		if !ok || p != ProgressBlocked {
 			t.Errorf("ParseProgress(%q) = %q, %v; want blocked", raw, p, ok)

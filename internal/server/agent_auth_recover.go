@@ -27,7 +27,7 @@ import (
 // provider. The error text is not read (🎯T766.4). The broker decides
 // whether to retry the read, refresh, or open sign-in.
 func reauthablePlanFailure(provider claudia.Provider, def claudia.AgentDef) bool {
-	return fleet.RehydrateBroken(def) && reauthablePlanProvider(provider)
+	return reauthablePlanProvider(provider) && fleet.RehydrateAuthRecoverable(def)
 }
 
 // reauthablePlanProvider: every subscription plan's login is the broker's to
@@ -99,6 +99,12 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 		s.recoverRunningSeatAuth(w, r, reg, *def)
 		return
 	}
+	if fleet.RecordedConversationResumeRefusal(name) {
+		writeJSONError(w, http.StatusConflict,
+			"this seat's stored conversation is missing; signing in cannot start it — "+
+				fleet.ConversationMissingDisplay)
+		return
+	}
 	if !reauthablePlanFailure(def.Provider, *def) {
 		writeJSONError(w, http.StatusConflict, "agent no longer has a plan authentication failure")
 		return
@@ -109,7 +115,7 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := recoverAuth(r.Context(), def.Provider); err != nil {
 		if proc := reg.Get(name); proc == nil || !(seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
-			fleet.RecordRehydrateFailure(name, fmt.Errorf("auth recovery: %w", err))
+			fleet.RecordRehydrateFailure(name, agenterr.WithCause(agenterr.CauseAuth, fmt.Errorf("auth recovery: %w", err)))
 		}
 		s.NotifyAgentsChanged()
 		writeJSONError(w, http.StatusBadGateway, "Claudia could not recover authentication: "+err.Error())
@@ -241,7 +247,8 @@ func (s *Server) RecoverRunningPlanAuthFailures(ctx context.Context) []string {
 		}
 		s.notePlanAuthRecovered(reg, provider)
 		recovered = append(recovered, names...)
-		slog.Info("running seats refused on a plan login that is healthy again; cleared", "provider", provider, "seats", names)
+		slog.Info("recovered running seats' plan login without a relaunch",
+			"provider", provider, "seats", names)
 	}
 	if len(recovered) > 0 {
 		s.NotifyAgentsChanged()

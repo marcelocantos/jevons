@@ -49,6 +49,10 @@ func (s *Server) observeOwnerTurnPlacement(ev claudia.Event) (foreignEnd bool) {
 		return false
 	}
 	held := s.overseerOwnerTurnRequestID
+	if s.overseerOwnerTurn && abortedEarlierTurn(ev, held) {
+		s.mu.Unlock()
+		return true
+	}
 	if !s.overseerOwnerTurn || held == "" || ev.RequestID != held && ev.RequestID != "" && !s.overseerOwnerQueuedBehind {
 		// The acceptance can arrive while the drain's handoff is still
 		// returning, before the drain records the request it handed over
@@ -163,6 +167,16 @@ func (s *Server) noteOwnerHandoffLocked(requestID, msgID string) func() {
 	}
 	s.ownerQueuedBehindEarly = ""
 	return s.markOwnerQueuedBehindLocked()
+}
+
+// abortedEarlierTurn is the abort terminal of a request other than the held
+// owner turn's (🎯T1295). The server settles a cancel at once and the owner
+// may send before the provider's own abort arrives: J3 on codex handed the
+// replacement over first, and the late abort ended it, so its reply streamed
+// as a non-owner turn and was suppressed.
+func abortedEarlierTurn(ev claudia.Event, held string) bool {
+	return held != "" && ev.IsTerminalStop() && ev.Reason == claudia.ReasonAborted &&
+		ev.RequestID != "" && ev.RequestID != held
 }
 
 // ownerTurnQueuedBehind is the sidecar accepting a request without opening a

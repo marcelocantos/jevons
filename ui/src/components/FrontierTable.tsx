@@ -19,6 +19,7 @@ import {
   applyKickoffSubmitted,
   applySeatWaits,
   SEAT_WAITS_PATH,
+  PLAY_GLYPH,
   STOP_GLYPH,
   playChromeSpec,
   playKickoffRequest,
@@ -50,9 +51,8 @@ function FanCell(props: { row: FrontierRow }) {
   return <td className={fan.visible ? 'ft-fanout' : 'ft-fanout ft-fanout-empty'}>{fan.text}</td>;
 }
 
-/** 🎯T182 / T198 / T278 / T980: play → in flight → acknowledged → red
- * arrow when no plan can seat it (click force-seats; hover offers stop to
- * its left) → engaged Stop. */
+/** 🎯T182 / T198 / T278 / T980: play → in flight → acknowledged → pause when
+ * no plan can seat it (hover: force ▶ left, stop over pause) → engaged Stop. */
 function PlayCell(props: {
   row: PlayRow;
   agents: PlayAgent[];
@@ -68,10 +68,14 @@ function PlayCell(props: {
   const onClick = () => {
     if (spec.mode === 'stop') props.onStop(props.row);
     else if (spec.mode === 'play') props.onPlay(props.row);
-    else if (waiting) {
-      setHover(false);
-      props.onForce(props.row);
-    }
+  };
+  const withdraw = () => {
+    setHover(false);
+    props.onStop(props.row);
+  };
+  const forceSeat = () => {
+    setHover(false);
+    props.onForce(props.row);
   };
   return (
     <td className="ft-play">
@@ -83,29 +87,39 @@ function PlayCell(props: {
         {waiting && hover ? (
           <button
             type="button"
-            className="ft-play-btn ft-stop-btn ft-wait-stop"
-            aria-label={'Stop the request for 🎯' + props.row.id}
-            title="Stop: withdraw this request"
-            onClick={() => {
-              setHover(false);
-              props.onStop(props.row);
-            }}
+            className="ft-play-btn ft-waiting-btn ft-wait-force"
+            aria-label={'Force-seat 🎯' + props.row.id + ' now (owner_asked)'}
+            title="Force-seat now — no plan is green"
+            onClick={forceSeat}
           >
-            {STOP_GLYPH}
+            {PLAY_GLYPH}
           </button>
         ) : null}
-        <button
-          type="button"
-          className={spec.className}
-          aria-label={spec.ariaLabel}
-          title={spec.title}
-          disabled={spec.disabled}
-          data-play-mode={spec.mode}
-          data-seat-wait-kind={props.row.seat_wait_kind}
-          onClick={onClick}
-        >
-          {spec.spinning ? <span className="ft-spin" aria-hidden="true" /> : spec.glyph}
-        </button>
+        <div className="ft-wait-pause-stack">
+          {waiting && hover ? (
+            <button
+              type="button"
+              className="ft-play-btn ft-stop-btn ft-wait-stop-over"
+              aria-label={'Stop the request for 🎯' + props.row.id}
+              title="Stop: withdraw this request"
+              onClick={withdraw}
+            >
+              {STOP_GLYPH}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className={spec.className}
+            aria-label={spec.ariaLabel}
+            title={spec.title}
+            disabled={spec.disabled}
+            data-play-mode={spec.mode}
+            data-seat-wait-kind={props.row.seat_wait_kind}
+            onClick={onClick}
+          >
+            {spec.spinning ? <span className="ft-spin" aria-hidden="true" /> : spec.glyph}
+          </button>
+        </div>
       </div>
     </td>
   );

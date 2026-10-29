@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 func TestRehydrateFailureSurvivesRestart(t *testing.T) {
@@ -54,5 +56,20 @@ func TestRehydrateFailureSurvivesRestart(t *testing.T) {
 	}
 	if _, ok := all[name]; ok {
 		t.Fatalf("cleared seat still in file: %s", b)
+	}
+}
+
+func TestT876LaunchFallbackDoesNotOverwritePlanAuthFailure(t *testing.T) {
+	const name = "t876-seat"
+	t.Cleanup(func() { rehydrateFailures.Delete(name) })
+	auth := agenterr.WithCause(agenterr.CauseAuth, errors.New("omp: anthropic refresh failed: invalid_grant"))
+	noteRehydrate(name, auth)
+	noteRehydrate(name, errors.New("omp: keychain was not read at startup"))
+	want := "broken: omp: anthropic refresh failed: invalid_grant"
+	if got := RehydrateHealth(claudia.AgentDef{Name: name}); got != want {
+		t.Fatalf("health = %q, want %q", got, want)
+	}
+	if !RehydrateAuthRecoverable(claudia.AgentDef{Name: name}) {
+		t.Fatal("typed auth failure should stay recoverable")
 	}
 }

@@ -66,6 +66,15 @@ var DefaultBackoff = Backoff{
 	Factor: 2,
 }
 
+// AuthLaunchBackoff is the restart delay when a supervised provider fails
+// on missing credentials (🎯T607). Slower than DefaultBackoff so a fresh
+// clone does not spawn a process per second.
+var AuthLaunchBackoff = Backoff{
+	Base:   2 * time.Second,
+	Max:    60 * time.Second,
+	Factor: 2,
+}
+
 // withDefaults fills unset fields from DefaultBackoff so a partially
 // specified policy (common in tests: Base only) stays sane.
 func (b Backoff) withDefaults() Backoff {

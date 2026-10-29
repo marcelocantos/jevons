@@ -10,12 +10,16 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/seatstate"
+	"github.com/marcelocantos/jevons/internal/sharedcloneseats"
+	"github.com/marcelocantos/jevons/internal/treeguard"
 
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
@@ -316,6 +320,34 @@ func mcpServersEqual(a, b []claudia.MCPServer) bool {
 	return mcpattach.ServersEqual(a, b)
 }
 
+// restampSeatMCPServers rewrites AgentDef.MCPServers from the live attach
+// list (🎯T612): a provider switch must not keep a Claude-era owner-map
+// inventory or grok_connect leftovers on the row the sidecar loads from.
+func (f *Claudia) restampSeatMCPServers(name string) error {
+	if f == nil || f.reg == nil || strings.TrimSpace(f.mcp.URL) == "" {
+		return nil
+	}
+	def := f.reg.Def(name)
+	if def == nil {
+		return nil
+	}
+	next := *def
+	want := f.SessionMCPServers(def.WorkDir)
+	if !mcpServersEqual(next.MCPServers, want) {
+		next.MCPServers = want
+	}
+	if next.MCPExclusive && next.GrokConnect {
+		next.GrokConnect = false
+	}
+	if mcpServersEqual(def.MCPServers, next.MCPServers) && def.GrokConnect == next.GrokConnect {
+		return nil
+	}
+	if err := f.reg.Register(next); err != nil {
+		return fmt.Errorf("agent %q: restamp MCPServers: %w", name, err)
+	}
+	return nil
+}
+
 // providerForLaunch picks the registry provider for a thread Launch.
 // Never clobbers a non-empty stored provider (resume keeps backend).
 func providerForLaunch(stored, fromThread, defaultProv claudia.Provider) claudia.Provider {
@@ -333,17 +365,65 @@ func providerForLaunch(stored, fromThread, defaultProv claudia.Provider) claudia
 // network, which is exactly enough to edit files and not enough to prove
 // anything: bin/gate records its verdict under ~/.jevons/gates,
 // deliberately outside the tree so a gate cannot be edited by the work it
-// judges (🎯T386), and the journey and UI oracles bind loopback ports.
-// A seat without these comes up looking healthy and fails at its first
-// gate — which is how 🎯T557.1 stalled twice.
+// judges (🎯T386); treeguard's journal lives under ~/.jevons/treeguard
+// (🎯T858) and the pre-commit sweep writes there — without that grant the
+// T376 write-guard fails open inside codex work seats; and the journey and
+// UI oracles bind loopback ports. A seat without these comes up looking
+// healthy and fails at its first gate — which is how 🎯T557.1 stalled twice.
 //
 // Only work seats, and only Codex. Nothing here grants danger-full-access.
 func CodexWorkSandboxTuning(prov claudia.Provider, purpose, role string) (writableRoots []string, networkAccess bool) {
 	if CodexWorkSandbox(prov, purpose, role) == "" {
 		return nil, false
 	}
-	roots := []string{gate.DefaultStoreRoot()}
+	roots := []string{gate.DefaultStoreRoot(), treeguard.DefaultStoreRoot()}
+	roots = append(roots, codexBuildCacheRoots()...)
 	return roots, true
+}
+
+// codexBuildCacheRoots are the caches a Build worker writes to compile and
+// test this repo, all outside its worktree: Go's build and module caches,
+// the private HOMEs internal/testhome creates for test binaries, and npm's
+// cache for ui tests. Without them a workspace-write seat could edit but not
+// verify: jv-t1228-controlplane-retry (2026-10-27) failed opening
+// ~/Library/Caches/go-build and creating ~/Library/Caches/jevons-testhome
+// with 'operation not permitted' (🎯T1232).
+func codexBuildCacheRoots() []string {
+	var roots []string
+	add := func(p string) {
+		if p = strings.TrimSpace(p); p != "" {
+			roots = append(roots, p)
+		}
+	}
+	cache, cacheErr := os.UserCacheDir()
+	if v := os.Getenv("GOCACHE"); v != "" {
+		add(v)
+	} else if cacheErr == nil {
+		add(filepath.Join(cache, "go-build"))
+	}
+	home, homeErr := os.UserHomeDir()
+	if v := os.Getenv("GOMODCACHE"); v != "" {
+		add(v)
+	} else if v := os.Getenv("GOPATH"); v != "" {
+		add(filepath.Join(strings.Split(v, string(os.PathListSeparator))[0], "pkg", "mod"))
+	} else if homeErr == nil {
+		add(filepath.Join(home, "go", "pkg", "mod"))
+	}
+	if cacheErr == nil {
+		add(filepath.Join(cache, "jevons-testhome"))
+	}
+	// Playwright's browser install lock and cache; internal/testhome pins
+	// PLAYWRIGHT_BROWSERS_PATH here, and the full docratchet suite takes the
+	// lock (jv-t1232-grant-visible: '__dirlock' denied, 2026-10-27).
+	if v := os.Getenv("PLAYWRIGHT_BROWSERS_PATH"); v != "" {
+		add(v)
+	} else if cacheErr == nil {
+		add(filepath.Join(cache, "ms-playwright"))
+	}
+	if homeErr == nil {
+		add(filepath.Join(home, ".npm"))
+	}
+	return roots
 }
 
 // CodexWorkSandboxRefusal names why a Codex work seat must not start,
@@ -360,7 +440,7 @@ func CodexWorkSandboxRefusal(prov claudia.Provider, purpose, role string) string
 	}
 	for _, r := range roots {
 		if strings.TrimSpace(r) == "" {
-			return "codex work seat: gate store root is unknown — bin/gate could not record a verdict"
+			return "codex work seat: host store root is unknown — bin/gate or treeguard could not persist state"
 		}
 	}
 	return ""
@@ -399,6 +479,42 @@ func CodexWorkSandbox(prov claudia.Provider, purpose, role string) string {
 // what ties this to the mode rather than letting it drift.
 func CodexWorkGitWrite(prov claudia.Provider, purpose, role string) bool {
 	return CodexWorkSandbox(prov, purpose, role) == codexSandboxWorkspaceWrite
+}
+
+// ApplyWorkSeatSandbox sets or clears def's sandbox fields from
+// provider/purpose/role on every stitchAgentStart, not only first mint
+// (🎯T855). Provider switches that cleared codex sandbox metadata must be
+// re-derived before Launch so claudia does not default to read-only.
+func ApplyWorkSeatSandbox(def *claudia.AgentDef, role string) {
+	if def == nil {
+		return
+	}
+	if strings.ToLower(strings.TrimSpace(role)) == "auditor" {
+		def.SandboxMode = ""
+		def.SandboxWritableRoots = nil
+		def.SandboxNetworkAccess = false
+		def.SandboxGitWrite = false
+		return
+	}
+	if def.SandboxMode != "" {
+		return
+	}
+	mode := CodexWorkSandbox(def.Provider, def.Purpose, role)
+	if mode == "" {
+		return
+	}
+	def.SandboxMode = mode
+	def.SandboxWritableRoots, def.SandboxNetworkAccess = CodexWorkSandboxTuning(def.Provider, def.Purpose, role)
+	// The landing path for a worktree seat is `go run ./cmd/integrate`, which
+	// runs as the seat's child and writes the shared clone. Under the OS
+	// sandbox it could not: jv-t1228-retry-2 gated GREEN and then integrate
+	// failed unlinking files in the shared checkout (🎯T1232). Direct seat
+	// writes there stay refused by treeguard and fleetgit (🎯T1151.1), as for
+	// seats with no OS sandbox.
+	if shared, ok := sharedcloneseats.SharedCloneForWorktreeSeat(def.WorkDir); ok {
+		def.SandboxWritableRoots = append(def.SandboxWritableRoots, shared)
+	}
+	def.SandboxGitWrite = CodexWorkGitWrite(def.Provider, def.Purpose, role)
 }
 
 // codexSandboxWorkspaceWrite is the one mode that carves .git out, and so
@@ -463,6 +579,7 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 			SandboxWritableRoots: codexRoots(prov, purpose),
 			SandboxNetworkAccess: codexNetwork(prov, purpose),
 			SandboxGitWrite:      CodexWorkGitWrite(prov, purpose, ""),
+			ProtectedPaths:       SidecarLedgerProtectedPaths(),
 			Goal:                 WorkSessionGoal(purpose, "", t.Description, true),
 			MCPServers:           f.SessionMCPServers(t.WorkDir),
 			MCPExclusive:         mcpattach.Exclusive,
@@ -562,6 +679,9 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 	// the successor, because the seed's own turn end is the first boundary
 	// that must be observed.
 	defer f.launching(t.ID)()
+
+	// 🎯T709: trust answer must be in ~/.claude.json before the process starts.
+	f.preflightTrust(t.ID)
 
 	ag, err := LaunchRecovering(f.reg, t.ID)
 	if err != nil {

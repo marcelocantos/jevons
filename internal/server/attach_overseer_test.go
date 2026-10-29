@@ -42,7 +42,7 @@ func TestAttachOverseerIdempotentNoDoubleBroadcast(t *testing.T) {
 
 	agent.PublishEvent(claudia.Event{
 		Type: "assistant",
-		Text: "Got",
+		Text: wireOwnerReplyDecision("Got"),
 	})
 	agent.PublishEvent(claudia.Event{
 		Type: "assistant",
@@ -56,7 +56,7 @@ func TestAttachOverseerIdempotentNoDoubleBroadcast(t *testing.T) {
 	// Drain live fan-out: exactly one wire line per published event.
 	var lines []string
 	deadline := time.After(2 * time.Second)
-	for len(lines) < 3 {
+	for len(lines) < 1 {
 		select {
 		case l := <-ch:
 			if isNonBubbleFrame(l) {
@@ -64,15 +64,15 @@ func TestAttachOverseerIdempotentNoDoubleBroadcast(t *testing.T) {
 			}
 			lines = append(lines, l)
 		case <-deadline:
-			t.Fatalf("timeout waiting for 3 wire lines; got %d: %v", len(lines), lines)
+			t.Fatalf("timeout waiting for owner-reply seal; got %d: %v", len(lines), lines)
 		}
 	}
 	// No extras.
 	time.Sleep(50 * time.Millisecond)
 	drainNonBubbleFrames(t, ch) // any extra bubble line is a double broadcast
 
-	if len(lines) != 3 {
-		t.Fatalf("wire lines=%d want 3 (one per event, not doubled)", len(lines))
+	if len(lines) != 1 {
+		t.Fatalf("wire lines=%d want 1 sealed owner-reply (not doubled)", len(lines))
 	}
 
 	// Reconstruct sealed assistant text the way the UI bare-concats tokens.
@@ -108,8 +108,8 @@ func TestAttachOverseerIdempotentNoDoubleBroadcast(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(journal) != 3 {
-		t.Fatalf("journal lines=%d want 3; %v", len(journal), journal)
+	if len(journal) != 1 {
+		t.Fatalf("journal lines=%d want 1 sealed owner-reply; %v", len(journal), journal)
 	}
 }
 
@@ -134,7 +134,11 @@ func TestAttachOverseerSwapAgentUnsubsOld(t *testing.T) {
 	case <-time.After(30 * time.Millisecond):
 	}
 
-	next.PublishEvent(claudia.Event{Type: "assistant", Text: "fresh"})
+	next.PublishEvent(claudia.Event{
+		Type:       "assistant",
+		Text:       wireOwnerReplyDecision("fresh"),
+		StopReason: "end_turn",
+	})
 	select {
 	case l := <-ch:
 		var m map[string]any

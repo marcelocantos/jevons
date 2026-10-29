@@ -197,6 +197,12 @@ func (s *Server) deliverRecoveredTurn(name string, last missedTurn, missed int) 
 	if s == nil || strings.TrimSpace(name) == "" {
 		return
 	}
+	// 🎯T1186: a spool turn_end recovered on wire attach must settle flight
+	// before notify stores a finish-report that maybeReapStoredDoneWorkAgent
+	// would otherwise withhold as turn_in_flight.
+	if !last.At.IsZero() {
+		s.boundTurnFromSidecarSpool(name, last.At)
+	}
 	s.clearSessionGoalIfComplete(name, last.Text)
 
 	// Verbatim: the stored report must be the envelope the seat wrote.

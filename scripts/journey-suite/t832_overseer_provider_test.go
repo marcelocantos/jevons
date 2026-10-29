@@ -33,6 +33,10 @@ msg="agent started" name=jevons provider=claude session=b`
 		{"no launch evidence", ``, "grok", false},
 		{"another seat's launch", `msg="agent started" name=jevons-po provider=grok`, "grok", false},
 		{"adoption is not a launch", `msg="agent adopted" name=jevons provider=grok`, "grok", false},
+		// 🎯T1301: an in-place switch is the seat's latest runtime evidence.
+		{"switched back in place", migrated + "\n" + `msg="agent switched" name=jevons provider=openai-codex from_provider=anthropic live=true`, "codex", true},
+		{"switch to another backend than the registry's", migrated + "\n" + `msg="agent switched" name=jevons provider=openai-codex from_provider=anthropic live=true`, "claude", false},
+		{"another seat's switch", migrated + "\n" + `msg="agent switched" name=jevons-po provider=openai-codex live=true`, "codex", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := latestLaunchProvider([]byte(tc.logs), overseerName, tc.current)

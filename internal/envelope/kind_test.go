@@ -23,6 +23,7 @@ func TestAllKindsAreParseableAndUnique(t *testing.T) {
 	want := []Kind{
 		KindSpawnBrief, KindFinishReport, KindStatusPing,
 		KindEscalation, KindAck, KindTargetFileRequest, KindScoutReport,
+		KindOwnerReply, KindOwnerMission,
 	}
 	if len(AllKinds()) != len(want) {
 		t.Fatalf("AllKinds len=%d want %d — update instruction ratchets when kinds change", len(AllKinds()), len(want))

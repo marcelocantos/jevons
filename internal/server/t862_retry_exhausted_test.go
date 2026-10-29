@@ -21,7 +21,11 @@ func TestT862RetryExhaustionOnOwnerWire(t *testing.T) {
 	} {
 		t.Run(raw, func(t *testing.T) {
 			for _, transport := range []bool{true, false} {
-				ev := claudia.Event{Type: "assistant", Text: raw, IsError: transport, StopReason: "end_turn"}
+				text := raw
+				if !transport {
+					text = wireOwnerReplyFault(raw)
+				}
+				ev := claudia.Event{Type: "assistant", Text: text, IsError: transport, StopReason: "end_turn"}
 				if transport {
 					ev.Reason = agenterr.CauseRetryExhausted
 				}
@@ -51,12 +55,12 @@ func TestT862RetryExhaustionOnOwnerWire(t *testing.T) {
 				if wire.Message.StopReason != "end_turn" || len(wire.Message.Content) != 1 {
 					t.Fatalf("lost terminal outcome: %s", line)
 				}
-				text := wire.Message.Content[0].Text
+				gotText := wire.Message.Content[0].Text
 				if transport {
-					if wire.FailureClass != "retry_exhausted" || !strings.Contains(text, "after 1 retry") {
+					if wire.FailureClass != "retry_exhausted" || !strings.Contains(gotText, "after 1 retry") {
 						t.Fatalf("lost exhaustion class or reported budget: %s", line)
 					}
-				} else if wire.FailureClass != "" || text != raw {
+				} else if wire.FailureClass != "" || gotText != raw {
 					t.Fatalf("authored report became a provider failure: %s", line)
 				}
 			}

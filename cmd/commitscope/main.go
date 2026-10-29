@@ -7,7 +7,8 @@
 // that index can contain paths this worker never named, and refuses the
 // commit when it can. A path-scoped commit of bullseye.yaml is allowed
 // (the PO must close targets) but is told when that file's current diff
-// contains target rows the actor did not write.
+// contains target rows the actor did not write. It also refuses staged
+// Go that does not compile on the index tree (🎯T822).
 //
 // Exit status is the hook contract:
 //
@@ -44,6 +45,7 @@ const (
 // installFlag is the only argument this command takes. git passes none to a
 // pre-commit hook, so there is nothing for it to collide with.
 const (
+	preMergeHookEnv   = "JEVONS_PRE_MERGE_COMMIT"
 	installFlag       = "--install"
 	stampTrailersFlag = "--stamp-trailers"
 )
@@ -77,6 +79,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "commitscope: cannot read staged ledger content: %v\n", err)
 		os.Exit(exitBroken)
 	}
+	attrib := commitattrib.FromEnv()
 	v := commitscope.Decide(&commitscope.Request{
 		IndexFile:      os.Getenv("GIT_INDEX_FILE"),
 		Staged:         staged,
@@ -84,6 +87,9 @@ func main() {
 		BundleDisabled: commitscope.OffValue(os.Getenv(commitscope.UIBundleEnv)),
 		Contents:       contents,
 		Claimed:        commitscope.ParseClaimed(os.Getenv(commitscope.ClaimEnv)),
+		Actor:          attrib.Actor,
+		Role:           strings.TrimSpace(os.Getenv(commitattrib.RoleEnv)),
+		Purpose:        strings.TrimSpace(os.Getenv(commitattrib.PurposeEnv)),
 	})
 	if v.Message != "" {
 		fmt.Fprint(os.Stderr, v.Message)
@@ -92,7 +98,99 @@ func main() {
 	if v.Refused {
 		os.Exit(exitRefuse)
 	}
+	if refuse, msg := ledgerShrinkAfterDecide(contents); refuse {
+		fmt.Fprint(os.Stderr, msg)
+		os.Exit(exitRefuse)
+	}
+	if refuse, msg := marcelocantosReplaceAfterDecide(staged); refuse {
+		fmt.Fprint(os.Stderr, msg)
+		os.Exit(exitRefuse)
+	}
+	if refuse, msg, err := goCompileAfterDecide(staged); err != nil {
+		fmt.Fprintf(os.Stderr, "commitscope: staged Go compile check: %v\n", err)
+		os.Exit(exitBroken)
+	} else if refuse {
+		fmt.Fprint(os.Stderr, msg)
+		os.Exit(exitRefuse)
+	}
 	os.Exit(exitAllow)
+}
+
+func goCompileAfterDecide(staged []string) (bool, string, error) {
+	root, err := one("git", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return false, "", err
+	}
+	return commitscope.CheckStagedGoCompile(
+		root,
+		os.Getenv("GIT_INDEX_FILE"),
+		staged,
+		commitscope.OffValue(os.Getenv(commitscope.GoCompileEnv)),
+	)
+}
+
+func marcelocantosReplaceAfterDecide(staged []string) (bool, string) {
+	var hasGoMod bool
+	for _, p := range staged {
+		if p == "go.mod" {
+			hasGoMod = true
+			break
+		}
+	}
+	if !hasGoMod {
+		return false, ""
+	}
+	stagedBytes, err := gitShow(":go.mod")
+	if err != nil {
+		return false, ""
+	}
+	headBytes, _ := gitShow("HEAD:go.mod")
+	return commitscope.MarcelocantosReplaceCommitRefusal(headBytes, stagedBytes)
+}
+
+
+func ledgerShrinkAfterDecide(contents []commitscope.FileContent) (bool, string) {
+	if os.Getenv(preMergeHookEnv) == "1" {
+		for _, c := range contents {
+			if !commitscope.IsSharedLedger(c.Path) {
+				continue
+			}
+			return commitscope.LedgerShrinkRefusal(c.Head, c.Staged)
+		}
+		return false, ""
+	}
+	return mergeLedgerShrink(contents)
+}
+
+// mergeLedgerShrink checks the staged merge result against every merge
+// parent when MERGE_HEAD is set (🎯T1144). Decide() already compares HEAD
+// unless JEVONS_COMMIT_SCOPE=off; this path must still refuse shrink.
+func mergeLedgerShrink(contents []commitscope.FileContent) (bool, string) {
+	var staged []byte
+	for _, c := range contents {
+		if commitscope.IsSharedLedger(c.Path) {
+			staged = c.Staged
+			break
+		}
+	}
+	if len(staged) == 0 {
+		return false, ""
+	}
+	mergeHead, err := one("git", "rev-parse", "--verify", "-q", "MERGE_HEAD")
+	if err != nil {
+		return false, ""
+	}
+	var parents [][]byte
+	if head, err := gitShow("HEAD:bullseye.yaml"); err == nil && len(head) > 0 {
+		parents = append(parents, head)
+	}
+	if parent2, err := gitShow(mergeHead + ":bullseye.yaml"); err == nil && len(parent2) > 0 {
+		parents = append(parents, parent2)
+	}
+	if len(parents) == 0 {
+		return false, ""
+	}
+	return commitscope.LedgerShrinkMergeParentsRefusal(parents, staged)
 }
 
 // install puts the hook where git will exec it. The hooks directory comes
@@ -109,7 +207,7 @@ func install() {
 		var root string
 		if root, err = one("git", "rev-parse", "--show-toplevel"); err == nil {
 			var broken bool
-			for _, hook := range []string{"pre-commit", "prepare-commit-msg"} {
+			for _, hook := range []string{"pre-commit", "prepare-commit-msg", "pre-merge-commit", "pre-push"} {
 				var outcome commitscope.InstallOutcome
 				source := filepath.Join(root, "scripts", "hooks", hook)
 				if outcome, err = commitscope.InstallHook(hooksDir, source, hook); err != nil {

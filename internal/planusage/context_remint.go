@@ -80,7 +80,7 @@ func ContextRemintPlan(a RemintArgs) RemintPlan {
 	th := claudiaThresholdsPtr(a.Thresholds)
 	usage := claudia.PlanUsage{Provider: claudia.Provider(prov), Status: claudia.PlanUsageUnavailable}
 	if a.Known {
-		usage = backendToPlanUsage(a.Backend)
+		usage = planUsageForResolve(a.Backend, a.Now)
 	}
 	if !claudia.ShouldRemintMigrate(usage, a.OwnerAsked, a.Now, th) {
 		if !a.Known {

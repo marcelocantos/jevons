@@ -17,7 +17,8 @@ Tracked as 🎯T989 in the jevons ledger (cross-repo, same pattern as 🎯T765.1
   settings belong in the cockpit web UI when needed, not as a shell gesture.
 - Failed main-frame loads show the error with Retry and Change URL (the
   recovery path into the local Settings screen for the cockpit URL).
-  The URL is still persisted with `shared_preferences` for transport swaps.
+  The URL is persisted through sqlpipe on Android and the existing
+  `shared_preferences` backend on iOS.
 
 Form-factor polish (foldables etc.) is deferred.
 
@@ -92,3 +93,36 @@ WKUIDelegate at all. `NSCameraUsageDescription` and `NSPhotoLibraryUsageDescript
 are present for native picker permission prompts. Android's legacy HTML input
 callback is retained for non-composer pages; the JS channel is the composer
 path on both platforms, avoiding file-URI WebView access differences.
+
+## Plan-usage widget (Android, 🎯T1244)
+
+The Android app carries a "Jevons usage" app widget
+(`android/app/src/main/kotlin/com/canticode/jevons_mobile/widget/`,
+`widgetCategory="keyguard|home_screen"`, API 31+). On the Fold it lives in
+the lock screen's widget panel (Settings › Lock screen › Widgets on lock
+screen; swipe left from the lock screen, long-press, Add widget).
+
+- **One app, one sign-in.** The worker reads `GET <cockpit URL>/api/plan-usage`
+  with the cookies the app's WebView holds for that origin (`CookieManager`),
+  i.e. the ngrok Google sign-in. It has no credential, pairing, or endpoint of
+  its own. The cockpit URL is the shell's `cockpit_url` in sqlpipe
+  (migrated once from `flutter.cockpit_url` in `FlutterSharedPreferences`),
+  defaulting to `kDefaultCockpitUrl`.
+- **Signed out.** Redirects are not followed: ngrok's 302 to its identity
+  provider (or an HTML page) means the session is missing or expired. The
+  widget then shows the last reading greyed, with its age, under "Open Jevons
+  to sign in".
+- **Tap.** A tap anywhere on the widget opens Jevons (from the lock screen,
+  after you unlock). Opening or leaving the app refreshes the widget.
+- **Look.** One column per backend under its company mark, one bottom-filling
+  bar per window coloured by the server's band, a single-letter label (S, W, M,
+  or the model's initial), and the cockpit's red border on an exhausted window.
+  Bedrock is left out: it is work-only (owner, 2026-10-29).
+- **Refresh.** JobScheduler every 15 minutes plus on tap, network-constrained,
+  exponential backoff on failure; signed-out is not retried until the app is
+  used. Android widget readings and Flutter settings use the embedded sqlpipe database;
+  no WorkManager/Room dependency or reflective Room constructor remains.
+
+`make android-test` runs the widget's JVM tests (payload-to-bars mapping,
+response classification, signed-out state, RemoteViews layout guard);
+`make check` includes it.

@@ -22,7 +22,11 @@ func TestT1093OneShotWritesTheCredentialUnderStateDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	stateDir := filepath.Join(t.TempDir(), "isolate-state")
-	rec := crypto.PairingRecord{PeerInstanceID: "peer-t1093", RelayURL: "https://relay.invalid"}
+	kp, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := crypto.NewPairingRecord("peer-t1093", "https://relay.invalid", kp, kp.Public)
 	b, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)

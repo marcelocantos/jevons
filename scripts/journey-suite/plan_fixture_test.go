@@ -69,41 +69,62 @@ func readFixture(t *testing.T, env string) planusage.Snapshot {
 	return snap
 }
 
+// Cursor is steerable (claudia v0.62.0 / 🎯T1013.3). The default isolate
+// fixture is a single destination backend for the run provider.
+func TestCursorFixtureMintsSteerableCompanion(t *testing.T) {
+	if planusage.UnsteerableReason("cursor") != "" {
+		t.Fatal("cursor is unsteerable; steerable single-backend fixture no longer applies")
+	}
+	snap := readFixture(t, mustPlanFixtureEnv(t, "cursor"))
+	if len(snap.Backends) != 1 || snap.Backends[0].Provider != "cursor" {
+		t.Fatalf("cursor fixture backends = %+v, want cursor alone", snap.Backends)
+	}
+	cands := []planusage.DestCand{{Provider: "cursor", Backend: snap.Backends[0]}}
+	pick, err := planusage.ResolveMint(context.Background(), cands, time.Now().UTC(), planusage.DefaultThresholds(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(pick.Provider) != "cursor" {
+		t.Fatalf("ResolveMint = %s, want cursor", pick.Provider)
+	}
+}
+
 // An unsteerable run provider cannot be the mint. The fixture still
 // records it, and ResolveMint on that file lands on the steerable
 // switch destination rather than tying or returning plan dest empty.
-func TestCursorFixtureMintsSteerableCompanion(t *testing.T) {
-	if planusage.UnsteerableReason("cursor") == "" {
-		t.Fatal("cursor is steerable; this fixture's companion contract no longer applies")
-	}
-	snap := readFixture(t, mustPlanFixtureEnv(t, "cursor"))
+// Real providers are all steerable now; exercise the companion contract
+// with SetUnsteerableForTest (same seam as internal/mcpserver 🎯T791).
+func TestUnsteerablePinPlanFixtureMintsSteerableCompanion(t *testing.T) {
+	t.Cleanup(planusage.SetUnsteerableForTest(map[string]string{"grok": "synthetic exclusion"}))
+	pin := "grok"
+	snap := readFixture(t, mustPlanFixtureEnv(t, pin))
 	if len(snap.Backends) < 2 {
-		t.Fatalf("cursor fixture backends = %+v, want the pin plus steerable plans", snap.Backends)
+		t.Fatalf("%s fixture backends = %+v, want the pin plus steerable plans", pin, snap.Backends)
 	}
-	companion := string(seatprovider.Resolve(switchJourneyDestination(claudia.ProviderCursor)).Plan.AsProvider())
-	if companion == "" || companion == "cursor" || planusage.UnsteerableReason(companion) != "" {
-		t.Fatalf("companion %q is not a steerable plan distinct from cursor", companion)
+	companion := string(seatprovider.Resolve(switchJourneyDestination(claudia.ProviderGrok)).Plan.AsProvider())
+	if companion == "" || companion == pin || planusage.UnsteerableReason(companion) != "" {
+		t.Fatalf("companion %q is not a steerable plan distinct from %s", companion, pin)
 	}
-	sawCursor, sawCompanion := false, false
+	sawPin, sawCompanion := false, false
 	cands := make([]planusage.DestCand, 0, len(snap.Backends))
 	for _, be := range snap.Backends {
-		if be.Provider == "cursor" {
-			sawCursor = true
+		if be.Provider == pin {
+			sawPin = true
 		}
 		if be.Provider == companion {
 			sawCompanion = true
 		}
 		cands = append(cands, planusage.DestCand{Provider: be.Provider, Backend: be})
 	}
-	if !sawCursor || !sawCompanion {
-		t.Fatalf("cursor fixture backends = %+v, want cursor and %s", snap.Backends, companion)
+	if !sawPin || !sawCompanion {
+		t.Fatalf("%s fixture backends = %+v, want %s and %s", pin, snap.Backends, pin, companion)
 	}
-	pick, err := planusage.ResolveMint(context.Background(), cands, time.Now().UTC(), planusage.DefaultThresholds())
+	pick, err := planusage.ResolveMint(context.Background(), cands, time.Now().UTC(), planusage.DefaultThresholds(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if planusage.UnsteerableReason(string(pick.Provider)) != "" || string(pick.Provider) == "cursor" {
-		t.Fatalf("ResolveMint = %s, want a steerable plan other than cursor", pick.Provider)
+	if planusage.UnsteerableReason(string(pick.Provider)) != "" || string(pick.Provider) == pin {
+		t.Fatalf("ResolveMint = %s, want a steerable plan other than %s", pick.Provider, pin)
 	}
 	if seatprovider.Resolve(pick.Provider).Plan.AsProvider() != claudia.Provider(companion) {
 		t.Fatalf("ResolveMint = %s, want companion %s", pick.Provider, companion)
@@ -132,13 +153,20 @@ func TestExpectLandedProvider(t *testing.T) {
 	if err := expectLandedProvider(claudia.ProviderCursor, ""); err == nil {
 		t.Fatal("empty landing accepted")
 	}
-	if planusage.UnsteerableReason("cursor") == "" {
-		t.Fatal("cursor is steerable; the unsteerable landing cases are vacuous")
-	}
-	if err := expectLandedProvider(claudia.ProviderCursor, claudia.ProviderCodex); err != nil {
+	if err := expectLandedProvider(claudia.ProviderCursor, claudia.ProviderCursor); err != nil {
 		t.Fatal(err)
 	}
-	if err := expectLandedProvider(claudia.ProviderCursor, claudia.ProviderCursor); err == nil {
+	if err := expectLandedProvider(claudia.ProviderCursor, claudia.ProviderCodex); err == nil {
+		t.Fatal("steerable cursor accepted a different plan")
+	}
+}
+
+func TestExpectLandedProviderUnsteerablePin(t *testing.T) {
+	t.Cleanup(planusage.SetUnsteerableForTest(map[string]string{"grok": "synthetic exclusion"}))
+	if err := expectLandedProvider(claudia.ProviderGrok, claudia.ProviderCodex); err != nil {
+		t.Fatal(err)
+	}
+	if err := expectLandedProvider(claudia.ProviderGrok, claudia.ProviderGrok); err == nil {
 		t.Fatal("unsteerable pin accepted itself")
 	}
 }
@@ -153,15 +181,15 @@ func TestJ20FixtureIsAheadNotDestination(t *testing.T) {
 	}
 }
 
-func TestIsolateEnvCarriesPlanFixtureAndJourneyOverrides(t *testing.T) {
-	s := &suite{stateDir: t.TempDir(), daemonEnv: []string{planusage.FixtureEnv + "=/j20"}}
-	var vals []string
+// 🎯T1234: jevonsd exits at startup on the retired fixture env, so the
+// isolate must never inject it by default (every journey died before
+// listen while it did).
+func TestIsolateEnvCarriesNoRetiredPlanFixture(t *testing.T) {
+	t.Setenv(planusage.FixtureEnv, "/retired-fixture-must-not-leak.json")
+	s := &suite{stateDir: t.TempDir(), daemonEnv: []string{planusage.FixtureEnv + "=/journey-must-not-win.json"}}
 	for _, kv := range s.isolateDaemonEnv() {
 		if strings.HasPrefix(kv, planusage.FixtureEnv+"=") {
-			vals = append(vals, kv)
+			t.Fatalf("isolate env carries retired %s: %q", planusage.FixtureEnv, kv)
 		}
-	}
-	if len(vals) < 2 || !strings.Contains(vals[len(vals)-2], s.stateDir) || vals[len(vals)-1] != planusage.FixtureEnv+"=/j20" {
-		t.Fatalf("fixture env order wrong: %v", vals)
 	}
 }

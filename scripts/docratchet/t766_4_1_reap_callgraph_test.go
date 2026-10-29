@@ -50,10 +50,13 @@ const jevonsModule = "github.com/marcelocantos/jevons"
 
 // t76641NonReportReaders match strings that are not a report.
 var t76641NonReportReaders = map[string]string{
-	jevonsModule + "/internal/agentreport.Load":         "validates a store file name and agent name, not the report body",
-	jevonsModule + "/internal/agentreport.List":         "filters report-store file names by suffix",
-	jevonsModule + "/internal/agentreport.safeAgentDir": "rejects path separators in an agent name",
-	jevonsModule + "/internal/gate.countDirty":          "splits `git status --porcelain` output",
+	jevonsModule + "/internal/agentreport.Load":             "validates a store file name and agent name, not the report body",
+	jevonsModule + "/internal/agentreport.List":             "filters report-store file names by suffix",
+	jevonsModule + "/internal/agentreport.safeAgentDir":     "rejects path separators in an agent name",
+	jevonsModule + "/internal/gate.countDirty":              "splits `git status --porcelain` output",
+	jevonsModule + "/internal/gate.CheckOwnerImpactMissing": "splits `git diff --name-only` output into file paths, not report text (🎯T1122)",
+	jevonsModule + "/internal/gate.isOwnerImpactSourcePath": "classifies one changed file path from git diff output, not report text (🎯T1122)",
+	jevonsModule + "/internal/gate.isUIImpactTestPath":      "classifies one changed file path from git diff output, not report text (🎯T1122)",
 }
 
 var t76641Matchers = map[string]bool{

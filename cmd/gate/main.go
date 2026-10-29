@@ -56,13 +56,17 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 
@@ -90,6 +94,7 @@ func main() {
 		clean        bool
 		commit       string
 		keep         bool
+		background   bool
 	)
 	flag.StringVar(&name, "name", "", "label for this gate in the attestation")
 	flag.StringVar(&dir, "dir", "", "working directory for the command")
@@ -101,6 +106,7 @@ func main() {
 		"run in a fresh checkout with GOWORK=off; use the committed module graph (🎯T397)")
 	flag.StringVar(&commit, "commit", "",
 		"with -clean: the commit to verify (default HEAD)")
+	flag.BoolVar(&background, "background", false, "detach a long gate and return a handle; read with gate wait <handle>")
 	flag.BoolVar(&keep, "keep", false,
 		"with -clean: leave the checkout behind for inspection")
 	flag.Usage = usage
@@ -121,6 +127,9 @@ func main() {
 		os.Exit(cmdSubcommand(args, storeDir))
 	}
 
+	if background && os.Getenv("JEVONS_GATE_BACKGROUND_CHILD") == "" {
+		os.Exit(startBackground(storeDir, name))
+	}
 	if clean {
 		os.Exit(cmdRunClean(args, name, dir, commit, storeDir, quiet, allowSuspect, keep))
 	}
@@ -128,7 +137,7 @@ func main() {
 }
 
 // subcommands is the allowlist. A word outside it is a typo, not a gate.
-var subcommands = []string{"last", "show", "queue", "check", "check-ledger", "check-attestation", "sweep", "void", "help"}
+var subcommands = []string{"last", "show", "wait", "queue", "check", "check-ledger", "check-attestation", "sweep", "void", "help"}
 
 // usageForms is the shape each subcommand accepts, quoted back at a caller
 // whose arguments do not fit it. It lives next to the allowlist so that adding
@@ -137,6 +146,7 @@ var usageForms = map[string]string{
 	"queue":             "gate queue",
 	"last":              "gate last",
 	"show":              "gate show <id>",
+	"wait":              "gate wait <handle>",
 	"check":             "gate check [report-path]   (or: gate check < report)",
 	"check-ledger":      "gate check-ledger [-ledger path] [-id Tn] [-since YYYY-MM-DD]",
 	"check-attestation": "gate check-attestation -ledger path -id Tn   (attestation on stdin)",
@@ -211,6 +221,12 @@ func cmdSubcommand(args []string, storeDir string) int {
 			return refuseSurplus(sub, rest)
 		}
 		return cmdLast(storeDir)
+	case "wait":
+		if len(rest) != 1 || isFlag(rest[0]) {
+			fmt.Fprintln(os.Stderr, "usage:", usageForms[sub])
+			return exitUsage
+		}
+		return waitBackground(storeDir, rest[0])
 	case "show":
 		if len(rest) == 0 {
 			fmt.Fprintln(os.Stderr, "gate show: need a record id\n  usage:", usageForms[sub])
@@ -255,6 +271,8 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   gate [flags] -- <command> [args...]   run a gate and attest its real status
   gate -clean -- <command> [args...]    …in a fresh checkout of HEAD (🎯T397)
+  gate -background -clean -- <command>  detach; gate wait <handle> reads the verdict
+  gate wait <handle>                   read a detached gate in band
   gate queue                            inspect heavy lease owner and open descriptors
   gate last                             show the most recent run
   gate show <id>                        show one run
@@ -566,12 +584,14 @@ func cmdCheckLedger(args []string, storeDir string) int {
 	}
 	contains, isCommit := gitCallbacks(root)
 	live, historical := gate.CheckLedger(&gate.LedgerCheckArgs{
-		Achieves: achieves,
-		ID:       strings.TrimPrefix(*only, "🎯"),
-		Since:    *since,
-		Lookup:   store.Lookup,
-		Contains: contains,
-		IsCommit: isCommit,
+		Achieves:          achieves,
+		ID:                strings.TrimPrefix(*only, "🎯"),
+		Since:             *since,
+		Lookup:            store.Lookup,
+		Contains:          contains,
+		IsCommit:          isCommit,
+		Repo:              root,
+		ChangedGoPackages: gate.GitCommitGoPackageDirs,
 	})
 	fmt.Println("live achieves (achieved targets' current attestation):")
 	for _, c := range live {
@@ -647,8 +667,16 @@ func cmdCheckAttestation(args []string, storeDir string, stdin io.Reader) int {
 		fmt.Fprintln(os.Stderr, "gate check-attestation: ledger:", err)
 		return exitError
 	}
-	if _, ok := ledger.Targets[target]; !ok {
+	targetNode, ok := ledger.Targets[target]
+	if !ok {
 		fmt.Fprintf(os.Stderr, "gate check-attestation: target %s is not in %s\n", target, *ledgerPath)
+		return exitError
+	}
+	var targetMeta struct {
+		Acceptance []string `yaml:"acceptance"`
+	}
+	if err := targetNode.Decode(&targetMeta); err != nil {
+		fmt.Fprintln(os.Stderr, "gate check-attestation: target decode:", err)
 		return exitError
 	}
 	root := gitRootNear(*ledgerPath)
@@ -668,14 +696,123 @@ func cmdCheckAttestation(args []string, storeDir string, stdin io.Reader) int {
 	}
 	contains, isCommit := gitCallbacks(root)
 	res := gate.CheckAchieve(&gate.AchieveCheckArgs{
-		Attestation: string(raw),
-		Lookup:      store.Lookup,
-		Contains:    contains,
-		IsCommit:    isCommit,
+		Attestation:       string(raw),
+		Acceptance:        targetMeta.Acceptance,
+		Lookup:            store.Lookup,
+		Contains:          contains,
+		IsCommit:          isCommit,
+		Repo:              root,
+		ChangedGoPackages: gate.GitCommitGoPackageDirs,
 	})
 	fmt.Printf("%s: %s\n", target, res.Detailed())
 	if res.Verdict == gate.AchieveRefused {
 		return exitFlagged
 	}
 	return 0
+}
+
+// startBackground gives a long-running gate its own process and a durable
+// handle. The child keeps gate's ordinary clean provenance, lease and record
+// logic; only the caller-gone watch is disabled for this explicitly detached run.
+func startBackground(storeDir, name string) int {
+	store, err := gate.OpenStore(storeDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gate background:", err)
+		return exitError
+	}
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitError
+	}
+	handle := "bg-" + hex.EncodeToString(nonce[:])
+	if name != "" {
+		handle = name + "-" + handle
+	}
+	dir := filepath.Join(store.Root, "background")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitError
+	}
+	output, err := os.OpenFile(filepath.Join(dir, handle+".log"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitError
+	}
+	defer output.Close()
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitError
+	}
+	childArgs := make([]string, 0, len(os.Args)+2)
+	for _, arg := range os.Args[1:] {
+		if arg == "-background" {
+			continue
+		}
+		if arg == "--" {
+			childArgs = append(childArgs, "-name", handle)
+		}
+		childArgs = append(childArgs, arg)
+	}
+	child := exec.Command(executable, childArgs...)
+	child.Env = append(os.Environ(), "JEVONS_GATE_BACKGROUND_CHILD=1")
+	child.Dir, _ = os.Getwd()
+	child.Stdin = nil
+	child.Stdout, child.Stderr = output, output
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := child.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitError
+	}
+	if err := os.WriteFile(filepath.Join(dir, handle+".pid"), []byte(strconv.Itoa(child.Process.Pid)), 0600); err != nil {
+		fmt.Fprintln(os.Stderr, "gate background: cannot record process:", err)
+		_ = child.Process.Kill()
+		return exitError
+	}
+	_ = child.Process.Release()
+	fmt.Printf("gate background handle=%s; read with gate wait %s\n", handle, handle)
+	return 0
+}
+
+// waitBackground never calls a pending run green. It reads the normal stored
+// record once present, including its actual exit code; missing records remain
+// explicitly non-citable even when a process has disappeared.
+func waitBackground(storeDir, handle string) int {
+	if strings.ContainsAny(handle, `/\`) || !strings.Contains(handle, "bg-") {
+		fmt.Fprintln(os.Stderr, "gate wait: invalid handle")
+		return exitUsage
+	}
+	store, err := gate.OpenStore(storeDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitError
+	}
+	pidFile := filepath.Join(store.Root, "background", handle+".pid")
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gate wait: unknown handle:", err)
+		return exitError
+	}
+	records, err := store.Recent(0)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitError
+	}
+	for _, rec := range records {
+		if rec.Name == handle {
+			fmt.Println(rec.Summary())
+			if rec.Verdict.IsGreen() {
+				return 0
+			}
+			return 1
+		}
+	}
+	pid, err := strconv.Atoi(string(data))
+	if err == nil && syscall.Kill(pid, 0) == nil {
+		fmt.Printf("gate wait: %s pending (pid=%d); no verdict yet\n", handle, pid)
+		return exitFlagged
+	}
+	fmt.Fprintf(os.Stderr, "gate wait: %s ended without a record; inspect %s\n", handle, filepath.Join(store.Root, "background", handle+".log"))
+	return exitError
 }

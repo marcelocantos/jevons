@@ -27,6 +27,11 @@ const (
 	// FlagAchieveTreeUnknown: the cited record carries no tree provenance, so
 	// which commit it measured cannot be read back.
 	FlagAchieveTreeUnknown FlagKind = "achieve_tree_unknown"
+	// FlagAchieveGateNarrowRun / FlagAchieveGateMissingPackages: the cited gate
+	// did not run a full-package clean test over every package the landing
+	// touched (🎯T1162).
+	FlagAchieveGateNarrowRun         FlagKind = "achieve_gate_narrow_run"
+	FlagAchieveGateMissingPackages   FlagKind = "achieve_gate_missing_packages"
 )
 
 // AchieveVerdict is what CheckAchieve concludes about one achieve.
@@ -70,6 +75,15 @@ type AchieveCheckArgs struct {
 	// spelling, decides what is a commit (🎯T1092). Nil treats every token
 	// as a commit.
 	IsCommit func(sha string) bool
+	// Repo is the ledger's git root. With ChangedGoPackages it enables 🎯T1162
+	// package-coverage checks on cited gates. Nil list skips that arm.
+	Repo string
+	// ChangedGoPackages lists package directory paths changed in one commit.
+	ChangedGoPackages func(repo, commit string) ([]string, error)
+	// Acceptance is the target's acceptance bullets. When any bullet names the
+	// running product, an attestation that declares that path unrun is refused
+	// (🎯T703).
+	Acceptance []string
 }
 
 // AchieveResult is CheckAchieve's answer for one attestation.
@@ -154,18 +168,19 @@ func NamedCommits(attestation string) []string {
 func CheckAchieve(args *AchieveCheckArgs) AchieveResult {
 	text := strings.TrimSpace(args.Attestation)
 	cited := ledgerGateRe.FindAllStringSubmatch(text, -1)
+	ungated := len(cited) == 0 && !gateMentionRe.MatchString(text)
 
+	var flags []Flag
 	if len(cited) == 0 {
-		if !gateMentionRe.MatchString(text) {
-			return AchieveResult{Verdict: AchieveUngated}
+		if gateMentionRe.MatchString(text) {
+			flags = append(flags, Flag{
+				Kind: FlagAchieveGateUncited,
+				Detail: "the attestation claims a gate run but cites no gate id, so nothing " +
+					"can be resolved — cite the GATE line bin/gate printed",
+				Evidence: trimLine(text),
+			})
 		}
-		return withRisk(text, []Flag{{
-			Kind: FlagAchieveGateUncited,
-			Detail: "the attestation claims a gate run but cites no gate id, so nothing " +
-				"can be resolved — cite the GATE line bin/gate printed",
-			Evidence: trimLine(text),
-		}})
-	}
+	} else {
 
 	var fixes []string
 	for _, sha := range NamedCommits(text) {
@@ -177,7 +192,6 @@ func CheckAchieve(args *AchieveCheckArgs) AchieveResult {
 	if contains == nil {
 		contains = func(code, fix string) bool { return sameCommit(code, fix) }
 	}
-	var flags []Flag
 	for _, m := range cited {
 		name, citedVerdict, id, raw := m[1], m[3], m[4], m[0]
 		rec, ok := args.Lookup(id)
@@ -246,8 +260,14 @@ func CheckAchieve(args *AchieveCheckArgs) AchieveResult {
 				Evidence: raw,
 			})
 		}
+		flags = append(flags, achieveGateCoverageFlags(rec, t.Commit, fixes, contains, args.Repo, args.ChangedGoPackages)...)
 	}
+	}
+	flags = append(flags, achieveProductPathFlags(args)...)
 	if len(flags) == 0 {
+		if ungated {
+			return AchieveResult{Verdict: AchieveUngated}
+		}
 		return AchieveResult{Verdict: AchieveVerified}
 	}
 	return withRisk(text, flags)
@@ -290,6 +310,7 @@ type LedgerAchieve struct {
 	Source      string // "attestation" or "context"
 	Status      string // the target's current status
 	Attestation string
+	Acceptance  []string
 }
 
 // Live reports whether this achieve is what currently retires its target: the
@@ -308,10 +329,11 @@ var contextAchieveRe = regexp.MustCompile(`(?ms)^Achieved (\d{4}-\d{2}-\d{2}): (
 func LedgerAchieves(data []byte) ([]LedgerAchieve, error) {
 	var ledger struct {
 		Targets map[string]struct {
-			Status      string `yaml:"status"`
-			Achieved    string `yaml:"achieved"`
-			Attestation string `yaml:"attestation"`
-			Context     string `yaml:"context"`
+			Status      string   `yaml:"status"`
+			Achieved    string   `yaml:"achieved"`
+			Attestation string   `yaml:"attestation"`
+			Context     string   `yaml:"context"`
+			Acceptance  []string `yaml:"acceptance"`
 		} `yaml:"targets"`
 	}
 	if err := yaml.Unmarshal(data, &ledger); err != nil {
@@ -324,14 +346,20 @@ func LedgerAchieves(data []byte) ([]LedgerAchieve, error) {
 	for id, t := range ledger.Targets {
 		live := strings.TrimSpace(t.Attestation)
 		if live != "" {
-			out = append(out, LedgerAchieve{ID: id, Date: t.Achieved, Source: "attestation", Status: t.Status, Attestation: live})
+			out = append(out, LedgerAchieve{
+				ID: id, Date: t.Achieved, Source: "attestation", Status: t.Status,
+				Attestation: live, Acceptance: t.Acceptance,
+			})
 		}
 		for _, m := range contextAchieveRe.FindAllStringSubmatch(t.Context, -1) {
 			text := strings.TrimSpace(m[2])
 			if text == live {
 				continue // bullseye mirrors the live attestation into context
 			}
-			out = append(out, LedgerAchieve{ID: id, Date: m[1], Source: "context", Status: t.Status, Attestation: text})
+			out = append(out, LedgerAchieve{
+				ID: id, Date: m[1], Source: "context", Status: t.Status,
+				Attestation: text, Acceptance: t.Acceptance,
+			})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -360,6 +388,8 @@ type LedgerCheckArgs struct {
 	Lookup   func(id string) (*Record, bool)
 	Contains func(code, fix string) bool
 	IsCommit func(sha string) bool
+	Repo     string
+	ChangedGoPackages func(repo, commit string) ([]string, error)
 }
 
 // CheckLedger runs CheckAchieve over a ledger's achieves and splits the
@@ -376,10 +406,13 @@ func CheckLedger(args *LedgerCheckArgs) (live, historical []LedgerCheck) {
 			continue
 		}
 		c := LedgerCheck{Achieve: a, Result: CheckAchieve(&AchieveCheckArgs{
-			Attestation: a.Attestation,
-			Lookup:      args.Lookup,
-			Contains:    args.Contains,
-			IsCommit:    args.IsCommit,
+			Attestation:       a.Attestation,
+			Acceptance:          a.Acceptance,
+			Lookup:            args.Lookup,
+			Contains:          args.Contains,
+			IsCommit:          args.IsCommit,
+			Repo:              args.Repo,
+			ChangedGoPackages: args.ChangedGoPackages,
 		})}
 		if a.Live() {
 			live = append(live, c)

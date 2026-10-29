@@ -6,6 +6,7 @@ package cost
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -206,6 +207,22 @@ func (r *ReplicaSource) Read(fn func(*sqlpipe.Database) error) error {
 	return r.replica.Read(fn)
 }
 
+// SubscribeQuery follows one reactive query on this same persistent replica.
+func (r *ReplicaSource) SubscribeQuery(ctx context.Context, query string) (<-chan sqlpipe.QueryResult, error) {
+	if r == nil {
+		return nil, fmt.Errorf("control plane: no replica")
+	}
+	return r.replica.SubscribeQuery(ctx, query)
+}
+
+// Write serializes local projection inputs with incoming replication.
+func (r *ReplicaSource) Write(fn func(*sqlpipe.Database) error) error {
+	if r == nil {
+		return fmt.Errorf("control plane: no replica")
+	}
+	return r.replica.Write(fn)
+}
+
 // AcceptDesiredSeat commits one desired seat on Jevons' file. No live link
 // does not fail the accept; the next link's handshake delivers the row.
 func (r *ReplicaSource) AcceptDesiredSeat(seat controlplane.DesiredSeat) error {
@@ -272,19 +289,21 @@ func columnText(qr sqlpipe.QueryResult, name string) ([]string, error) {
 // Jevons' file. Replaying a fact does not add usage. The usage socket is
 // not read, and nothing is synced here: the link delivers on its own.
 //
-// There is no cursor on this path. Every pass reads every row and replays
-// it through Claudia's per-call transition contract, which is what keeps a
-// repeated or restarted pass from counting anything twice. A row that fails
-// that contract (ErrUsageFactRejected) does not stop the pass: it is
-// recorded once as an observation failure, its call keeps whatever the
-// projection already knew (a started call stays incomplete, never a zero),
+// A durable high-water mark per (seat, session, seq) and fact body keeps
+// steady-state passes from re-parsing history: only new or rewritten rows
+// are read and applied. A row that fails Claudia's transition contract
+// (ErrUsageFactRejected) does not stop the pass: it is recorded once as an
+// observation failure, its call keeps whatever the projection already knew,
 // later rows are still ingested, and the pass reports the rejection so the
 // collector health shows it. The rejected row is replayed again on every
 // pass, so a row that becomes valid is ingested then; nothing is skipped
 // for good.
-func (c *Collector) CatchUpReplicas(ctx context.Context) (result error) {
+func (c *Collector) CatchUpReplicas(ctx context.Context) (applied int, result error) {
 	if c == nil || c.replica == nil {
-		return nil
+		return 0, nil
+	}
+	if c.store == nil {
+		return 0, fmt.Errorf("replica catch-up: no usage store")
 	}
 	c.replayMu.Lock()
 	defer c.replayMu.Unlock()
@@ -301,16 +320,68 @@ func (c *Collector) CatchUpReplicas(ctx context.Context) (result error) {
 		c.mu.Unlock()
 	}()
 
-	// Copy the rows out under the replica lock and ingest after it, so a
-	// slow usage store never holds the link.
-	type usageRow struct {
-		seat, session, body string
-		seq                 int64
+	bootstrapped, err := c.store.replicaCatchupBootstrapped(ctx)
+	if err != nil {
+		return 0, err
 	}
-	var rows []usageRow
+
+	var rows []replicaUsageRow
 	var statusErr error
-	if err := c.replica.Read(func(db *sqlpipe.Database) error {
-		qr, err := db.Query("SELECT seat, session_id, seq, fact_json FROM " + controlplane.UsageTable + " ORDER BY seat, session_id, seq")
+	if err := c.loadReplicaUsageRows(ctx, bootstrapped, &rows, &statusErr); err != nil {
+		return 0, err
+	}
+	var settled []replicaUsageRow
+	var rejected []error
+	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return applied, err
+		}
+		err := ApplyReplicatedUsage(ctx, c.store, row.body)
+		if err == nil {
+			applied++
+			settled = append(settled, row)
+			continue
+		}
+		if !errors.Is(err, ErrUsageFactRejected) {
+			if len(settled) > 0 {
+				if merr := c.store.markReplicaCatchupAppliedBatch(ctx, settled); merr != nil {
+					return applied, errors.Join(err, merr)
+				}
+			}
+			return applied, err
+		}
+		sum := sha256.Sum256([]byte(row.body))
+		message := fmt.Sprintf("replicated usage fact seq %d (%x) rejected: %v", row.seq, sum[:6], err)
+		if rerr := c.store.RecordRejectedUsageFact(ctx, row.seat, row.session, rejectedFactTime(row.body, c.now()), message); rerr != nil {
+			return applied, errors.Join(err, rerr)
+		}
+		rejected = append(rejected, fmt.Errorf("seat %s session %s seq %d: %w", row.seat, row.session, row.seq, err))
+	}
+	if len(settled) > 0 {
+		if err := c.store.markReplicaCatchupAppliedBatch(ctx, settled); err != nil {
+			return applied, err
+		}
+	}
+	if !bootstrapped {
+		if err := c.store.setReplicaCatchupBootstrapped(ctx, true); err != nil {
+			return applied, err
+		}
+	}
+	if len(rejected) > 0 {
+		slog.Warn("cost collector: replicated usage facts rejected; recorded as observation failures", "count", len(rejected), "first", rejected[0])
+		return applied, errors.Join(fmt.Errorf("replicated usage: %d fact(s) rejected and recorded as observation failures; first: %w", len(rejected), rejected[0]), statusErr)
+	}
+	return applied, statusErr
+}
+
+func (c *Collector) loadReplicaUsageRows(ctx context.Context, bootstrapped bool, rows *[]replicaUsageRow, statusErr *error) error {
+	return c.replica.Read(func(db *sqlpipe.Database) error {
+		// Never ATTACH the canonical usage database to sqlpipe's replica
+		// connection. That connection owns replication transactions; an
+		// attached external file is not a safe projection read. Read the
+		// applied mark through the Store's own SQLite connection instead.
+		query := "SELECT seat, session_id, seq, fact_json FROM " + controlplane.UsageTable + " ORDER BY seat, session_id, seq"
+		qr, err := db.Query(query)
 		if err != nil {
 			return err
 		}
@@ -325,40 +396,34 @@ func (c *Collector) CatchUpReplicas(ctx context.Context) (result error) {
 			if !ok1 || !ok2 || !ok3 || !ok4 {
 				return fmt.Errorf("replica usage row has types %T %T %T %T", row[0], row[1], row[2], row[3])
 			}
-			rows = append(rows, usageRow{seat: seat, session: session, body: body, seq: seq})
+			if bootstrapped {
+				if skip, err := c.store.replicaRowAlreadyApplied(ctx, seat, session, seq, body); err != nil {
+					return err
+				} else if skip {
+					continue
+				}
+			}
+			*rows = append(*rows, replicaUsageRow{seat: seat, session: session, body: body, seq: seq})
 		}
 		// Status is checked so a corrupt projection fails catch-up. It is
 		// not applied to the fleet registry: Claudia remains the seat
 		// authority.
-		statusErr = validateReplicatedStatus(db)
+		*statusErr = validateReplicatedStatus(db)
 		return nil
-	}); err != nil {
-		return err
+	})
+}
+
+func (s *Store) replicaRowAlreadyApplied(ctx context.Context, seat, session string, seq int64, factJSON string) (bool, error) {
+	var stored string
+	err := s.db.QueryRowContext(ctx, `SELECT fact_json FROM replica_catchup_applied WHERE seat = ? AND session_id = ? AND seq = ?`,
+		seat, session, seq).Scan(&stored)
+	if err == sql.ErrNoRows {
+		return false, nil
 	}
-	var rejected []error
-	for _, row := range rows {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		err := ApplyReplicatedUsage(ctx, c.store, row.body)
-		if err == nil {
-			continue
-		}
-		if !errors.Is(err, ErrUsageFactRejected) {
-			return err
-		}
-		sum := sha256.Sum256([]byte(row.body))
-		message := fmt.Sprintf("replicated usage fact seq %d (%x) rejected: %v", row.seq, sum[:6], err)
-		if rerr := c.store.RecordRejectedUsageFact(ctx, row.seat, row.session, rejectedFactTime(row.body, c.now()), message); rerr != nil {
-			return errors.Join(err, rerr)
-		}
-		rejected = append(rejected, fmt.Errorf("seat %s session %s seq %d: %w", row.seat, row.session, row.seq, err))
+	if err != nil {
+		return false, err
 	}
-	if len(rejected) > 0 {
-		slog.Warn("cost collector: replicated usage facts rejected; recorded as observation failures", "count", len(rejected), "first", rejected[0])
-		return errors.Join(fmt.Errorf("replicated usage: %d fact(s) rejected and recorded as observation failures; first: %w", len(rejected), rejected[0]), statusErr)
-	}
-	return statusErr
+	return stored == factJSON, nil
 }
 
 // rejectedFactTime is the window a rejected fact covers: its finish, else
@@ -399,15 +464,15 @@ func validateReplicatedStatus(db *sqlpipe.Database) error {
 // ReplicatedReceipt reads one receipt from Jevons' file, as the broker last
 // delivered it. The held-receipt sweep uses this instead of the usage
 // socket.
-func (c *Collector) ReplicatedReceipt(ctx context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
-	if c == nil || c.replica == nil {
+func (r *ReplicaSource) ReplicatedReceipt(ctx context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+	if r == nil {
 		return nil, fmt.Errorf("replicated receipt: no replica")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	var bodies []string
-	if err := c.replica.Read(func(db *sqlpipe.Database) error {
+	if err := r.Read(func(db *sqlpipe.Database) error {
 		qr, err := db.Query(
 			"SELECT receipt_json FROM "+controlplane.ReceiptTable+" WHERE seat = ? AND session_id = ? AND request_id = ?",
 			q.Seat, q.SessionID, q.RequestID)

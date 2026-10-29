@@ -104,8 +104,12 @@ func (s *Server) announceOwnerDelivered(text string, acked bool) {
 		delete(s.notifyOwnerIDs, text)
 	}
 	key := ownerStateKey(id, text)
-	was := s.ownerUndelivered[key]
+	// 🎯T1130: a row the cockpit painted "held" (queued behind a turn, same
+	// as "undelivered") also flips to delivered once the drain actually
+	// lands it — the held chrome does not linger once the FIFO catches up.
+	was := s.ownerUndelivered[key] || s.ownerHeld[key]
 	delete(s.ownerUndelivered, key)
+	delete(s.ownerHeld, key)
 	s.notifyRetryN = 0
 	s.mu.Unlock()
 	s.noteOwnerDeliveredID(id)
@@ -116,6 +120,25 @@ func (s *Server) announceOwnerDelivered(text string, acked bool) {
 	if was && (acked || !s.receiptQueryConfigured()) {
 		s.broadcastDeliveryFrame("delivered", id, "message delivered to the overseer after retry", "")
 	}
+}
+
+// noteOwnerHeld announces, once per message, that it is sitting behind a
+// running turn (🎯T1130) — the daemon's own truth, not the browser's belief.
+// The cockpit paints the row with Steer / Cut-in instead of a plain bubble;
+// announceOwnerDelivered clears the state once the drain lands it.
+func (s *Server) noteOwnerHeld(text, id string) {
+	key := ownerStateKey(id, text)
+	s.mu.Lock()
+	if s.ownerHeld == nil {
+		s.ownerHeld = map[string]bool{}
+	}
+	already := s.ownerHeld[key]
+	s.ownerHeld[key] = true
+	s.mu.Unlock()
+	if already {
+		return
+	}
+	s.broadcastDeliveryFrame("held", id, "message queued behind the overseer's running turn", "")
 }
 
 // scheduleNotifyRetry re-drains a refused owner batch with backoff; deferral

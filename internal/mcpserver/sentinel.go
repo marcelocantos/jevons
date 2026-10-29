@@ -23,6 +23,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/poidlenudge"
 	"github.com/marcelocantos/jevons/internal/poproactive"
 	"github.com/marcelocantos/jevons/internal/staffops"
 	"github.com/marcelocantos/jevons/internal/targetfile"
@@ -97,6 +98,10 @@ type sentinelRuntime struct {
 	lastPrimary staffops.Action
 	lastTick    time.Time
 	cycles      int
+	// poUnactedChildWake is the latest 🎯T1193 sample for this cycle's tick.
+	poUnactedChildWake []staffops.POUnactedChildReportObs
+	// poOwnerMission is the latest 🎯T1195 sample for this cycle's tick.
+	poOwnerMission []staffops.POOwnerMissionObs
 }
 
 func newSentinelRuntime(maxPerHour int) *sentinelRuntime {
@@ -447,6 +452,28 @@ func (s *Server) runSentinelCycle(args SentinelLoopArgs) (staffops.CycleResult, 
 		act.Skipped = "unknown primary " + string(res.Primary)
 	}
 
+	if !args.DryRun {
+		overseer := args.Overseer
+		if overseer == "" {
+			overseer = s.overseerName()
+		}
+		workdir := args.Workdir
+		if workdir == "" {
+			if wd, err := os.Getwd(); err == nil {
+				workdir = wd
+			}
+		}
+		po := args.DefaultPO
+		if po == "" {
+			po = "jevons-po"
+		}
+		s.tickTrunkFault(workdir, po, args.AutoSpawnPaused || s.AutoSpawnPaused())
+		s.tickWholeModuleGate(workdir)
+		s.tickPOUnactedChildReportWake(rt, overseer, workdir, now, DefaultSentinelMechanicalGrace, false, args.ProcessRunning)
+		s.tickPOOwnerMissionWake(rt, overseer, workdir, now, DefaultSentinelMechanicalGrace, false, args.ProcessRunning)
+		s.tickPOIdleNudge(overseer, workdir, now, poidlenudge.DefaultQueueThreshold, poidlenudge.DefaultFaultGrace, false, args.ProcessRunning)
+	}
+
 	return res, act
 }
 
@@ -562,7 +589,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 	// --- Fleet agents ---
 	if s.registry != nil {
 		s.observeRegistryLiveness()
-		reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent, s.autoSeatHold)
+		reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent, s.autoSeatHold, s.wasDeliberatelyStopped, s.admitRehydrate)
 		s.noteDeadHandleRevives(reps)
 		recovered := map[string]bool{}
 		dead := map[string]DeadAgentReport{}
@@ -719,6 +746,18 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 			if strings.HasPrefix(symptom, "po_fanout:") {
 				delete(rt.firstSeen, symptom)
 			}
+			if strings.HasPrefix(symptom, "po_auditor_mutual_wait:") {
+				delete(rt.firstSeen, symptom)
+			}
+			if strings.HasPrefix(symptom, "po_queue_backlog:") {
+				delete(rt.firstSeen, symptom)
+			}
+			if strings.HasPrefix(symptom, "po_unacted_child_reports:") {
+				delete(rt.firstSeen, symptom)
+			}
+			if strings.HasPrefix(symptom, poOwnerMissionSymptomPrefix) {
+				delete(rt.firstSeen, symptom)
+			}
 		}
 		rt.mu.Unlock()
 	}
@@ -736,6 +775,12 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 		}
 	}
 	if workdir != "" {
+		if block.Runnable {
+			in.POAuditorMutualWait = s.samplePOAuditorMutualWait(rt, overseer, workdir, now, grace, args.ProcessRunning)
+			in.POQueueBacklog = s.samplePOQueueBacklog(rt, overseer, workdir, now, grace, args.ProcessRunning)
+			in.POUnactedChildReports = s.samplePOUnactedChildReports(rt, overseer, workdir, now, grace, args.ProcessRunning)
+			in.POOwnerMissions = s.samplePOOwnerMissions(rt, overseer, workdir, now, grace, args.ProcessRunning)
+		}
 		if leaves, err := loadFrontierLeaves(workdir); err == nil {
 			obs := make([]poproactive.LeafObs, 0, len(leaves))
 			for _, leaf := range leaves {
@@ -826,6 +871,9 @@ func eventRowFromEvent(e eventlog.Event) staffops.EventRow {
 	}
 	if fc, ok := e.Fields["failure_class"].(string); ok {
 		row.FailureClass = strings.TrimSpace(fc)
+	}
+	if em, ok := e.Fields["message"].(string); ok {
+		row.ErrorMessage = strings.TrimSpace(em)
 	}
 	if e.TS != "" {
 		if t, err := time.Parse(time.RFC3339Nano, e.TS); err == nil {

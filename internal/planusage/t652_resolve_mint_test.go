@@ -22,7 +22,7 @@ func TestResolveMintSkipsHotGrok(t *testing.T) {
 	if DestEligible(cands[0].Backend, now, th) {
 		t.Fatal("fixture: grok must be ineligible")
 	}
-	pick, err := ResolveMint(context.Background(), cands, now, th)
+	pick, err := ResolveMint(context.Background(), cands, now, th, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

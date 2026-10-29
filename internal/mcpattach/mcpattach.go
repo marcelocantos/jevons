@@ -19,6 +19,7 @@ package mcpattach
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/marcelocantos/claudia"
@@ -76,7 +77,34 @@ func SessionServers(a Args, workDir string) []claudia.MCPServer {
 		})
 	}
 	list := applyProxied(dropComputerUseMCP(inv.ForProvider(claudia.ProviderClaude)), a.Proxied)
-	return ensurePlaywrightIsolated(list)
+	return leadWithFleetServers(ensurePlaywrightIsolated(list, workDir), a.Name)
+}
+
+// leadWithFleetServers puts this daemon's own server first and Playwright
+// second, keeping the rest in inventory order. A provider with a host-tool
+// budget (claudia caps openai-codex at 250) leaves servers out from the end
+// of the list; a seat without jevonsmcp cannot report or be directed, so it
+// must never be the one dropped. It was last, which made it first to go.
+func leadWithFleetServers(list []claudia.MCPServer, own string) []claudia.MCPServer {
+	out := make([]claudia.MCPServer, 0, len(list))
+	rank := func(s claudia.MCPServer) int {
+		switch {
+		case own != "" && s.Name == own:
+			return 0
+		case isPlaywrightMCP(s):
+			return 1
+		default:
+			return 2
+		}
+	}
+	for r := 0; r <= 2; r++ {
+		for _, s := range list {
+			if rank(s) == r {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 // dropComputerUseMCP removes computer-use, the one Claude/Codex MCP
@@ -170,7 +198,7 @@ func applyProxied(list []claudia.MCPServer, proxied []claudia.MCPServer) []claud
 // Policy: drop every --user-data-dir <path> pair (the shared-profile form
 // that collides), then ensure --isolated is present. Non-playwright
 // servers are untouched. Idempotent when already isolated.
-func ensurePlaywrightIsolated(list []claudia.MCPServer) []claudia.MCPServer {
+func ensurePlaywrightIsolated(list []claudia.MCPServer, workDir string) []claudia.MCPServer {
 	if len(list) == 0 {
 		return list
 	}
@@ -180,6 +208,19 @@ func ensurePlaywrightIsolated(list []claudia.MCPServer) []claudia.MCPServer {
 			continue
 		}
 		out[i].Args = playwrightIsolatedArgs(s.Args)
+		// 🎯T1239: a stdio Playwright MCP inherits its launcher's cwd as
+		// its workspace root. That launcher is the seat's own process,
+		// whose cwd is the seat's workDir — a git checkout for every
+		// Build seat. Move it to a per-seat scratch dir outside any
+		// checkout so a screenshot (named or auto-named) cannot land as
+		// untracked litter in a shared clone.
+		if out[i].Command != "" {
+			scratch := playwrightScratchDir(workDir)
+			if err := os.MkdirAll(scratch, 0o755); err == nil {
+				command, args := unwrapScratchCwd(out[i].Command, out[i].Args)
+				out[i].Command, out[i].Args = wrapCommandWithCwd(command, args, scratch)
+			}
+		}
 	}
 	return out
 }
@@ -219,6 +260,24 @@ func playwrightIsolatedArgs(args []string) []string {
 	if !hasIsolated {
 		out = append(out, "--isolated")
 	}
+	out = playwrightFleetBrowserArgs(out)
+	return out
+}
+
+// playwrightFleetBrowserArgs stamps fleet Playwright sessions so owner-origin
+// cockpit sends are refused (🎯T1129).
+func playwrightFleetBrowserArgs(args []string) []string {
+	const uaFlag = "--user-agent"
+	for i, a := range args {
+		if a == uaFlag && i+1 < len(args) {
+			return args
+		}
+		if strings.HasPrefix(a, uaFlag+"=") {
+			return args
+		}
+	}
+	out := append([]string(nil), args...)
+	out = append(out, uaFlag, "JevonsFleetBrowser/1 (Playwright MCP; not the owner)")
 	return out
 }
 

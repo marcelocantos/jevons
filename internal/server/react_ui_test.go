@@ -85,7 +85,7 @@ func TestReactBundleEveryAssetIsServed(t *testing.T) {
 		if name == "index.html" {
 			// The document alone is stamped with the build id (🎯T993);
 			// every other packaged byte is served verbatim.
-			want = stampBuildMeta(want, buildident.Binary())
+			want = StampBuildMeta(want, buildident.Binary())
 		}
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/"+name, nil))

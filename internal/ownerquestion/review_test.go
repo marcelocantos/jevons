@@ -53,6 +53,10 @@ func TestT1041ActualBlockedReportAndNegativeControls(t *testing.T) {
 	if _, ok, _ := FromActionableReview("quoted report:\n"+string(raw), repo, "worker"); ok {
 		t.Fatal("quoted report promoted")
 	}
+	// Historical T1041 gap: T1028.1 typed intake alone never paged this report.
+	if q, ok, err := FromBlockedReport(string(raw)); ok || err != nil || q.Text != "" {
+		t.Fatalf("typed intake must not admit untyped T1041 blocker: ok=%v err=%v q=%+v", ok, err, q)
+	}
 }
 
 func TestSharedRepoWorktree(t *testing.T) {

@@ -3,8 +3,6 @@
 package ownerquestion
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -92,26 +90,5 @@ func FromActionableReview(text, workdir, asker string) (ReviewEvent, bool, error
 	if err != nil {
 		return ReviewEvent{}, false, err
 	}
-	payload := strings.ToLower(m.Payload)
-	blocker := strings.ToLower(m.Blocker)
-	if m.Target == "" || m.SHA == "" || !(strings.Contains(payload, "activated") || strings.Contains(payload, "reported serving")) || !strings.Contains(payload, "hard-reload") || !strings.Contains(payload, "visual verdict") || !strings.Contains(payload, "screenshot") || !strings.Contains(payload, "folded/unfolded") || !strings.Contains(blocker, "owner verdict") || !strings.Contains(blocker, "disconnected") || !strings.Contains(blocker, "folded/unfolded") {
-		return ReviewEvent{}, false, nil
-	}
-	shots := screenshotEvidence.FindAllString(m.Payload, -1)
-	if len(shots) < 2 {
-		return ReviewEvent{}, false, nil
-	}
-	repo, err := SharedRepo(workdir)
-	if err != nil {
-		return ReviewEvent{}, false, err
-	}
-	evidence := fmt.Sprintf("commit %s; reported screenshot refs (not hardware verification) %s", m.SHA, strings.Join(shots, ", "))
-	// The content version is independent of incidental report prose, gate IDs,
-	// agent names and timestamps. Revised evidence creates a new version.
-	h := sha256.Sum256([]byte(evidence))
-	e := ReviewEvent{Identity: Identity{Repo: repo, Target: m.Target, ID: "hardware-visual-review", Version: hex.EncodeToString(h[:8])}, Evidence: evidence, CommitSHA: m.SHA, GateID: m.GateID, ScreenshotRefs: shots, Prerequisite: "Reconnect the Fold and capture folded/unfolded hardware screenshots", Action: "review both folded/unfolded screenshots and give an accept/reject visual verdict", AnswerRoute: "reply to jevons-po with target " + m.Target + " (accept/reject)", Asker: asker, Lifecycle: Open, Readiness: PrerequisiteBlocked, Link: "http://localhost:13705/"}
-	if !strings.Contains(payload, "`:13705`") {
-		e.Link = ""
-	}
-	return e, true, e.Question().Validate()
+	return actionableReviewFields(m.Target, m.SHA, m.GateID, m.Payload, m.Blocker, workdir, asker)
 }

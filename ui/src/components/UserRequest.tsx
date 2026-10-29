@@ -44,6 +44,7 @@ type UserRequestProps = {
   disabled?: boolean;
   /** When set, the box is held and this sentence replaces the invitation. */
   hold?: string;
+  fleetPaused?: boolean;
   history?: RecalledRequest[];
   onRecall?: (request: RecalledRequest | null) => void;
   onRewind?: (request: RecalledRequest, text: string) => Promise<void>;
@@ -435,7 +436,7 @@ function NamedUserRequest(props: UserRequestProps) {
           macOS accessibility reports an empty field's placeholder as its
           value, so dictation (Wispr Flow) read "Message..." as text already
           typed and continued it mid-sentence — lowercase, leading space. */}
-      <div className="composer-field">
+      <div className={"composer-field" + (props.fleetPaused ? " fleet-paused-composer" : "")}>
         <textarea
           id={boxId}
           ref={boxRef}

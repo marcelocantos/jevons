@@ -15,6 +15,10 @@ import (
 const (
 	ExitCauseBrokerLost      = claudia.ExitCauseBrokerLost
 	ExitCauseBrokerRestarted = claudia.ExitCauseBrokerRestarted
+	// ExitCauseBrokerSeatGonePrefix is how claudia marks a broker-backed
+	// handle the broker reported gone while the broker stayed up (sidecar
+	// exit, process exit, …). See claudia 🎯T925 / broker_agent.go.
+	ExitCauseBrokerSeatGonePrefix = "claudia broker: seat gone:"
 )
 
 // ExitCause is why a dead handle died, when its harness knew (🎯T925).
@@ -35,8 +39,16 @@ func BrokerPlanned(cause string) bool {
 	return cause == ExitCauseBrokerRestarted
 }
 
+// BrokerSeatGone reports that cause is the broker's seat-gone reason
+// (prefix + detail). A sentence that only quotes "seat process gone" is
+// not this code.
+func BrokerSeatGone(cause string) bool {
+	return strings.HasPrefix(cause, ExitCauseBrokerSeatGonePrefix)
+}
+
 // BrokerCaused reports that cause is one of the published broker exit
-// codes. A sentence that only begins with the broker's words is not.
+// codes, including seat-gone while the broker stayed up (🎯T1139). A
+// sentence that only begins with the broker's words is not.
 func BrokerCaused(cause string) bool {
-	return cause == ExitCauseBrokerLost || cause == ExitCauseBrokerRestarted
+	return cause == ExitCauseBrokerLost || cause == ExitCauseBrokerRestarted || BrokerSeatGone(cause)
 }

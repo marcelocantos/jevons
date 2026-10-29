@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { AgentTree } from './AgentTree';
 
@@ -26,6 +26,9 @@ describe('AgentTree phase chrome (🎯T545.4)', () => {
       );
       return row?.querySelector('.agent-dir')?.textContent || '';
     };
+    // 🎯T1122: idle leaf workers are folded by default; open the fold to
+    // check how an idle row paints.
+    fireEvent.click(container.querySelector('.agent-idle-fold') as HTMLElement);
     expect(textOf('jv-idle')).toBe('idle');
     expect(textOf('jv-work')).toBe('working · Bash');
     expect(textOf('jv-block')).toBe('blocked');

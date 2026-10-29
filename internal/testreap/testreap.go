@@ -25,11 +25,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/proclist"
 )
 
 // cleanupWait bounds how long a passing test waits for the watcher's sweep.
@@ -41,8 +42,9 @@ const cleanupWait = 10 * time.Second
 // argv carries the pattern before it finished the sweep.
 // The pattern begins with an absolute temp path, never a dash. Do not use
 // GNU's `--` terminator: macOS pkill rejects it, silently disabling the
-// emergency sweep on this machine.
-const watcherScript = `read -r _ ; exec "$1" -KILL -f "$2"`
+// emergency sweep on this machine. After the kill, remove the test's temp
+// tree — t.Cleanup does not run on -timeout or SIGKILL (🎯T1168).
+const watcherScript = `read -r _ ; "$1" -KILL -f "$2" 2>/dev/null; exec rm -rf "$3"`
 
 // Arm arranges that every process whose argv names the test's temp root is
 // killed when the test ends, pass, fail, or the binary dying under it. It
@@ -64,7 +66,8 @@ func Arm(t testing.TB) string {
 	if err != nil {
 		t.Fatalf("testreap: pipe: %v", err)
 	}
-	watcher := exec.Command("/bin/sh", "-c", watcherScript, "testreap", pkill, regexp.QuoteMeta(root))
+	tree := strings.TrimSuffix(root, string(os.PathSeparator))
+	watcher := exec.Command("/bin/sh", "-c", watcherScript, "testreap", pkill, regexp.QuoteMeta(root), tree)
 	watcher.Stdin = r
 	// Its own process group: a Ctrl-C to the terminal, or a gate that kills
 	// the test's group, must not take the watcher down before it sweeps.
@@ -87,6 +90,9 @@ func Arm(t testing.TB) string {
 		case <-time.After(cleanupWait):
 			t.Errorf("testreap: watcher did not finish sweeping %s within %s", root, cleanupWait)
 		}
+		// Happy-path removal; the watcher also rm -rf's when the binary dies
+		// without running this cleanup.
+		_ = os.RemoveAll(tree)
 	})
 	return root
 }
@@ -99,21 +105,18 @@ func ReapUnder(t testing.TB, dir string) {
 	t.Helper()
 	prefix := dir + string(os.PathSeparator)
 	live := func() []int {
-		out, err := exec.Command("ps", "-Ao", "pid=,args=").Output()
+		procs, err := proclist.All()
 		if err != nil {
 			t.Errorf("testreap: census %s: %v", dir, err)
 			return nil
 		}
 		var pids []int
-		for _, line := range strings.Split(string(out), "\n") {
-			fields := strings.Fields(strings.TrimSpace(line))
-			if len(fields) < 2 || !strings.HasPrefix(fields[1], prefix) {
+		me := os.Getpid()
+		for _, p := range procs {
+			if p.PID == me || !matchesTempPrefix(p, prefix) {
 				continue
 			}
-			pid, err := strconv.Atoi(fields[0])
-			if err == nil && pid != os.Getpid() {
-				pids = append(pids, pid)
-			}
+			pids = append(pids, p.PID)
 		}
 		return pids
 	}
@@ -132,4 +135,15 @@ func ReapUnder(t testing.TB, dir string) {
 	if left := live(); len(left) > 0 {
 		t.Errorf("testreap: leaked processes from %s: %v", dir, left)
 	}
+}
+
+func matchesTempPrefix(p proclist.Proc, prefix string) bool {
+	if p.Path != "" && strings.HasPrefix(p.Path, prefix) {
+		return true
+	}
+	cmd := p.Command
+	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
+		cmd = cmd[:i]
+	}
+	return strings.HasPrefix(cmd, prefix)
 }

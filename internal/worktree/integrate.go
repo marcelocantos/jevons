@@ -6,12 +6,15 @@ package worktree
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/gate"
 )
 
 // 🎯T254.2: the single integrator path. A worker isolated by Ensure commits
@@ -53,6 +56,17 @@ type IntegrateArgs struct {
 	// MaxAttempts bounds the recompute-and-retry loop when the shared
 	// branch moves under a landing. Zero means DefaultIntegrateAttempts.
 	MaxAttempts int
+	// GateStoreRoot is where a post-merge gate record is stored (empty means
+	// gate.DefaultStoreRoot()). Only used when a merge commit is landed.
+	GateStoreRoot string
+	// LandingGate is the pristine worker-tip record accepted by the CLI before
+	// taking the landing lock. A nil record is the explicit owner override or
+	// an internal caller without the CLI precondition.
+	LandingGate *gate.Record
+	// PostMergeGateCommand overrides the post-merge pristine build argv. Nil
+	// means auto (go build ./... when go.mod exists). An empty non-nil slice
+	// skips the post-merge gate.
+	PostMergeGateCommand []string
 }
 
 // DefaultIntegrateAttempts is how many times Integrate recomputes after
@@ -78,11 +92,14 @@ type IntegrateResult struct {
 	Merge string
 	// Attempts is how many compute-and-land rounds it took.
 	Attempts int
+	// PostMergeGate is the record from the merge-result build, when one ran.
+	PostMergeGate *gate.Record
 }
 
 // Refusals a caller can branch on. Each is wrapped with the detail (paths,
 // git's own words) that tells the integrator what to do next.
 var (
+	ErrStaleGateTip   = errors.New("gate measured a stale tip")
 	ErrWorkerDirty    = errors.New("worker tree has uncommitted tracked changes")
 	ErrConflict       = errors.New("worker branch conflicts with the shared branch")
 	ErrBaseOverlap    = errors.New("shared clone has uncommitted changes to paths the landing touches")
@@ -119,6 +136,9 @@ func Integrate(args *IntegrateArgs) (*IntegrateResult, error) {
 	if got, err := gitOut(path, "symbolic-ref", "--quiet", "--short", "HEAD"); err != nil || got != workerBranch {
 		return nil, fmt.Errorf("integrate: %s is on %q, not its own branch %s: %w", path, got, workerBranch, ErrNotIsolated)
 	}
+	if err := CheckIntegrationBranch(path, baseBranch); err != nil {
+		return nil, fmt.Errorf("integrate: %s: %w", args.AgentName, err)
+	}
 	// Uncommitted work would silently stay behind while the report says the
 	// worker's slice landed. Untracked files are left out on purpose: they are
 	// build output and scratch far more often than forgotten work.
@@ -148,6 +168,12 @@ func Integrate(args *IntegrateArgs) (*IntegrateResult, error) {
 		res.From, res.To, res.Merge, res.Landed = baseTip, baseTip, "", nil
 
 		if isAncestor(base, workerTip, baseTip) {
+			if err := resolveTrunkFault(base, baseTip, args.GateStoreRoot, res.PostMergeGate); err != nil {
+				return nil, fmt.Errorf("integrate: resolve trunk fault: %w", err)
+			}
+			if err := assertSharedCheckoutUnchanged(base, baseBranch); err != nil {
+				return nil, err
+			}
 			return res, nil // nothing the shared branch does not already have
 		}
 		landed, err := gitOut(base, "rev-list", baseTip+".."+workerTip)
@@ -156,21 +182,35 @@ func Integrate(args *IntegrateArgs) (*IntegrateResult, error) {
 		}
 		res.Landed = strings.Fields(landed)
 
+		if err := refuseWorkerBranchLedgerChanges(base, baseTip, workerTip); err != nil {
+			return nil, err
+		}
+
 		target := workerTip
-		if !isAncestor(base, baseTip, workerTip) {
-			// Both sides moved: build the merge without a working tree. Exit 1
-			// is git's "conflicts", and the rest of the output names them.
+		needMerge := !isAncestor(base, baseTip, workerTip) || workerTipLedgerStale(base, baseTip, workerTip)
+		if needMerge {
+			// Both sides moved, or the worker tip still has a stale ledger copy
+			// from the fork while the shared branch moved on (🎯T1151.3).
 			out, code, err := gitRun(base, "merge-tree", "--write-tree", "--name-only", "--no-messages", baseTip, workerTip)
 			if err != nil && code != 1 {
 				return nil, fmt.Errorf("integrate: merge-tree: %w: %s", err, out)
 			}
 			lines := strings.Split(out, "\n")
+			treeOID := lines[0]
 			if code == 1 {
-				return nil, fmt.Errorf("integrate: %s into %s, conflicting paths:\n%s\n%w",
-					workerBranch, baseBranch, strings.Join(lines[1:], "\n"), ErrConflict)
+				conflicts := lines[1:]
+				if len(conflicts) == 1 && conflicts[0] == ledgerPath {
+					treeOID, err = mergeTreeKeepingBaseLedger(base, baseTip, workerTip, treeOID, conflicts)
+					if err != nil {
+						return nil, fmt.Errorf("integrate: keep base ledger: %w", err)
+					}
+				} else {
+					return nil, fmt.Errorf("integrate: %s into %s, conflicting paths:\n%s\n%w",
+						workerBranch, baseBranch, strings.Join(conflicts, "\n"), ErrConflict)
+				}
 			}
 			msg := fmt.Sprintf("Merge branch '%s' into %s", workerBranch, baseBranch)
-			merge, err := gitOut(base, "commit-tree", lines[0], "-p", baseTip, "-p", workerTip, "-m", msg)
+			merge, err := gitOut(base, "commit-tree", treeOID, "-p", baseTip, "-p", workerTip, "-m", msg)
 			if err != nil {
 				return nil, fmt.Errorf("integrate: commit-tree: %w", err)
 			}
@@ -178,13 +218,86 @@ func Integrate(args *IntegrateArgs) (*IntegrateResult, error) {
 			res.Merge = merge
 		}
 
+		if err := refuseLandingLedgerShrink(base, baseTip, target); err != nil {
+			return nil, err
+		}
+
+		// Gate the merge commit before the branch moves. It used to land
+		// first and roll back on a RED gate, and in that window a worker,
+		// its PO and an auditor all read the merge as landed (aed4bd5f,
+		// bab71bb1 on 2026-10-28). RunClean checks the commit out on its
+		// own, so it needs nothing from the shared branch.
+		if res.Merge != "" {
+			mergeBase, mbErr := gitOut(base, "merge-base", baseTip, workerTip)
+			if mbErr != nil {
+				return nil, fmt.Errorf("integrate: merge-base %s %s: %w", short(baseTip), short(workerTip), mbErr)
+			}
+			rec, gerr := verifyMergeResultBuild(base, target, args.GateStoreRoot, mergeBase, workerTip, args.PostMergeGateCommand)
+			if gerr != nil {
+				notLanded := fmt.Sprintf("integrate: NOT LANDED: %s stays at %s; merge %s is not on %s",
+					baseBranch, short(baseTip), short(target), baseBranch)
+				fault, ferr := classifyTrunkFailure(base, baseTip, args.GateStoreRoot, rec)
+				if ferr != nil {
+					return nil, fmt.Errorf("%s: %w; trunk diagnosis: %v", notLanded, gerr, ferr)
+				}
+				if fault != nil {
+					return nil, fmt.Errorf("%s: %w", notLanded, fault)
+				}
+				return nil, fmt.Errorf("%s: %w", notLanded, gerr)
+			}
+			res.PostMergeGate = rec
+		}
+
+		// Re-read the worker ref as close as possible to the write: the CLI's
+		// pre-lock gate lookup may have observed an earlier worker tip. Tree
+		// equality is not commit identity; only the measured SHA authorizes it.
+		currentWorkerTip, err := gitOut(base, "rev-parse", "--verify", "refs/heads/"+workerBranch)
+		if err != nil {
+			return nil, fmt.Errorf("integrate: resolve %s before landing: %w", workerBranch, err)
+		}
+		if currentWorkerTip != workerTip || (args.LandingGate != nil &&
+			(args.LandingGate.Tree == nil || args.LandingGate.Tree.Commit != currentWorkerTip)) {
+			measured := "unknown"
+			if args.LandingGate != nil && args.LandingGate.Tree != nil {
+				measured = args.LandingGate.Tree.Commit
+			}
+			return nil, fmt.Errorf("integrate: worker %s was %s, now %s; gate measured %s: %w",
+				workerBranch, short(workerTip), short(currentWorkerTip), short(measured), ErrStaleGateTip)
+		}
+		if res.PostMergeGate != nil && (res.PostMergeGate.Tree == nil || res.PostMergeGate.Tree.Commit != target) {
+			return nil, fmt.Errorf("integrate: post-merge gate measured a stale tip (landing %s): %w", short(target), ErrStaleGateTip)
+		}
 		// The compare-and-swap. A fast-forward from exactly baseTip is the
-		// only move git will make here; anything else is refused whole.
+		// only move git will make here; anything else is refused whole, and
+		// a base that moved while the gate ran is recomputed and re-gated.
+		currentBaseTip, err := gitOut(base, "rev-parse", "--verify", "refs/heads/"+baseBranch)
+		if err != nil {
+			return nil, fmt.Errorf("integrate: resolve %s before landing: %w", baseBranch, err)
+		}
+		if currentBaseTip != baseTip {
+			// 🎯T1261: the shared branch moving under the gate is not the
+			// worker tip moving (🎯T1256 refuses that above). Ledger commits
+			// land without the landing lock, so a PO's achieve during a
+			// ten-minute post-merge gate used to refuse an unrelated landing
+			// outright (jv-t783-phase-agree, 2026-10-28). Recompute from the
+			// new tip and gate that merge, as the loop exists to do.
+			slog.Info("integrate: shared branch moved under the gate; recomputing",
+				"branch", baseBranch, "was", short(baseTip), "now", short(currentBaseTip), "attempt", res.Attempts)
+			res.PostMergeGate = nil
+			continue
+		}
 		out, _, ffErr := gitRun(base, "merge", "--ff-only", "--quiet", target)
 		if ffErr == nil {
 			res.To = target
+			if err := resolveTrunkFault(base, target, args.GateStoreRoot, res.PostMergeGate); err != nil {
+				return nil, fmt.Errorf("integrate: resolve trunk fault: %w", err)
+			}
+			if err := assertSharedCheckoutUnchanged(base, baseBranch); err != nil {
+				return nil, err
+			}
 			return res, nil
 		}
+		res.PostMergeGate = nil
 		nowTip, _ := gitOut(base, "rev-parse", "--verify", "refs/heads/"+baseBranch)
 		if nowTip != baseTip {
 			continue // someone landed in between: recompute from the new tip
@@ -263,4 +376,17 @@ func short(sha string) string {
 		return sha[:12]
 	}
 	return sha
+}
+
+// assertSharedCheckoutUnchanged is the post-landing half of 🎯T955: integrate
+// must never leave the shared clone on a different branch than it started on.
+func assertSharedCheckoutUnchanged(base, wantBranch string) error {
+	got, err := gitOut(base, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return fmt.Errorf("integrate: shared clone HEAD after landing: %w", err)
+	}
+	if got != wantBranch {
+		return fmt.Errorf("integrate: shared clone HEAD moved from %q to %q during landing (🎯T955)", wantBranch, got)
+	}
+	return nil
 }

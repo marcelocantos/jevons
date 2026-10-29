@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,7 @@ func saveGateRecord(t *testing.T, root, id, commit string, v gate.Verdict, start
 			Repo:   root,
 			Commit: commit,
 			Clean:  true,
+			Shared: &gate.SharedTreeState{Repo: root},
 		},
 	}
 	if err := store.Save(rec); err != nil {
@@ -74,7 +76,7 @@ func TestRequireLandingGateLandsWithGreenRecordOnTip(t *testing.T) {
 		t.Fatalf("expected the GREEN record on the tip, got %+v", rec)
 	}
 
-	res, err := worktree.Integrate(&worktree.IntegrateArgs{BaseWorkdir: base, AgentName: "jv-greentip"})
+	res, err := worktree.Integrate(&worktree.IntegrateArgs{BaseWorkdir: base, AgentName: "jv-greentip", LandingGate: rec})
 	if err != nil {
 		t.Fatalf("Integrate: %v", err)
 	}
@@ -177,4 +179,34 @@ func contains(s, sub string) bool {
 		}
 		return false
 	})()
+}
+
+// 🎯T1256: the CLI accepted a GREEN record before taking the landing lock,
+// but the worker ref advanced before the actual fast-forward. No older
+// record, including a tree-equal one, can authorize the newer SHA.
+func TestT1256GateMeasuredStaleTipRefusesAtLanding(t *testing.T) {
+	base := sharedClone(t)
+	wt, old := workerCommit(t, base, "jv-t1256", "a.txt", "first\n")
+	gateDir := t.TempDir()
+	saveGateRecord(t, gateDir, "g-t1256", old, gate.VerdictGreen, time.Now())
+	rec, err := worktree.RequireLandingGate(base, "jv-t1256", gateDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := git(t, base, "rev-parse", "master")
+	// Move the branch after RequireLandingGate, just as a concurrent writer
+	// can while the old integrate process waits for the landing lock.
+	writeFile(t, filepath.Join(wt, "a.txt"), "second\n")
+	git(t, wt, "add", "a.txt")
+	git(t, wt, "commit", "-q", "-m", "advanced after gate")
+	advanced := git(t, wt, "rev-parse", "HEAD")
+	_, err = worktree.Integrate(&worktree.IntegrateArgs{
+		BaseWorkdir: base, AgentName: "jv-t1256", LandingGate: rec,
+	})
+	if !errors.Is(err, worktree.ErrStaleGateTip) || !strings.Contains(err.Error(), "gate measured a stale tip") {
+		t.Fatalf("expected stale gate refusal, got %v", err)
+	}
+	if got := git(t, base, "rev-parse", "master"); got != before {
+		t.Fatalf("stale gate moved master from %s to %s (worker %s)", before, got, advanced)
+	}
 }

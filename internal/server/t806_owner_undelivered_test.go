@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,6 +92,39 @@ func TestT806OwnerRefusalIsUndeliveredThenDeliveredOnce(t *testing.T) {
 	s.drainOverseerNotes()
 	if extra := sendErrors(drainFrames()); len(extra) != 0 || len(delivered) != 1 {
 		t.Fatalf("duplicate delivery/announcement: %q %v", extra, delivered)
+	}
+}
+
+// 🎯T1306: a fleet note refused for a reason other than busy is retried on
+// its own, not left for some unrelated event to drain.
+func TestT1306RefusedFleetNoteIsRetried(t *testing.T) {
+	s := &Server{}
+	s.notifyRetryDelay = 10 * time.Millisecond
+	refuse := true
+	delivered := make(chan string, 4)
+	var mu sync.Mutex
+	s.notifySender = func(text string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if refuse {
+			return fmt.Errorf("claude process not running")
+		}
+		delivered <- text
+		return nil
+	}
+	if err := s.SendToOverseer("[worker] fleet note"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	refuse = false
+	mu.Unlock()
+	select {
+	case got := <-delivered:
+		if !strings.Contains(got, "fleet note") {
+			t.Fatalf("delivered %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a fleet note refused 'process not running' was never retried")
 	}
 }
 

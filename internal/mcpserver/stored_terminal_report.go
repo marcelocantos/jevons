@@ -39,6 +39,11 @@ func NewReportStoreLooksSatisfied(stateDir string) func(name string) string {
 		if stateDir == "" || name == "" {
 			return ""
 		}
+		if rec, err := agentreport.LatestDeclared(stateDir, name); err == nil {
+			if t := strings.TrimSpace(rec.Text); t != "" {
+				return t
+			}
+		}
 		rec, err := agentreport.Latest(stateDir, name)
 		if err != nil || strings.TrimSpace(rec.Text) == "" {
 			return ""
@@ -77,7 +82,10 @@ func (s *Server) workerIdleSuppressReason(name string) (suppress bool, reason st
 	if s.flightState(name) == FlightInFlight {
 		return true, "turn_in_flight"
 	}
-	report := s.latestStoredReport(name)
+	report := s.latestDeclaredStoredReport(name)
+	if report == "" {
+		report = s.latestStoredReport(name)
+	}
 	// 🎯T938: the parent already holds a declared blocker; once an
 	// owner/parent message cleared it, the seat is ordinary open-mission work
 	// again and its next idle is news to the parent.

@@ -33,7 +33,7 @@ func TestT574BounceRequiredSetIsDocumented(t *testing.T) {
 			t.Errorf("bounce-required field %q in RestartOnlyDiff is not in docs/design/hot-config.md", m[1])
 		}
 	}
-	for _, want := range []string{"`disabled`", "`mcp owner map`", "🎯T392.5", "JEVONS_CONFIG_BOUNCE"} {
+	for _, want := range []string{"`disabled`", "🎯T1133", "🎯T392.5", "JEVONS_CONFIG_BOUNCE"} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("docs/design/hot-config.md missing %q", want)
 		}

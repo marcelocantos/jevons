@@ -5,12 +5,15 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/seatprovider"
+	"github.com/marcelocantos/jevons/internal/seatstate"
+	"github.com/marcelocantos/jevons/internal/thread"
 )
 
 // ModelSwitchHow names how a landed model change was made. Stable for the
@@ -70,6 +73,19 @@ func (f *Claudia) SwitchModel(name string, to claudia.Provider, model string, fo
 	if err := providerSwitchRefusal(*def, target); err != nil {
 		return claudia.SeatSwitch{}, fmt.Errorf("switch %q: %w", name, err)
 	}
+	// The destination's exclusive home must exist before changing the live
+	// provider or rewriting a stopped seat. Otherwise a failed materialization
+	// returns an error after the seat has already moved and cannot resume.
+	if seatprovider.Resolve(target).Plan == seatprovider.Grok &&
+		seatprovider.Resolve(def.Provider).Plan != seatprovider.Grok &&
+		strings.TrimSpace(def.SessionID) != "" {
+		if err := MaterializeExclusiveGrokHome(def.SessionID); err != nil {
+			return claudia.SeatSwitch{}, fmt.Errorf("switch %q: grok home: %w", name, err)
+		}
+	}
+	if err := f.restampSeatMCPServers(name); err != nil {
+		return claudia.SeatSwitch{}, err
+	}
 	var sw claudia.SeatSwitch
 	var err error
 	if f.switchModel != nil {
@@ -103,15 +119,57 @@ func (f *Claudia) SwitchModel(name string, to claudia.Provider, model string, fo
 }
 
 // PinModel switches a fleet agent's model on its own provider (🎯T285.2,
-// 🎯T617). It is [Claudia.SwitchModel] with the provider left alone; a
-// seat already on the model is a no-op, not an error.
+// 🎯T617). A capable live seat moves through [Claudia.SwitchModel] — the
+// in-place claudia path that never stops the process or reloads a session.
+// Providers without [claudia.CapabilityModelSwitch] fall back to
+// stop-then-relaunch only when the live switch reports unsupported, and a
+// failed relaunch restores the seat on its previous model.
 func (f *Claudia) PinModel(name, model string) error {
+	if f == nil || f.reg == nil {
+		return fmt.Errorf("pin model: no agent registry")
+	}
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return fmt.Errorf("pin model %q: model is required", name)
 	}
-	if _, err := f.SwitchModel(name, "", model, false); err != nil {
+	def := f.reg.Def(name)
+	if def == nil {
+		return fmt.Errorf("pin model: no agent %q", name)
+	}
+	if strings.TrimSpace(def.Model) == model {
+		return nil
+	}
+	if _, err := f.SwitchModel(name, "", model, false); err == nil {
+		return nil
+	} else if !isUnsupportedCapability(err) || !seatProcessAlive(f.reg, name) {
 		return fmt.Errorf("pin model: %w", err)
 	}
+	prev := *def
+	f.reg.Stop(name)
+	if err := f.Launch(&thread.Thread{ID: name, Model: model}); err != nil {
+		if regErr := f.reg.Register(prev); regErr != nil {
+			return fmt.Errorf("pin model %q: relaunch: %w (and restoring the registry failed: %v)",
+				name, err, regErr)
+		}
+		if _, relaunchErr := f.reg.Launch(prev.Name); relaunchErr != nil {
+			return fmt.Errorf("pin model %q: relaunch: %w (and restoring the seat failed: %v)",
+				name, err, relaunchErr)
+		}
+		return fmt.Errorf("pin model %q: relaunch: %w (seat restored on %s)", name, err, prev.Model)
+	}
 	return nil
+}
+
+// isUnsupportedCapability reports whether err is claudia declining because
+// the provider cannot do the thing, as opposed to trying and failing.
+func isUnsupportedCapability(err error) bool {
+	var capErr *claudia.CapabilityError
+	return errors.As(err, &capErr)
+}
+
+// seatProcessAlive is whether the registry still holds a live handle for
+// name. Seat-truth rows can lag the process (stubs, direct mode); the
+// fallback relaunch path keys off the handle, not seatstate alone.
+func seatProcessAlive(reg *claudia.Registry, name string) bool {
+	return seatstate.RegistrySeatProcessAlive(reg, name)
 }

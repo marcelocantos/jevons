@@ -13,6 +13,8 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // 🎯T690 — a seat whose policy denies jevons_agent_send still delivers a
@@ -103,8 +105,10 @@ func TestT690DeniedSendStillDeliversTerminalReportToParent(t *testing.T) {
 		t.Fatalf("stored report missing payload: %q", got.Text)
 	}
 
-	if len(inbox.texts) != 1 {
-		t.Fatalf("overseer deliveries=%d want 1 (T61 preserved): %v", len(inbox.texts), inbox.texts)
+	// The parent is a running product owner, which acts on the report, so
+	// the overseer gets no second copy (2026-10-23 overseer turn burn).
+	if len(inbox.texts) != 0 {
+		t.Fatalf("overseer deliveries=%d want 0 when the parent PO is running: %v", len(inbox.texts), inbox.texts)
 	}
 }
 
@@ -144,5 +148,47 @@ func TestT690OverseerParentIsNotDoubleDelivered(t *testing.T) {
 	})
 	if len(inbox.texts) != 1 {
 		t.Fatalf("overseer-parented worker deliveries=%d want 1: %v", len(inbox.texts), inbox.texts)
+	}
+}
+
+// A finish-report reaps the worker before its last turn-end notify runs, so
+// the registry row is gone when the report arrives. The parent recorded on
+// the removal still decides that a running PO owns it: the overseer gets no
+// copy (2026-10-27: jv-t1229-parked-ambient's finish cost an overseer turn).
+func TestT690ReapedWorkerUnderRunningPOSkipsOverseerCopy(t *testing.T) {
+	s, _, inbox, _ := t690Server(t)
+	s.SetRemovalAccount(fleetlog.New(nil))
+	sink := s.agentEventSink(t690Worker)
+	ok, err := s.RemovalAccount().Remove(s.registry, t690Worker, fleetlog.Removal{
+		Reason: fleetlog.ReasonReapDone,
+		Detail: "reaped on a finished-work report (finished_work)",
+	})
+	if err != nil || !ok {
+		t.Fatalf("reap: ok=%v err=%v", ok, err)
+	}
+	if s.registry.Def(t690Worker) != nil {
+		t.Fatal("worker still registered after reap")
+	}
+	sink(claudia.Event{Type: "assistant", Text: t690ScoutReport(), StopReason: "end_turn"})
+	if len(inbox.texts) != 0 {
+		t.Fatalf("overseer got %d copies of a reaped PO worker's report: %v", len(inbox.texts), inbox.texts)
+	}
+}
+
+// The overseer copy remains the net when the parent PO is known to be down.
+func TestT690DeadParentPOStillCopiesOverseer(t *testing.T) {
+	s, po, inbox, _ := t690Server(t)
+	po.alive = false
+	s.Seats().Observe(seatstate.Observation{
+		Name: t690Parent, Alive: seatstate.No, LocalAlive: seatstate.No,
+		QueueDepth: seatstate.QueueUnknown, Source: "test",
+	})
+	if got := s.seatState(t690Parent).Alive; got != seatstate.No {
+		t.Fatalf("fixture: parent liveness = %v, want No", got)
+	}
+	sink := s.agentEventSink(t690Worker)
+	sink(claudia.Event{Type: "assistant", Text: t690ScoutReport(), StopReason: "end_turn"})
+	if len(inbox.texts) != 1 {
+		t.Fatalf("overseer deliveries=%d want 1 when the parent PO is down: %v", len(inbox.texts), inbox.texts)
 	}
 }

@@ -273,3 +273,71 @@ func TestT796NoBrokerRefusesReadopt(t *testing.T) {
 		t.Fatalf("err=%v adopts=%d; without a broker there is nothing to adopt from and no fallback", err, f.adopts.Load())
 	}
 }
+
+func TestT796ConfirmBrokerGrantReadoptsOnStaleGrant(t *testing.T) {
+	f, r := newFakeSeat()
+	DefaultReadopter = r
+	t.Cleanup(func() { DefaultReadopter = nil })
+	pa := brokerAvailable
+	brokerAvailable = func() bool { return true }
+	t.Cleanup(func() { brokerAvailable = pa })
+	calls := 0
+	oldProbe := grantProbe
+	t.Cleanup(func() { grantProbe = oldProbe })
+	grantProbe = func(context.Context, *claudia.Agent) error {
+		calls++
+		if calls == 1 {
+			return agenterr.NoteBrokerGrant(notOwnerErr())
+		}
+		return nil
+	}
+	stale := f.cur
+	fresh, err := ConfirmBrokerGrant(context.Background(), "jevons", stale)
+	if err != nil {
+		t.Fatalf("ConfirmBrokerGrant: %v", err)
+	}
+	if fresh == stale || fresh == nil {
+		t.Fatal("expected a freshly adopted handle after not_owner on the grant probe")
+	}
+	if f.adopts.Load() != 1 {
+		t.Fatalf("adopts=%d want 1", f.adopts.Load())
+	}
+}
+
+func TestT796ConfirmBrokerGrantSkipsProbeWhenBrokerSilent(t *testing.T) {
+	f, r := newFakeSeat()
+	DefaultReadopter = r
+	t.Cleanup(func() { DefaultReadopter = nil })
+	pa := brokerAvailable
+	brokerAvailable = func() bool { return false }
+	t.Cleanup(func() { brokerAvailable = pa })
+	calls := 0
+	oldProbe := grantProbe
+	t.Cleanup(func() { grantProbe = oldProbe })
+	grantProbe = func(context.Context, *claudia.Agent) error {
+		calls++
+		return agenterr.NoteBrokerGrant(notOwnerErr())
+	}
+	proc := f.cur
+	fresh, err := ConfirmBrokerGrant(context.Background(), "jevons", proc)
+	if err != nil || fresh != proc || calls != 0 || f.adopts.Load() != 0 {
+		t.Fatalf("err=%v fresh=%p proc=%p probe_calls=%d adopts=%d", err, fresh, proc, calls, f.adopts.Load())
+	}
+}
+
+func TestT796ConfirmBrokerGrantNoOpWhenGrantHeld(t *testing.T) {
+	f, r := newFakeSeat()
+	DefaultReadopter = r
+	t.Cleanup(func() { DefaultReadopter = nil })
+	pa := brokerAvailable
+	brokerAvailable = func() bool { return true }
+	t.Cleanup(func() { brokerAvailable = pa })
+	oldProbe := grantProbe
+	t.Cleanup(func() { grantProbe = oldProbe })
+	grantProbe = func(context.Context, *claudia.Agent) error { return nil }
+	proc := f.cur
+	fresh, err := ConfirmBrokerGrant(context.Background(), "jevons", proc)
+	if err != nil || fresh != proc || f.adopts.Load() != 0 {
+		t.Fatalf("err=%v fresh=%p proc=%p adopts=%d", err, fresh, proc, f.adopts.Load())
+	}
+}

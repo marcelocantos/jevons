@@ -4,12 +4,15 @@
 package gate_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/jevons/internal/gate"
 )
@@ -260,4 +263,44 @@ func TestGateCLIT461KilledVerdictOnLastShowCheck(t *testing.T) {
 		!strings.Contains(string(checkOut), "KILLED") {
 		t.Fatalf("gate check did not refuse the killed citation:\n%s", checkOut)
 	}
+}
+
+// 🎯T1132: when the wrapper that invoked bin/gate dies, the gate and its
+// command tree stop within 2s and the record is KILLED caller_gone.
+func TestGateCLIT1132CallerGoneKillsOrphanTree(t *testing.T) {
+	bin := gateBinary(t)
+	store := t.TempDir()
+
+	marker := fmt.Sprintf("t1132-%d", time.Now().UnixNano())
+	// Background the gate so killing the shell (as timeout does to its child
+	// chain) leaves an orphan gate process reparented to launchd.
+	script := fmt.Sprintf("%q -quiet -- sh -c 'sleep 300 # %s' & exec sleep 3600", bin, marker)
+	wrapper := exec.Command("sh", "-c", script)
+	wrapper.Env = append(os.Environ(), gate.StoreDirEnv+"="+store)
+	if err := wrapper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if err := syscall.Kill(wrapper.Process.Pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	_ = wrapper.Wait()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var lastOut string
+	for time.Now().Before(deadline) {
+		code, out := runGate(t, store, "last")
+		lastOut = out
+		if strings.Contains(out, "KILLED") && strings.Contains(out, "caller_gone") {
+			if code == 0 {
+				t.Fatalf("gate last exited 0 for caller_gone:\n%s", out)
+			}
+			if procs, err := exec.Command("pgrep", "-f", marker).Output(); err == nil && len(strings.TrimSpace(string(procs))) > 0 {
+				t.Fatalf("gate recorded caller_gone but command tree still alive: %s", procs)
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("gate did not record KILLED caller_gone within 5s; last=\n%s", lastOut)
 }

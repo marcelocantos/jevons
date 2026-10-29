@@ -36,7 +36,9 @@ func (s *suite) isolateDaemonEnv() []string {
 			strings.HasPrefix(entry, "JEVONS_SPOOL_DIR=") ||
 			strings.HasPrefix(entry, "CLAUDIA_OMP_SPOOL_DIR=") ||
 			strings.HasPrefix(entry, "XDG_STATE_HOME=") ||
-			strings.HasPrefix(entry, "CLAUDIA_OMP_NO_REFRESH=") {
+			strings.HasPrefix(entry, "CLAUDIA_OMP_NO_REFRESH=") ||
+			strings.HasPrefix(entry, "JEVONS_PLAN_USAGE_FIXTURE=") ||
+			strings.HasPrefix(entry, "JEVONS_LIFELINE=") {
 			continue
 		}
 		env = append(env, entry)
@@ -48,6 +50,7 @@ func (s *suite) isolateDaemonEnv() []string {
 			"CLAUDIA_OMP_SOCKET="+filepath.Join(filepath.Dir(s.brokerSocket), "omp.sock"))
 	}
 	env = append(env,
+		"JEVONS_LIFELINE=stdin", // 🎯T1294: stop when the suite is gone
 		"XDG_STATE_HOME="+s.stateDir,
 		"JEVONS_SPOOL_DIR="+filepath.Join(s.stateDir, "spool"),
 		"CLAUDIA_OMP_SPOOL_DIR="+filepath.Join(s.stateDir, "spool"),
@@ -55,19 +58,18 @@ func (s *suite) isolateDaemonEnv() []string {
 		// until a journey writes the fault file.
 		"JEVONS_TEST_FAULTS=1",
 	)
-	// 🎯T625.6: hermetic plan feed; the journey's own daemonEnv follows
-	// and, being later, overrides it. 🎯T940 forces NO_REFRESH after that
-	// so a journey cannot clear it.
-	planEnv, err := defaultPlanFixtureEnv(s.stateDir, string(s.provider))
-	if err != nil {
-		panic(fmt.Sprintf("isolate plan fixture: %v", err))
-	}
-	env = append(env, planEnv)
+	// 🎯T1234: no default plan fixture. jevonsd refuses the retired
+	// JEVONS_PLAN_USAGE_FIXTURE at startup, so injecting it here stopped
+	// every isolate before listen. Plan usage reaches the isolate through
+	// its control replica (the isolated broker's own readings). 🎯T940
+	// forces NO_REFRESH after the journey's env so a journey cannot clear it.
 	for _, entry := range s.daemonEnv {
 		// 🎯T940: the isolate daemon links Claudia and calls plan login
 		// in-process. An inherited or per-journey empty value must not
 		// win, or an expired seat rotates the shared Keychain item.
-		if strings.HasPrefix(entry, "CLAUDIA_OMP_NO_REFRESH=") {
+		if strings.HasPrefix(entry, "CLAUDIA_OMP_NO_REFRESH=") ||
+			strings.HasPrefix(entry, "JEVONS_PLAN_USAGE_FIXTURE=") ||
+			strings.HasPrefix(entry, "JEVONS_LIFELINE=") {
 			continue
 		}
 		env = append(env, entry)
@@ -91,6 +93,11 @@ func (s *suite) startDaemon() error {
 		"-bind", "127.0.0.1",
 		"-workdir", s.workdir,
 	)
+	lifeline, err := lifelineReader()
+	if err != nil {
+		return fmt.Errorf("isolate lifeline: %w", err)
+	}
+	cmd.Stdin = lifeline
 	cmd.Stdout = s.logFile
 	cmd.Stderr = s.logFile
 	cmd.Dir = s.workdir

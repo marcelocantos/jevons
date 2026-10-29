@@ -231,3 +231,32 @@ func TestWarningSaysWhatToDoWithOrphanedRows(t *testing.T) {
 		}
 	}
 }
+
+func TestStagedLedgerSyntaxRefusesMalformedYAML(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		v := Decide(&Request{
+			IndexFile: "/r/.git/next-index-9.lock", Staged: []string{SharedLedger}, Disabled: disabled,
+			Contents: []FileContent{{Path: SharedLedger, Head: []byte(seedLedger), Staged: []byte("targets: [\n")}},
+		})
+		if !v.Refused || !strings.Contains(v.Message, "invalid staged bullseye.yaml YAML") {
+			t.Fatalf("malformed staged YAML allowed (disabled=%v): %+v", disabled, v)
+		}
+	}
+}
+
+func TestStagedLedgerSyntaxAllowsRepairAndIgnoresUnstagedContent(t *testing.T) {
+	v := Decide(&Request{
+		IndexFile: "/r/.git/next-index-9.lock", Staged: []string{SharedLedger},
+		Contents: []FileContent{{Path: SharedLedger, Head: []byte("targets: [\n"), Staged: []byte(seedLedger)}},
+	})
+	if v.Refused {
+		t.Fatalf("syntax repair refused: %+v", v)
+	}
+	v = Decide(&Request{
+		IndexFile: "/r/.git/next-index-9.lock", Staged: []string{"notes.txt"},
+		Contents: []FileContent{{Path: SharedLedger, Staged: []byte("targets: [\n")}},
+	})
+	if v.Refused {
+		t.Fatalf("unrelated path refused because of unstaged content: %+v", v)
+	}
+}

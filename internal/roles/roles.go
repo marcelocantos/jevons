@@ -144,6 +144,21 @@ func StripDoctrine(text, roleBody string) (mission string, ok bool) {
 	return strings.TrimLeft(rest[len(body):], " \t\r\n"), true
 }
 
+// RepoRelPath is the repository-relative path shown in the T425 identity
+// header for a resolved role definition.
+func RepoRelPath(d Def) string {
+	if p := strings.TrimSpace(d.Path); p != "" {
+		if strings.HasPrefix(p, "builtin/") {
+			return "internal/roles/" + p
+		}
+		return p
+	}
+	if d.Name != "" {
+		return "internal/roles/builtin/" + d.Name + ".md"
+	}
+	return ""
+}
+
 // DeleteRefused explains why a role cannot be removed.
 func DeleteRefused(name string, liveInstances int, force bool) error {
 	n := Normalize(name)

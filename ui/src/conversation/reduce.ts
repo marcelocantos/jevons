@@ -19,6 +19,7 @@ import {
   phaseSampleFromUnknown,
   type OverseerPhaseSample,
 } from './overseerPhase';
+import { applyProvisionalWire, isProvisionalWire, type ProvisionalMap } from './provisional';
 
 export type ConversationMeta = {
   older?: number;
@@ -45,6 +46,8 @@ export type ConversationState = {
   error: string | null;
   ready: boolean;
   stream: StreamJoin;
+  /** Live TUI preview suffix per stream_id (🎯T584). */
+  provisionalByStream: ProvisionalMap;
 };
 
 export const emptyConversation = (): ConversationState => ({
@@ -53,6 +56,7 @@ export const emptyConversation = (): ConversationState => ({
   error: null,
   ready: false,
   stream: emptyStream(),
+  provisionalByStream: {},
 });
 
 function rec(v: unknown): Record<string, unknown> {
@@ -190,9 +194,23 @@ function applyPhaseFromBody(state: ConversationState, body: unknown): Conversati
   };
 }
 
+function applyProvisionalBody(state: ConversationState, body: unknown): ConversationState {
+  if (!isProvisionalWire(body)) return state;
+  const applied = applyProvisionalWire(state.provisionalByStream, body);
+  let next: ConversationState = { ...state, provisionalByStream: applied.provisionalByStream };
+  if (applied.faultFrame) {
+    next = { ...next, frames: [...next.frames, applied.faultFrame] };
+  }
+  return next;
+}
+
 function applyWindowBodies(state: ConversationState, bodies: unknown[]): ConversationState {
   let next = state;
   for (const b of bodies) {
+    if (isProvisionalWire(b)) {
+      next = applyProvisionalBody(next, b);
+      continue;
+    }
     if (isWindowEvent(b)) next = applyWindowBody(next, b);
     else {
       const folded = applyTranscriptFrame(next.frames, next.stream, b);
@@ -220,6 +238,9 @@ export function applyConversationEvent(
     return out;
   }
   if (env.t === 'frame') {
+    if (isProvisionalWire(env.body)) {
+      return applyPhaseFromBody(applyProvisionalBody(state, env.body), env.body);
+    }
     if (isWindowEvent(env.body)) {
       return applyPhaseFromBody(applyWindowBody(state, env.body), env.body);
     }

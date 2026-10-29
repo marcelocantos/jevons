@@ -68,7 +68,7 @@ func TestT390_1_5_1SessionZeroRefusesDest(t *testing.T) {
 	got, ok := PickPlanDest([]DestCand{
 		{Provider: "grok", Backend: grok, Load: 1},
 		{Provider: "claude", Backend: claude, Load: 2},
-	}, now, th)
+	}, now, th, nil)
 	if !ok || got != "claude" {
 		t.Fatalf("PickPlanDest must skip session-dead grok, got %q ok=%v", got, ok)
 	}
@@ -120,7 +120,7 @@ func TestT390_1_5_1SessionRemainingLowMintOnly(t *testing.T) {
 	got, ok := PickPlanDest([]DestCand{
 		{Provider: "grok", Backend: grok, Load: 0},
 		{Provider: "claude", Backend: claude, Load: 5},
-	}, now, th)
+	}, now, th, nil)
 	if !ok || got != "claude" {
 		t.Fatalf("PickPlanDest skips remaining-low grok: dest=%q ok=%v", got, ok)
 	}

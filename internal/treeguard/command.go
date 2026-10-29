@@ -38,7 +38,12 @@ const (
 	FormInPlace       = "in-place editor (-i)"
 	FormTee           = "tee"
 	FormGitRestore    = "git checkout/restore"
+	FormGitStashPush  = "git stash (push/save/pop/apply/bare)"
 	FormGitDiscardAll = "git reset/clean (whole-tree discard)"
+	FormGitCommit      = "git commit"
+	FormGoBuildOut     = "go build/install -o"
+	FormGoBuildCwd     = "go build/install (cwd output)"
+	FormMake           = "make"
 	FormCopyDest      = "copy/move destination"
 	FormTruncate      = "truncate"
 	FormPatch         = "patch"
@@ -81,6 +86,23 @@ var scriptWrite = regexp.MustCompile(
 // quotedLiteral pulls string literals out of interpreter program text, where
 // the path is data rather than a shell word.
 var quotedLiteral = regexp.MustCompile(`['"]([^'"\n]{2,})['"]`)
+
+// GitCommandMutatesSharedCloneRefs reports whether command appears to run a
+// git verb that moves refs or rewrites the working tree in its invocation
+// directory (🎯T1151.4). The caller still resolves -C / cwd against the
+// shared clone before refusing.
+func GitCommandMutatesSharedCloneRefs(command string) bool {
+	if _, ok, _ := DetectBranchCheckout(command); ok {
+		return true
+	}
+	for _, w := range ScanCommand(command) {
+		switch w.Form {
+		case FormGitCommit, FormGitDiscardAll, FormGitRestore:
+			return true
+		}
+	}
+	return false
+}
 
 // ScanCommand reports every path the command appears to mutate. Paths are
 // returned as written; the caller resolves and filters them against the
@@ -131,6 +153,10 @@ func scanSegment(toks []token, heredoc string, out *[]CommandWrite) {
 		}
 	case cmd == "git":
 		scanGit(args, out)
+	case cmd == "go":
+		scanGoWrite(args, out)
+	case cmd == "make":
+		add(out, ".", FormMake)
 	case slices.Contains(destOnlyWriters, cmd):
 		if p := positional(args); len(p) >= 2 {
 			add(out, p[len(p)-1], FormCopyDest)
@@ -203,7 +229,7 @@ func DetectBranchCheckout(command string) (ref string, ok, definite bool) {
 		if len(words) < 2 || filepath.Base(words[0]) != "git" {
 			continue
 		}
-		args := words[1:]
+		args := gitArgsAfterGlobalOpts(words[1:])
 		var sub string
 		var rest []string
 		var createFlag bool
@@ -252,7 +278,48 @@ func DetectBranchCheckout(command string) (ref string, ok, definite bool) {
 // single sentinel write (FormGitDiscardAll, path "*"); the caller resolves
 // what is actually at risk via `git diff` against the real working tree,
 // since this recognizer is pure and has no filesystem access.
+// gitArgsAfterGlobalOpts drops leading `git -C <dir>` pairs so subcommand
+// parsing sees `reset` rather than the directory path (🎯T1151.4).
+func gitArgsAfterGlobalOpts(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-C" && i+1 < len(args) {
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
+}
+
+func scanGoWrite(args []string, out *[]CommandWrite) {
+	if len(args) == 0 {
+		return
+	}
+	switch args[0] {
+	case "build", "install":
+	default:
+		return
+	}
+	rest := args[1:]
+	if o, ok := goFlagO(rest); ok {
+		add(out, o, FormGoBuildOut)
+		return
+	}
+	add(out, ".", FormGoBuildCwd)
+}
+
+func goFlagO(args []string) (path string, ok bool) {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-o" && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
 func scanGit(args []string, out *[]CommandWrite) {
+	args = gitArgsAfterGlobalOpts(args)
 	var sub string
 	var rest []string
 	for _, a := range args {
@@ -271,8 +338,8 @@ func scanGit(args []string, out *[]CommandWrite) {
 			add(out, "*", FormGitDiscardAll)
 			return
 		}
-		// A mixed/soft reset only moves HEAD/index; it does not touch
-		// working-tree content, so nothing here is at risk of discard.
+		// Mixed/soft reset mutates HEAD/index (🎯T1151.6 foreign-clone guard).
+		add(out, "*", FormGitCommit)
 	case "clean":
 		if hasForceFlag(rest) && len(positional(rest)) == 0 {
 			add(out, "*", FormGitDiscardAll)
@@ -281,11 +348,46 @@ func scanGit(args []string, out *[]CommandWrite) {
 		for _, a := range positional(rest) {
 			add(out, a, FormGitRestore)
 		}
-	case "checkout", "restore", "stash":
+	case "checkout", "restore":
 		for _, a := range positional(rest) {
 			add(out, a, FormGitRestore)
 		}
+	case "commit", "merge", "cherry-pick", "rebase", "am", "pull", "switch", "push", "tag":
+		add(out, "*", FormGitCommit)
+	case "stash":
+		if stashWouldPush(rest) {
+			add(out, "*", FormGitStashPush)
+		}
 	}
+}
+
+// stashWouldPush reports whether a `git stash` invocation must be refused in the
+// shared clone (🎯T1134 / 🎯T1149): push/save/pop/apply, bare `git stash`, or
+// flag-only forms like `git stash -m msg` (no subcommand). list/show and
+// stack-only verbs are not covered here.
+func stashWouldPush(args []string) bool {
+	pos := positional(args)
+	if len(pos) == 0 {
+		return true
+	}
+	sub := pos[0]
+	if !stashSubcommands[sub] {
+		// First positional is not a subcommand (e.g. `git stash -m msg` lexes
+		// the message as a positional) — still the default push shape.
+		return true
+	}
+	switch sub {
+	case "push", "save", "pop", "apply":
+		return true
+	default:
+		return false
+	}
+}
+
+var stashSubcommands = map[string]bool{
+	"push": true, "save": true, "pop": true, "apply": true,
+	"list": true, "show": true, "drop": true, "branch": true,
+	"clear": true, "create": true, "store": true, "export": true, "import": true,
 }
 
 // hasAnyFlag reports whether args contains any of the named long flags,
@@ -520,4 +622,76 @@ func splitHeredocs(command string) (code, body string) {
 		}
 	}
 	return strings.Join(codeLines, "\n"), strings.Join(bodyLines, "\n")
+}
+
+
+// GitActingDir reports where the last `git` invocation in command runs,
+// tracking leading `cd` segments and `git -C <dir>` (🎯T1188). workDirToken
+// is empty when git runs in startDir; otherwise it is the last `cd` target or
+// an explicit `-C` path (which wins over cd for that git invocation).
+func GitActingDir(command, startDir string) (dir string, ok bool) {
+	code, _ := splitHeredocs(command)
+	cdDir := ""
+	var gitDir string
+	sawGit := false
+	for _, seg := range segments(lex(code)) {
+		redirTarget := make(map[int]bool)
+		for i, t := range seg {
+			if t.kind == tokRedirOut && i+1 < len(seg) && seg[i+1].kind == tokWord {
+				redirTarget[i+1] = true
+			}
+		}
+		words := stripPrefixes(wordsOf(seg, redirTarget))
+		if len(words) >= 2 && words[0] == "cd" {
+			if args := positional(words[1:]); len(args) > 0 {
+				cdDir = args[len(args)-1]
+			}
+			continue
+		}
+		if len(words) == 0 || filepath.Base(words[0]) != "git" {
+			continue
+		}
+		sawGit = true
+		gitDir = ""
+		for i := 1; i < len(words); i++ {
+			if words[i] == "-C" && i+1 < len(words) {
+				gitDir = words[i+1]
+				i++
+			}
+		}
+		if gitDir == "" {
+			gitDir = cdDir
+		}
+	}
+	if !sawGit {
+		return "", false
+	}
+	if gitDir == "" {
+		return startDir, true
+	}
+	return gitDir, true
+}
+
+// GitWorkDirFromCommand returns the directory a `git` invocation runs in when
+// the command uses `-C <dir>`. Empty means unknown (caller uses seat root).
+func GitWorkDirFromCommand(command string) string {
+	code, _ := splitHeredocs(command)
+	for _, seg := range segments(lex(code)) {
+		redirTarget := make(map[int]bool)
+		for i, t := range seg {
+			if t.kind == tokRedirOut && i+1 < len(seg) && seg[i+1].kind == tokWord {
+				redirTarget[i+1] = true
+			}
+		}
+		words := stripPrefixes(wordsOf(seg, redirTarget))
+		if len(words) == 0 || filepath.Base(words[0]) != "git" {
+			continue
+		}
+		for i := 1; i < len(words); i++ {
+			if words[i] == "-C" && i+1 < len(words) {
+				return words[i+1]
+			}
+		}
+	}
+	return ""
 }

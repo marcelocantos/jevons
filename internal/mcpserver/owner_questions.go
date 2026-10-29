@@ -16,6 +16,53 @@ import (
 	"time"
 )
 
+// SetOwnerQuestionSilenceWindow configures the 🎯T404.2 silence-resolution
+// window: how long an unanswered, default-carrying question sits before the
+// sweep retires it as moot and tells the asker to proceed on its default. A
+// non-positive d leaves the zero value, which sweepOwnerQuestionSilence
+// reads as "use config.DefaultOwnerQuestionSilenceWindow".
+func (s *Server) SetOwnerQuestionSilenceWindow(d time.Duration) {
+	if s == nil {
+		return
+	}
+	s.ownerQuestionSilenceWindow = d
+}
+
+// sweepOwnerQuestionSilence retires every open, default-carrying question
+// that has sat unanswered past the configured window, and routes each
+// asker the same "proceed on your default" outcome an explicit op=resolve
+// would send. A question with no default is untouched and keeps its
+// STALLS mark regardless of age (🎯T404.2). Throttled to once a minute so
+// a busy fleet pass does not re-walk the store on every tick.
+func (s *Server) sweepOwnerQuestionSilence(now time.Time) {
+	if s == nil || strings.TrimSpace(s.ownerQuestionsDir) == "" {
+		return
+	}
+	if !s.lastOwnerQuestionSilenceSweep.IsZero() && now.Sub(s.lastOwnerQuestionSilenceSweep) < time.Minute {
+		return
+	}
+	s.lastOwnerQuestionSilenceSweep = now
+	window := s.ownerQuestionSilenceWindow
+	if window <= 0 {
+		window = 24 * time.Hour // config.DefaultOwnerQuestionSilenceWindow
+	}
+	st := ownerquestionview.New(s.ownerQuestionsDir)
+	resolved, err := st.ResolveSilence(now, window)
+	if err != nil {
+		return
+	}
+	for _, r := range resolved {
+		q, ferr := st.Find(r.Identity)
+		if ferr != nil {
+			continue
+		}
+		note := "proceeded on default: " + r.Default
+		s.routeQuestionOutcome(s.overseerName(), q, ownerquestionview.Moot, note)
+		key := q.Identity.Repo + "#" + q.Identity.Target + "#" + q.Identity.ID
+		_ = ownerquestions.New(s.ownerQuestionsDir).Resolve(key)
+	}
+}
+
 // SetOwnerQuestionsDir exposes the durable cross-repo question index. This is
 // intentionally a query/intake surface, not T404's future Q&A cockpit UX.
 func (s *Server) SetOwnerQuestionsDir(dir string) {
@@ -23,6 +70,7 @@ func (s *Server) SetOwnerQuestionsDir(dir string) {
 		return
 	}
 	s.ownerQuestionsDir = dir
+	s.registerReleaseAuthorizationTool()
 	s.addTool(mcp.NewTool("jevons_owner_questions",
 		mcp.WithDescription("Durable cross-repo owner questions (🎯T404). op=list (default) returns open decisions from ALL repos with each one's silence_outcome — what happens if the owner never answers; op=all includes answered/superseded/moot history. op=record requires explicit typed question identity, asker and answer route, and should carry default (what the asker does on silence) and options (closed-form choices, '|'-separated). op=answer closes that exact version as answered and the DAEMON routes the answer to the asking seat — do not relay it by hand; the result says where it went. op=resolve state=moot|superseded retires a question that no longer needs an answer and tells the asker so. Off-frontier bullseye targets are NOT inferred to be owner questions."),
 		mcp.WithString("op", mcp.Description("list | all | record | answer | resolve")),
@@ -42,10 +90,11 @@ func (s *Server) SetOwnerQuestionsDir(dir string) {
 	), s.handleOwnerQuestions)
 }
 func (s *Server) ownerQuestionStore() (*ownerquestionview.Store, error) {
-	if strings.TrimSpace(s.ownerQuestionsDir) == "" {
+	dir := s.effectiveOwnerQuestionsDir()
+	if dir == "" {
 		return nil, fmt.Errorf("owner questions state_dir not configured")
 	}
-	return ownerquestionview.New(s.ownerQuestionsDir), nil
+	return ownerquestionview.New(dir), nil
 }
 
 // canonicalOwnerQuestionRepo refuses nonexistent paths and normalizes git
@@ -80,7 +129,7 @@ func findOwnerQuestion(st *ownerquestionview.Store, id ownerquestionview.Identit
 	id.Repo = shared
 	return st.Find(id)
 }
-func (s *Server) handleOwnerQuestions(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleOwnerQuestions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	st, err := s.ownerQuestionStore()
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -111,11 +160,13 @@ func (s *Server) handleOwnerQuestions(_ context.Context, req mcp.CallToolRequest
 			// SilenceOutcome is the 🎯T404 load-bearing field: what happens
 			// if the owner never answers. Shown on every row, so a question
 			// that stalls its asker is visible as such at a glance.
-			SilenceOutcome string `json:"silence_outcome"`
-			Notification   string `json:"notification"`
-			SpoolPath      string `json:"spool_path,omitempty"`
-			LastError      string `json:"last_error,omitempty"`
-			Delivered      bool   `json:"delivered"`
+			SilenceOutcome string   `json:"silence_outcome"`
+			Notification   string   `json:"notification"`
+			SpoolPath      string   `json:"spool_path,omitempty"`
+			LastError      string   `json:"last_error,omitempty"`
+			Delivered      bool     `json:"delivered"`
+			Sinks          []string `json:"sinks,omitempty"`
+			Reason         string   `json:"notification_reason,omitempty"`
 		}
 		view := make([]displayed, 0, len(rows))
 		for _, q := range rows {
@@ -126,6 +177,8 @@ func (s *Server) handleOwnerQuestions(_ context.Context, req mcp.CallToolRequest
 				d.SpoolPath = n.SpoolPath
 				d.LastError = n.LastError
 				d.Delivered = n.Delivered
+				d.Sinks = n.Sinks
+				d.Reason = n.Reason
 			}
 			view = append(view, d)
 		}
@@ -152,20 +205,25 @@ func (s *Server) handleOwnerQuestions(_ context.Context, req mcp.CallToolRequest
 			if err == nil {
 				id = asked.Identity
 				if op == "answer" {
-					outcomeState = ownerquestionview.Answered
+					if asked.Identity.Target == "release-authorization" {
+						writer, worker := s.releaseWriter(ctx, req)
+						if worker {
+							return mcp.NewToolResultError("release authorization confirmation requires an owner channel, not " + writer), nil
+						}
+					}
 					outcomeNote = strings.TrimSpace(str(a["answer"]))
 					if outcomeNote == "" {
 						return mcp.NewToolResultError("op=answer requires answer"), nil
 					}
-					if len(asked.Options) > 0 && !matchesQuestionOption(asked.Options, outcomeNote) {
-						// Prose is allowed, but a near-miss on a closed-form
-						// option is more likely a typo than a new decision.
-						outcomeNote = outcomeNote + " (free-form; options were " + strings.Join(asked.Options, " | ") + ")"
+					actor := strings.TrimSpace(str(a["actor"]))
+					routedLine, err := s.AnswerOwnerQuestionIdentity(id, outcomeNote, actor)
+					if err != nil {
+						return mcp.NewToolResultError(err.Error()), nil
 					}
-				} else {
-					outcomeState = ownerquestionview.State(str(a["state"]))
-					outcomeNote = str(a["note"])
+					return mcp.NewToolResultText(fmt.Sprintf("Owner question %s/%s/%s@%s answered in durable index\n%s", id.Repo, id.Target, id.ID, id.Version, routedLine)), nil
 				}
+				outcomeState = ownerquestionview.State(str(a["state"]))
+				outcomeNote = str(a["note"])
 				err = st.Resolve(id, outcomeState, outcomeNote)
 			}
 		}

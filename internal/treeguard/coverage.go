@@ -33,9 +33,12 @@ type Coverage struct {
 	Note string
 }
 
-// Providers whose harness carries the PreToolUse/PostToolUse hooks the
-// refusal path is built on.
-var refusingProviders = []string{"claude", "claude-code", "claudecode", "anthropic"}
+// hookRefusingProviders run Claude Code PreToolUse/PostToolUse hooks (🎯T955).
+var hookRefusingProviders = []string{"claude", "claude-code", "claudecode"}
+
+// sidecarRefusingProviders run the OMP sidecar, which refuses in execution.ts
+// before shell (🎯T962 / claudia 🎯T164) — not .claude/settings.json hooks.
+var sidecarRefusingProviders = []string{"anthropic"}
 
 // ProviderCoverage answers what protection a worker on this provider has.
 // An unknown or empty provider is reported as NOT refusing: claiming coverage
@@ -43,15 +46,22 @@ var refusingProviders = []string{"claude", "claude-code", "claudecode", "anthrop
 // an unrecognized harness is exactly the case where that claim would be wrong.
 func ProviderCoverage(provider string) Coverage {
 	p := strings.ToLower(strings.TrimSpace(provider))
-	if slices.Contains(refusingProviders, p) {
+	if slices.Contains(hookRefusingProviders, p) || slices.Contains(sidecarRefusingProviders, p) {
+		note := "shared hot files are compare-and-swap: a stale Write, Edit " +
+			"or recognized shell write (sed -i, redirection, git checkout) is " +
+			"REFUSED before it lands, and anything that gets past that is " +
+			"reported at commit time (🎯T376 / 🎯T391)."
+		if slices.Contains(sidecarRefusingProviders, p) {
+			note = "the OMP sidecar refuses shared-clone branch checkout and " +
+				"mutating shell writes before they run (claudia sidecar pre-exec, " +
+				"🎯T962); anything that gets past that is reported at commit time " +
+				"(🎯T376 / 🎯T391)."
+		}
 		return Coverage{
 			Provider: p,
 			Refuses:  true,
 			Detects:  true,
-			Note: "shared hot files are compare-and-swap: a stale Write, Edit " +
-				"or recognized shell write (sed -i, redirection, git checkout) is " +
-				"REFUSED before it lands, and anything that gets past that is " +
-				"reported at commit time (🎯T376 / 🎯T391).",
+			Note:     note,
 		}
 	}
 	name := p

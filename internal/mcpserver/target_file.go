@@ -4,17 +4,16 @@
 package mcpserver
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/marcelocantos/jevons/internal/bullseyerun"
 	"github.com/marcelocantos/jevons/internal/rsi"
 )
 
@@ -137,14 +136,9 @@ func boolArg(v any) bool {
 	}
 }
 
-// runBullseye shells out to bullseye on PATH. Tests can override.
+// runBullseye shells out through the atomic ledger writer (🎯T1151.2). Tests override.
 var runBullseye = func(args ...string) (string, error) {
-	cmd := exec.Command("bullseye", args...)
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err := cmd.Run()
-	return buf.String(), err
+	return bullseyerun.RunMutation(args...)
 }
 
 // parseBullseyeTrackID extracts the allocated id from bullseye commit output.

@@ -40,6 +40,28 @@ func ReadRegistry(reg *claudia.Registry, name string) State {
 	return State{Name: name, QueueDepth: QueueUnknown, OwnerQueueDepth: QueueUnknown}
 }
 
+// RegistrySeatProcessAlive reports whether the registry still holds a live
+// process for name. Seat-truth wins when a feed has run; when Alive is still
+// unknown (direct/stub tests without a background observer), the live handle
+// is consulted once — the T617 pin-model relaunch fallback keys off this.
+func RegistrySeatProcessAlive(reg *claudia.Registry, name string) bool {
+	if reg == nil {
+		return false
+	}
+	p := reg.Get(name)
+	if p == nil {
+		return false
+	}
+	switch ReadRegistry(reg, name).Alive {
+	case Yes:
+		return true
+	case No:
+		return false
+	default:
+		return p.Alive()
+	}
+}
+
 // ObserveRegistrySeat is a feed at lifecycle boundaries, not a control read.
 // Missing handles do not establish death (the broker can still own the seat).
 func ObserveRegistrySeat(reg *claudia.Registry, name string) {

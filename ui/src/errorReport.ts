@@ -13,6 +13,16 @@
 
 export const MAX_REPORTS_PER_PAGE = 20;
 
+// Chromium reports this when ResizeObserver work cannot finish in one frame.
+// It is not an uncaught exception (🎯T1194 / T949 recurrence on daily path).
+export const BENIGN_RESIZE_OBSERVER_LOOP =
+  'ResizeObserver loop completed with undelivered notifications.';
+
+export function isBenignWindowErrorMessage(message: string): boolean {
+  const m = message.trim();
+  return m === BENIGN_RESIZE_OBSERVER_LOOP || m.includes(BENIGN_RESIZE_OBSERVER_LOOP);
+}
+
 export interface ErrorReport {
   level: 'error';
   msg: 'window.onerror' | 'window.unhandledrejection';
@@ -56,6 +66,10 @@ export function installErrorReport(target: Window = window, post: Post = postToJ
 
   const onError = (e: ErrorEvent) => {
     const { message, stack } = e.error !== undefined && e.error !== null ? describeReason(e.error) : { message: e.message, stack: '' };
+    const text = message || e.message;
+    if (isBenignWindowErrorMessage(text)) {
+      return;
+    }
     report({
       level: 'error',
       msg: 'window.onerror',

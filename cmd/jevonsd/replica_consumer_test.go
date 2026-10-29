@@ -21,7 +21,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/server"
 )
 
-// TestCostGuardConsumesReplicasWithoutSocketPoll runs startCostGuard, the
+// TestCostGuardConsumesReplicasWithoutSocketPoll runs startControlServices, the
 // production caller of OpenReplica, against a real broker process. The
 // guard resolves the broker's control socket the way jevonsd does
 // (CLAUDIA_BROKER_SOCKET), keeps its own control-replica.db, and receives
@@ -74,10 +74,11 @@ func startTestCostGuard(t *testing.T, ctx context.Context, dir string) (*costGua
 	}
 	srv := server.New("test", dir)
 	mcp := mcpserver.New(dir, nil, nil)
-	guard := startCostGuard(ctx, config.Config{
+	replica, guard := startControlServices(ctx, config.Config{
 		StateDir: dir, SessionsDir: dir, OverseerName: "jevons",
 	}, config.NewWatcher(nil), reg, nil, srv, mcp)
-	if guard == nil || guard.collector == nil || guard.replica == nil {
+	t.Cleanup(func() { _ = replica.Close() })
+	if guard == nil || guard.collector == nil || replica == nil || guard.replica != replica {
 		t.Fatal("cost guard did not start with a replica")
 	}
 	return guard, srv, mcp
@@ -94,7 +95,7 @@ func completedFact(seat, call string, seq uint64) claudia.UsageFact {
 
 func requireCalls(t *testing.T, ctx context.Context, guard *costGuard, want int64) {
 	t.Helper()
-	if err := guard.collector.CatchUpReplicas(ctx); err != nil {
+	if _, err := guard.collector.CatchUpReplicas(ctx); err != nil {
 		t.Fatal(err)
 	}
 	got, err := guard.store.StructuredUsage(ctx, time.Unix(0, 0), time.Now().Add(time.Hour))

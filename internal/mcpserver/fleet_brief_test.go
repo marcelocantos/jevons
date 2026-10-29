@@ -44,8 +44,18 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"DECIDABLE-FROM-TASTE",
 		"CoverageMap",
 		"spawn_subagent",
-		"Multi-slice fan-out",
+		// 🎯T511: per-role spawn doctrine moved to role files; universal brief
+		// keeps target-id pointers and injection marker.
+		"Role doctrine injection",
+		"🎯T511",
+		"[Jevons role doctrine]",
+		"t511-fleet-brief-buckets.md",
 		"🎯T111.4",
+		"🎯T155",
+		"🎯T193",
+		"🎯T325.1",
+		"🎯T125",
+		"🎯T129",
 		// 🎯T262.1 frontier = ready set
 		"Frontier = ready set",
 		"🎯T262.1",
@@ -55,46 +65,10 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"engagement",
 		"Anti-pattern",
 		"frontier-as-ready-set.md",
-		"Unattended frontier auto-spawn",
-		"🎯T155",
-		"parent=jevons-po",
-		"needs-owner",
-		"design-discussion",
-		"parked-for-design",
 		"🎯T112",
 		"🎯T67",
 		"🎯T29-class",
-		"🎯T262.5",
-		// 🎯T193 file→spawn same turn
-		"File→spawn same turn",
-		"🎯T193",
-		"Build-plane",
-		"same turn",
-		"named worker",
-		"ledger-only",
-		"target:",
-		"design-gated",
-		"blocked-on-human",
-		"docs-only",
-		// 🎯T325.1 PO proactive-until-empty-then-sleep
-		"PO proactive-until-empty-then-sleep",
-		"🎯T325.1",
-		"until empty or blocked",
-		"one-shot pass",
-		"sleep/idle",
-		"open-mission",
-		"interruptible",
-		"ClassifyPOProactive",
-		"ClassifyFrontierLeaf",
-		"POOpenMissionForProactive",
-		"PO never implements",
-		"🎯T125",
-		"spawn-only for Build work",
-		"instructional doctrine",
-		"Overseer never parents product workers",
-		"🎯T129",
-		"parent=jevons",
-		"jevons-po",
+		"🎯T244",
 		"Filing reflex",
 		"🎯T130",
 		"standing rule",
@@ -260,7 +234,7 @@ func TestFleetStandingBriefFogOfWarScout(t *testing.T) {
 		"scout-report",
 		"fog-known",
 		"InheritLedger",
-		"design-gated",
+		"Design-gated",
 		"parked-for-design",
 		"T460",
 	} {
@@ -281,6 +255,22 @@ func TestFleetStandingBriefPlanDestBandFirst(t *testing.T) {
 	} {
 		if !strings.Contains(FleetStandingBrief, want) {
 			t.Errorf("FleetStandingBrief missing T693 marker %q", want)
+		}
+	}
+}
+
+// 🎯T1151.6: unpublished sibling work goes to that repo's PO, not a replace or sibling clone edit.
+func TestFleetStandingBriefSiblingReplace(t *testing.T) {
+	for _, want := range []string{
+		"Sibling repos and go.mod replaces",
+		"🎯T1151.6",
+		"needs-release",
+		"active-wait",
+		"does not edit that sibling's shared clone",
+		"🎯T448",
+	} {
+		if !strings.Contains(FleetStandingBrief, want) {
+			t.Errorf("FleetStandingBrief missing T1151.6 marker %q", want)
 		}
 	}
 }
@@ -314,6 +304,21 @@ func TestFleetBriefRoutineReportQuiet(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("injected brief missing %q", want)
+		}
+	}
+}
+
+// 🎯T1151.8: sibling live probes build to private paths, not the sibling shared clone.
+func TestFleetStandingBriefSiblingWriteGuard(t *testing.T) {
+	for _, want := range []string{
+		"Sibling shared clone: no writes by any command",
+		"🎯T1151.8",
+		"private path",
+		"isolate broker",
+		"never",
+	} {
+		if !strings.Contains(FleetStandingBrief, want) {
+			t.Errorf("FleetStandingBrief missing T1151.8 marker %q", want)
 		}
 	}
 }

@@ -77,6 +77,24 @@ export function mergePhaseMeta(
   return next;
 }
 
+/**
+ * 🎯T1278: a seat is at rest when idle or when its last turn ended in error.
+ * The daemon already says so (`working: false`, hubPhase maps error to
+ * idle). Reading error as busy kept the overseer "busy" indefinitely, so every
+ * owner send took the steer/interrupt path and the strip animated
+ * "error · answering fleet" over an idle seat.
+ */
+export function phaseAtRest(sample: OverseerPhaseSample | null | undefined): boolean {
+  const phase = String(sample?.phase || PHASE_IDLE).trim() || PHASE_IDLE;
+  return phase === PHASE_IDLE || phase === PHASE_ERROR;
+}
+
+/** 🎯T576: names who this turn is answering — never a destination. */
+export function correspondentSuffix(names: string[] | undefined): string {
+  if (!names || !names.length) return '';
+  return 'answering ' + names.join(', ');
+}
+
 /** Status-bar copy: one phase word, no Jevons-is prefix (🎯T555.2). */
 export function formatOverseerStatus(sample: OverseerPhaseSample | null | undefined): string {
   const phase = String(sample?.phase || PHASE_IDLE).trim() || PHASE_IDLE;
@@ -85,8 +103,9 @@ export function formatOverseerStatus(sample: OverseerPhaseSample | null | undefi
   if (phase === PHASE_STREAMING && sample?.tokens && sample.tokens > 0) {
     word = 'writing · ' + String(sample.tokens);
   }
-  if (phase !== PHASE_IDLE && sample?.correspondent && sample.correspondent.length) {
-    word += ' · ' + sample.correspondent.join(', ');
+  const who = correspondentSuffix(sample?.correspondent);
+  if (!phaseAtRest(sample) && who) {
+    word += ' · ' + who;
   }
   return word.replace(/^\s*Jevons\s*(is|:)\s*/i, '').trim() || PHASE_IDLE;
 }

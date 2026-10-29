@@ -9,6 +9,8 @@ import { normalizeTargetID, statusTitle, type FrontierRow } from './table';
 
 export const PLAY_GLYPH = '▶'; // ▶
 export const STOP_GLYPH = '■'; // ■
+/** 🎯T980: waiting for a seat — not ❚❚ (that is per-seat pause, 🎯T981). */
+export const WAIT_PAUSE_GLYPH = '⏸'; // ⏸
 /** 🎯T980: the PO has the request; it seats the work when a plan can take it. */
 export const ACKED_GLYPH = '⧗'; // ⧗
 export const SEAT_WAITS_PATH = '/api/seat-waits';
@@ -373,28 +375,27 @@ export function playChromeSpec(row: PlayRow | null | undefined, opts?: PlayOpts)
     };
   }
   if (mode === 'waiting') {
-    // 🎯T980: a red arrow. Clicking it force-seats the work; hovering offers
-    // stop to its left. (❚❚ stays reserved for a real per-seat pause.)
+    // 🎯T980: pause at rest (reason in tooltip). Hover: red force ▶ to the left,
+    // stop over pause — force is deliberate, not the default click (❚❚ = 🎯T981).
+    const reason = String(row?.seat_wait || '');
     if (row?.seat_wait_kind === SEAT_WAIT_SEAT_FAILED) {
-      // 🎯T990: the seat was minted and died. Say so, and why, where the
-      // owner is looking — not a bounce back to green.
       return {
         mode,
-        className: 'ft-play-btn ft-waiting-btn ft-seat-failed-btn',
-        glyph: PLAY_GLYPH,
-        ariaLabel: 'Force-seat 🎯' + id + ' again (its seat failed to start)',
-        title: 'Seat failed to start — ' + String(row?.seat_wait || '') + ' Click to force-seat it again.',
-        disabled: false,
+        className: 'ft-play-btn ft-waiting-btn ft-wait-pause-btn ft-seat-failed-btn',
+        glyph: WAIT_PAUSE_GLYPH,
+        ariaLabel: 'Waiting to re-seat 🎯' + id + ' (its seat failed to start)',
+        title: 'Seat failed to start — ' + reason + ' Hover for stop or force-seat.',
+        disabled: true,
         spinning: false,
       };
     }
     return {
       mode,
-      className: 'ft-play-btn ft-waiting-btn',
-      glyph: PLAY_GLYPH,
-      ariaLabel: 'Force-seat 🎯' + id + ' (no plan can take it yet)',
-      title: 'No plan can take a seat yet — ' + String(row?.seat_wait || '') + '. Click to force-seat it now.',
-      disabled: false,
+      className: 'ft-play-btn ft-waiting-btn ft-wait-pause-btn',
+      glyph: WAIT_PAUSE_GLYPH,
+      ariaLabel: 'Waiting for a seat on 🎯' + id,
+      title: 'No plan can take a seat yet — ' + reason + ' Hover for stop or force-seat.',
+      disabled: true,
       spinning: false,
     };
   }

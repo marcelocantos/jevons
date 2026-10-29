@@ -8,18 +8,16 @@ import "testing"
 // 🎯T1013.3: UnsteerableReason is now computed by claudia
 // (claudia.CapabilityMCPTools / claudia.Steerable), not read from a
 // hand-maintained table in this package. These are the real-world
-// answers as of this build: claude/codex/grok are steerable (codex's
-// MCP-approval rejection was fixed at claudia 5fa7f35/v0.42.0, 🎯T841);
-// cursor is not (claudia T118's cumulative tool-budget defect remains
-// open/set_aside).
+// answers as of this build: claude/codex/grok/cursor are all steerable.
+// Codex's MCP-approval rejection was fixed at claudia 5fa7f35/v0.42.0
+// (🎯T841). Cursor seats run in the OMP sidecar, which binds tools itself,
+// so claudia T118 achieved Steerable(cursor)=true (06c00ab, published in
+// v0.62.0).
 func TestUnsteerableReasonDelegatesToClaudia(t *testing.T) {
-	for _, p := range []string{"codex", " Codex ", "claude", "grok"} {
+	for _, p := range []string{"codex", " Codex ", "claude", "grok", " CURSOR "} {
 		if got := UnsteerableReason(p); got != "" {
 			t.Fatalf("%q must be steerable per claudia, got %q", p, got)
 		}
-	}
-	if got := UnsteerableReason(" CURSOR "); got == "" {
-		t.Fatal("cursor must report a reason: claudia T118 is open")
 	}
 }
 

@@ -77,8 +77,8 @@ func TestIdleNudgeTextUsesEmojiPrefix(t *testing.T) {
 	if !strings.Contains(got, "🎯T326") {
 		t.Fatalf("missing 🎯T326 in:\n%s", got)
 	}
-	if !strings.Contains(got, "🎯T104") {
-		t.Fatalf("missing 🎯T104 in:\n%s", got)
+	if !strings.Contains(got, "🎯jevons/T104") { // 🎯T1273: qualified for other repos' POs
+		t.Fatalf("missing 🎯jevons/T104 in:\n%s", got)
 	}
 	full := FormatIdleNudgeText(IdleNudgeTextArgs{
 		Name: "jv-t326", TargetID: "T326", Kind: IdleNudgeKindFullBrief,

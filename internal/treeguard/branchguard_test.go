@@ -149,6 +149,63 @@ func TestDecideBranchCheckoutAllowsSwitchInsideWorkerOwnWorktree(t *testing.T) {
 	}
 }
 
+// TestBranchGuardJudgesRepositoryGitActsOn is the 🎯T1188 hermetic oracle: two
+// temp repos with distinct integration branches; a hook loaded for repo A must
+// not refuse a `cd B && git switch` citing A's branch name.
+func TestBranchGuardJudgesRepositoryGitActsOn(t *testing.T) {
+	root := t.TempDir()
+	jevons := sharedCloneAt(t, root, "jevons", "steer")
+
+	claudia := sharedCloneAt(t, root, "claudia", "claud-integ")
+	runGit(t, claudia, "branch", "master")
+
+	env := &Env{Store: &Store{Root: t.TempDir()}, RepoRoot: jevons, Now: time.Now}
+
+	deny, err := env.Pre(bashPayload(jevons, "git switch master"))
+	if err != nil {
+		t.Fatalf("Pre(jevons switch): %v", err)
+	}
+	if deny.Verdict != Deny {
+		t.Fatalf("switch in jevons shared clone = %+v, want Deny", deny)
+	}
+	if !strings.Contains(deny.Message, "steer") {
+		t.Fatalf("jevons refusal should name steer branch: %q", deny.Message)
+	}
+
+	for _, cmd := range []string{
+		"cd " + claudia + " && git switch master",
+		"git -C " + claudia + " switch master",
+	} {
+		got, err := env.Pre(bashPayload(jevons, cmd))
+		if err != nil {
+			t.Fatalf("Pre(%q): %v", cmd, err)
+		}
+		if got.Verdict == Deny && strings.Contains(got.Message, "steer") {
+			t.Fatalf("Pre(%q) refused citing jevons steer branch: %q", cmd, got.Message)
+		}
+		if got.Verdict == Deny && strings.Contains(got.Message, "claud-integ") {
+			t.Fatalf("Pre(%q) should not apply jevons branch guard to claudia: %q", cmd, got.Message)
+		}
+	}
+}
+
+func sharedCloneAt(t *testing.T, parent, name, branch string) string {
+	t.Helper()
+	dir := filepath.Join(parent, name)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, parent, "init", "-q", "-b", branch, name)
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(branch+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-q", "-m", "base")
+	return dir
+}
+
 func TestDecideBranchCheckoutAllowsPathRestoreInSharedClone(t *testing.T) {
 	dir := sharedClone(t)
 	env := &Env{Store: &Store{Root: t.TempDir()}, RepoRoot: dir, Now: time.Now}

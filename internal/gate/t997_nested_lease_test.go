@@ -4,6 +4,7 @@
 package gate_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/gate"
+	"github.com/marcelocantos/jevons/internal/proclist"
 )
 
 // Exercise the outer CLI -> make -> inner CLI -> make chain with one store.
@@ -51,10 +53,11 @@ func TestT997NestedHeavyGate(t *testing.T) {
 					t.Fatalf("missing nested records: %s", output.String())
 				}
 			case <-time.After(8 * time.Second):
-				ps, _ := exec.Command("ps", "-axo", "pid=,ppid=,command=").Output()
+				procs, _ := proclist.All()
 				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 				<-done
-				for _, line := range strings.Split(string(ps), "\n") {
+				for _, proc := range procs {
+					line := fmt.Sprintf("%d %d %s", proc.PID, proc.PPID, proc.Command)
 					if strings.Contains(line, bin) || strings.Contains(line, "make test-") {
 						t.Log(line)
 					}

@@ -27,29 +27,62 @@ func TestT553DailyStaysHEAD(t *testing.T) {
 	}
 }
 
-// TestT553KeepAliveOwnsDaemon ratchets T553.3: script prefers
-// com.marcelocantos.jevonsd KeepAlive over nohup-start.
-func TestT553KeepAliveOwnsDaemon(t *testing.T) {
+// TestT505OracleTargetsAndMonitoring ratchets 🎯T505 acceptance oracles: the
+// seeded-throw e2e and the :13705 live probe stay Makefile targets, and the
+// three historical WIP ReferenceError families stay named in the error
+// sensor's hermetic tests (clause 3 observability).
+func TestT505OracleTargetsAndMonitoring(t *testing.T) {
+	mk := readRepo(t, "Makefile")
+	for _, m := range []string{
+		"test-t505-live",
+		"test-t553-oracle",
+		"🎯T505",
+		"JEVONS_T505_LIVE",
+		"JEVONS_T553_ORACLE",
+	} {
+		if !strings.Contains(mk, m) {
+			t.Errorf("Makefile missing T505 oracle marker %q", m)
+		}
+	}
+	er := readRepo(t, "ui/src/errorReport.test.ts")
+	for _, m := range []string{"closeProviderMenu", "lastTranscriptBubbleBottom", "children"} {
+		if !strings.Contains(er, m) {
+			t.Errorf("errorReport.test.ts missing T505 incident-family marker %q", m)
+		}
+	}
+}
+
+// TestT1111RestartScriptNeverTouchesLaunchd ratchets 🎯T1111: supervisord
+// owns the development daemon, so the restart script asks it for the
+// upgrade exit and otherwise detaches a daemon of its own — it never
+// bootstraps, kickstarts or boots out a launchd job, and the Makefile has
+// no plist to install.
+func TestT1111RestartScriptNeverTouchesLaunchd(t *testing.T) {
 	body := readRepo(t, "scripts/restart-jevonsd.sh")
 	for _, m := range []string{
-		"🎯T553.3",
-		"com.marcelocantos.jevonsd",
-		"start_or_adopt_daemon",
-		"KeepAlive",
-		"refusing to bootstrap a wrong job",
+		"🎯T1111",
+		"upgrade_with_supervisor",
+		"start_daemon_detached",
 	} {
 		if !strings.Contains(body, m) {
-			t.Errorf("restart script missing T553.3 marker %q", m)
+			t.Errorf("restart script missing T1111 marker %q", m)
+		}
+	}
+	for _, gone := range []string{
+		"launchctl ",
+		"start_or_adopt_daemon",
+		"-install-daemon-agent",
+		"com.marcelocantos.jevonsd",
+		"LaunchAgents",
+	} {
+		if strings.Contains(body, gone) {
+			t.Errorf("restart script still carries the launchd path (%q), retired by 🎯T1111", gone)
 		}
 	}
 	mk := readRepo(t, "Makefile")
-	for _, m := range []string{
-		"jevonsd-install",
-		"com.marcelocantos.jevonsd",
-		"-install-daemon-agent",
-	} {
-		if !strings.Contains(mk, m) {
-			t.Errorf("Makefile missing T553.3 target %q", m)
+	for _, gone := range []string{"jevonsd-install", "-install-daemon-agent", "launchctl"} {
+		if strings.Contains(mk, gone) {
+			t.Errorf("Makefile still carries the launchd path (%q), retired by 🎯T1111", gone)
 		}
 	}
 }
@@ -93,6 +126,35 @@ func TestT638CommitWhenDoneVoidsAskFirst(t *testing.T) {
 		}
 		if !strings.Contains(body, "only commit when asked") {
 			t.Errorf("%s missing voided harness phrase", path)
+		}
+	}
+}
+
+// TestT1122OwnerVisibleMeansOwnerRelevant ratchets the attention doctrine:
+// every surface the fleet reads its rules from says that an owner-visible
+// thing must be a decision, a fault, or a change in what the owner would do
+// next, and names the first applications so the rule is not left abstract.
+func TestT1122OwnerVisibleMeansOwnerRelevant(t *testing.T) {
+	for _, path := range []string{
+		"internal/config/persona.md",
+		"AGENTS.md",
+		"agents-guide.md",
+		"internal/cli/help_agent.md",
+		"internal/mcpserver/fleet_brief.go",
+	} {
+		body := readRepo(t, path)
+		for _, m := range []string{"T1122", "decision", "fault", "what they would do next"} {
+			if !strings.Contains(body, m) {
+				t.Errorf("%s missing 🎯T1122 doctrine marker %q", path, m)
+			}
+		}
+	}
+	for _, path := range []string{"AGENTS.md", "agents-guide.md", "internal/mcpserver/fleet_brief.go"} {
+		body := readRepo(t, path)
+		for _, m := range []string{"T1121", "T1053", "T1120"} {
+			if !strings.Contains(body, m) {
+				t.Errorf("%s does not name 🎯T1122's application %s", path, m)
+			}
 		}
 	}
 }

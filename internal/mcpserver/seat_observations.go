@@ -46,6 +46,7 @@ func (s *Server) observeSeatTranscripts(observers ...func(claudia.AgentDef)) {
 			observe(d)
 		}
 	}
+	s.observeInertSeats(time.Now())
 }
 
 func (s *Server) diagnoseBirth(d claudia.AgentDef, now time.Time) birthDiagnosis {
@@ -171,11 +172,21 @@ func (s *Server) observeSeatTranscriptWith(d claudia.AgentDef, roots discovery.R
 		if seatprovider.Resolve(d.Provider).Sidecar && spool.SeatHasHistory(spool.Dir(), d.Name) {
 			ev = SessionEvidencePresent
 		}
+		// The activity lookup above just found this session's records, so
+		// they are present even when ReadSessionEvidence cannot locate the
+		// provider's own store (a Cursor sidecar seat read phase_unknown for
+		// its whole life while running and working, 2026-10-22).
+		if activity.Verdict == seatactivity.VerdictKnown && ev == SessionEvidenceUnknown {
+			ev = SessionEvidencePresent
+		}
 		status := classifySeatListPhase(d.Purpose, st.Alive == seatstate.Yes, s.agentHasTurnBegan(d.Name), d.Materialized, ev)
 		s.Seats().Observe(seatstate.Observation{Name: d.Name, ForSession: d.SessionID, Status: status, QueueDepth: seatstate.QueueUnknown, Source: "transcript.lifecycle", At: at})
 	}
 	s.diagnoseBirthWith(d, s.birthClock(), roots)
 	_, _ = s.sendQueue().Depth(d.Name)
+	// 🎯T1186: sidecar turn_end in the dated spool is the turn boundary when
+	// the wired sink never sees IsTerminalStop.
+	s.observeSidecarSpoolTurnEnd(d)
 }
 
 func (s *Server) observeBrokerSeats(broker map[string]claudia.BrokerSeat) map[string]seatstate.State {
@@ -187,5 +198,17 @@ func (s *Server) observeBrokerSeats(broker map[string]claudia.BrokerSeat) map[st
 		s.Seats().Observe(seatstate.Observation{Name: name, BrokerAlive: seatstate.TriOf(raw.Alive), BrokerOwned: seatstate.TriOf(raw.Owned), QueueDepth: seatstate.QueueUnknown, Source: "broker.seats"})
 		out[name] = s.seatState(name)
 	}
+	// 🎯T1157: a successful listing is the broker's whole seat set, so a
+	// registered seat missing from it is an observation — the broker does not
+	// run it — not a failure to look. Without this its aliveness decays to
+	// Unknown and the row reads phase_unknown forever. A live local process
+	// still wins the fold, so a seat this daemon holds is not marked dead.
+	for _, name := range s.allRegisteredSeatNames() {
+		if _, listed := broker[name]; listed {
+			continue
+		}
+		s.Seats().Observe(seatstate.Observation{Name: name, BrokerAlive: seatstate.No, BrokerOwned: seatstate.No, QueueDepth: seatstate.QueueUnknown, Source: "broker.seats.absent"})
+	}
 	return out
 }
+

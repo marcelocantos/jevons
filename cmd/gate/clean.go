@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/marcelocantos/jevons/internal/gate"
+	"github.com/marcelocantos/jevons/internal/worktree"
 )
 
 // cmdRunClean runs a gate against a clean checkout of one commit (🎯T397).
@@ -36,6 +39,12 @@ func cmdRunClean(argv []string, name, dir, commit, storeDir string, quiet, allow
 	if quiet {
 		out, errOut = nil, nil
 	}
+	prepare, prereqErr := cleanPrereqPrepare(dir, commit)
+	if prereqErr != nil {
+		fmt.Fprintln(os.Stderr, "gate -clean:", prereqErr)
+		return exitError
+	}
+
 	res, err := gate.RunClean(&gate.CleanArgs{
 		Command:  argv,
 		Repo:     dir,
@@ -46,6 +55,7 @@ func cmdRunClean(argv []string, name, dir, commit, storeDir string, quiet, allow
 		Stderr:   errOut,
 		Store:    store,
 		Explicit: true,
+		Prepare:  prepare,
 	})
 	if res == nil || res.Record == nil {
 		fmt.Fprintln(os.Stderr, "gate -clean:", err)
@@ -73,3 +83,54 @@ func cmdRunClean(argv []string, name, dir, commit, storeDir string, quiet, allow
 		return rec.ExitStatus
 	}
 }
+
+// cleanPrereqPrepare gives `bin/gate -clean` the same .jevons-integrate-prereq.yaml
+// parity cmd/integrate's own post-merge gate already has (🎯T1146 /
+// internal/worktree/t1146_post_merge_gate.go): a repo that declares
+// submodules/a prerequisite script gets it run in the pristine checkout
+// before the measured command, so a worker running the gate directly does
+// not see a spurious RED from vendor artifacts the prerequisite would have
+// produced (🎯T1267). A repo with no prerequisite file resolves to a nil
+// Prepare and behaves exactly as before.
+func cleanPrereqPrepare(dir, commit string) (func(string) error, error) {
+	root, err := gitShowToplevel(dir)
+	if err != nil {
+		// Not a git work tree (or git is unavailable): nothing to load, and
+		// RunClean will fail on this same condition with its own message.
+		return nil, nil
+	}
+	ref := commit
+	if ref == "" {
+		ref = "HEAD"
+	}
+	resolved, err := gitRevParse(root, ref)
+	if err != nil {
+		return nil, nil
+	}
+	prepare, _, err := worktree.PrereqPrepare(root, resolved)
+	if err != nil {
+		return nil, fmt.Errorf("load %s: %w", worktree.IntegratePrereqFile, err)
+	}
+	return prepare, nil
+}
+
+func gitShowToplevel(dir string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func gitRevParse(dir, ref string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", ref)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+

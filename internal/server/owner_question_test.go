@@ -36,7 +36,7 @@ func sealEmptyTurn(s *Server) {
 
 // sealVisibleTurn is an overseer turn that paints prose the owner can read.
 func sealVisibleTurn(s *Server, text string) {
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: text})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: wireOwnerReplyDecision(text)})
 	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
 }
 

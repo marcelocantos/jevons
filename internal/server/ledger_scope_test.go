@@ -134,7 +134,10 @@ func TestT389AchieveReapsOnlyTheAchievingLedger(t *testing.T) {
 	// Seed observed the achieve already; re-seed from the open state so the
 	// diff below is a genuine transition rather than a cold start.
 	s.mu.Lock()
-	s.achievedTargetsSeen = map[string]bool{}
+	if s.achievedTargetsSeen == nil {
+		s.achievedTargetsSeen = make(map[string]map[string]bool)
+	}
+	s.achievedTargetsSeen[ledgerA] = map[string]bool{}
 	s.mu.Unlock()
 
 	s.maybeReapOnLedgerAchieve(ledgerA)

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -16,8 +17,17 @@ import (
 // it wrapped every response in a writer with no Hijack, so /ws/mux refused
 // every upgrade and the cockpit loaded but never connected.
 func TestAccessLogKeepsHijackAndFlush(t *testing.T) {
-	var logged []int
-	log := func(_, _ string, status int, _ time.Duration, _ string) { logged = append(logged, status) }
+	// The handler logs from the server's goroutines while the test reads
+	// from its own; the slice is shared state, not a channel.
+	var (
+		mu     sync.Mutex
+		logged []int
+	)
+	log := func(_, _ string, status int, _ time.Duration, _ string) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, status)
+	}
 	h := logAPIAccess(log, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/stream" {
 			if _, ok := w.(http.Flusher); !ok {
@@ -51,6 +61,8 @@ func TestAccessLogKeepsHijackAndFlush(t *testing.T) {
 	if _, err := http.Get(srv.URL + "/stream"); err != nil {
 		t.Fatal(err)
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if len(logged) < 1 || logged[0] != http.StatusSwitchingProtocols {
 		t.Fatalf("logged statuses %v, want the upgrade recorded as 101", logged)
 	}

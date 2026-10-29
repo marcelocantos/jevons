@@ -4,7 +4,6 @@
 package targetfile
 
 import (
-	"os"
 	"strings"
 )
 
@@ -75,14 +74,10 @@ func IsOwnerAssigned(cwd, targetID string) bool {
 	return ok
 }
 
-// LoadTargetOwnerFromCwd looks up the owner assignment in the nearest ledger.
+// LoadTargetOwnerFromCwd looks up the owner assignment in the repository ledger.
 func LoadTargetOwnerFromCwd(cwd, targetID string) (owner string, ok bool) {
-	path, err := DiscoverLedgerPath(cwd)
-	if err != nil {
-		return "", false
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
+	data, ok := ReadLedgerFileForWorkdir(cwd)
+	if !ok {
 		return "", false
 	}
 	return LookupTargetOwner(data, targetID)
@@ -108,12 +103,8 @@ func MissionOpenFromCwd(cwd, targetID string) bool {
 	if tid == "" {
 		return true
 	}
-	path, err := DiscoverLedgerPath(cwd)
-	if err != nil {
-		return true
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
+	data, ok := ReadLedgerFileForWorkdir(cwd)
+	if !ok {
 		return true
 	}
 	status, ok := LookupTargetStatus(data, tid)

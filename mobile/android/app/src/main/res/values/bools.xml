@@ -1,0 +1,4 @@
+<resources>
+    <!-- The usage widget sizes its bars with RemoteViews.setViewLayoutHeight (API 31). -->
+    <bool name="usage_widget_enabled">false</bool>
+</resources>

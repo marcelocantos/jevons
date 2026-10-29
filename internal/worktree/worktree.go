@@ -59,6 +59,41 @@ func WorktreePath(baseWorkdir, agentName string) string {
 	return filepath.Join(WorktreesDir(baseWorkdir), Sanitize(agentName))
 }
 
+// SharedCloneFromFleetWorktree inverts WorktreesDir for paths under
+// ../.jevons-worktrees-<repo>/<agent>. When a spawn passes another seat's
+// linked tree (or a stale registry WorkDir), isolation must re-derive the
+// shared clone and Ensure this seat's own tree (🎯T1163).
+func SharedCloneFromFleetWorktree(path string) (string, bool) {
+	path = filepath.Clean(path)
+	parent := filepath.Dir(path)
+	wtRoot := filepath.Base(parent)
+	const prefix = ".jevons-worktrees-"
+	if !strings.HasPrefix(wtRoot, prefix) {
+		return "", false
+	}
+	repo := strings.TrimPrefix(wtRoot, prefix)
+	if repo == "" {
+		return "", false
+	}
+	return filepath.Join(filepath.Dir(parent), repo), true
+}
+
+// ValidateSeatFleetWorkdir rejects a fleet-managed work seat whose cwd is
+// another seat's linked tree (🎯T1163). Path derivation is always
+// WorktreePath(sharedClone, seatName) — never target_id — so the only way
+// multiple names share .../jv-t1159-auto is stale sibling propagation.
+func ValidateSeatFleetWorkdir(agentName, workdir string) error {
+	clone, ok := SharedCloneFromFleetWorktree(workdir)
+	if !ok {
+		return nil
+	}
+	want := WorktreePath(clone, agentName)
+	if filepath.Clean(workdir) == filepath.Clean(want) {
+		return nil
+	}
+	return fmt.Errorf("fleet worktree %q is not seat %q's tree (want %q)", workdir, agentName, want)
+}
+
 // BranchName is the branch a worker's isolated tree is checked out on, and
 // the branch Integrate lands.
 func BranchName(agentName string) string {
@@ -89,14 +124,12 @@ func SharesRepo(baseWorkdir, otherWorkdir string) bool {
 	return other == base || strings.HasPrefix(other, WorktreesDir(base)+string(filepath.Separator))
 }
 
-// NeedsIsolation is the pure classifier for whether a spawn should be
-// redirected into its own worktree rather than reusing the shared workdir
-// verbatim: purpose=work, a non-integrator role, and at least one other live
-// work agent already sitting on the identical workdir. An integrator (role
-// boss) and product owners / auditors / asides / overseers are never
-// redirected — they are the one seat allowed to touch the shared tree
-// directly and land to local master.
-func NeedsIsolation(purpose, role string, sharedWithLiveWorker bool) bool {
+// NeedsIsolation is the pure classifier for whether a fleet-managed spawn
+// should be redirected into its own worktree rather than reusing the shared
+// clone as its writable root (🎯T1151.1). purpose=work and a non-integrator
+// role always isolate; integrators, POs, auditors, asides and overseers stay
+// on the shared clone (read-only doctrine for PO/overseer per 🎯T125).
+func NeedsIsolation(purpose, role string) bool {
 	if strings.TrimSpace(purpose) != "work" {
 		return false
 	}
@@ -104,7 +137,7 @@ func NeedsIsolation(purpose, role string, sharedWithLiveWorker bool) bool {
 	case "boss", "product-owner", "auditor", "overseer", "aside":
 		return false
 	}
-	return sharedWithLiveWorker
+	return true
 }
 
 // IsGitRepo reports whether dir is inside a git working tree.
@@ -139,6 +172,11 @@ func Ensure(baseWorkdir, agentName string) (string, error) {
 	}
 	path := WorktreePath(baseWorkdir, agentName)
 	if st, err := os.Stat(path); err == nil && st.IsDir() {
+		if want, _ := ReadIntegrationBranch(path); want == "" {
+			if err := RecordIntegrationBranch(baseWorkdir, path, ""); err != nil {
+				return "", err
+			}
+		}
 		return path, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -156,6 +194,9 @@ func Ensure(baseWorkdir, agentName string) (string, error) {
 	cmd := exec.Command("git", "-C", baseWorkdir, "worktree", "add", "-B", branch, path, "HEAD")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("worktree: git worktree add: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	if err := RecordIntegrationBranch(baseWorkdir, path, ""); err != nil {
+		return "", err
 	}
 	return path, nil
 }

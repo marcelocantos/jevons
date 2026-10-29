@@ -212,3 +212,13 @@ func ledgerWarning(rel string, foreign, claimed []string) string {
 	b.WriteString("claims you wrote it is the other failure.\n")
 	return b.String()
 }
+
+// LedgerSyntaxRefusal judges only the index blob. Working-tree edits and an
+// invalid HEAD must not prevent committing an unrelated path or a repair.
+func LedgerSyntaxRefusal(staged []byte) (bool, string) {
+	var doc any
+	if err := yaml.Unmarshal(staged, &doc); err != nil {
+		return true, fmt.Sprintf("commitscope: refusing invalid staged %s YAML: %v\nRepair the ledger through bullseye tools and stage the corrected result.\n", SharedLedger, err)
+	}
+	return false, ""
+}

@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { diagnosticLabel, displayRows, shouldAckPendingSend, stepItems, stepsLabel } from './display';
 
 describe('displayRows', () => {
@@ -39,6 +39,27 @@ describe('displayRows', () => {
       },
     ]);
     expect(rows[0].items?.[0]?.text).toBe('jevons_agent_list: running');
+  });
+
+  it('HTTP-stamped MCP tool_use shows real name and arg gist in steps tooltip (🎯T64.2)', () => {
+    const rows = displayRows([
+      { type: 'tool_use', name: 'jevons_agent_list', input: { query: 'running' } },
+      { type: 'tool_use', name: 'jevons_plan_usage' },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+    ]);
+    expect(rows[0].kind).toBe('steps');
+    expect(rows[0].items).toEqual([
+      { cls: 'tool-use', text: 'jevons_agent_list: running' },
+      { cls: 'tool-use', text: 'jevons_plan_usage' },
+    ]);
+  });
+
+  it('generic MCP: tool with no stamp or input stays unnamed (🎯T64.2)', () => {
+    const rows = displayRows([
+      { type: 'tool_use', name: 'MCP: tool' },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+    ]);
+    expect(rows[0].items?.[0]?.text).toBe('MCP: tool');
   });
 
   it('coalesces tool_use into ⋯ n steps, not assistant bubbles', () => {
@@ -181,7 +202,16 @@ describe('displayRows', () => {
     ]);
   });
 
-  it('send_error is a left diagnostic, not a bubble; identical consecutive nacks coalesce (🎯T545.3)', () => {
+ 
+ it('provider_transport is a left diagnostic, not an assistant bubble (🎯T782)', () => {
+   const rows = displayRows([
+     { type: 'provider_transport', text: 'backend_unavailable: connection stalled', retryable: true },
+   ]);
+   expect(rows).toHaveLength(1);
+   expect(rows[0].kind).toBe('diagnostic');
+   expect(rows[0].text).toContain('backend_unavailable');
+ });
+ it('send_error is a left diagnostic, not a bubble; identical consecutive nacks coalesce (🎯T545.3)', () => {
     const rows = displayRows([
       { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } },
       { type: 'send_error', text: 'overseer is not running' },
@@ -208,6 +238,23 @@ describe('displayRows', () => {
     expect(before.map((r) => r.kind)).toEqual(['user']);
     expect(before[0].delivery).toEqual({ state: 'undelivered', reason: 'broker protocol: not_owner' });
     const after = displayRows([user, undelivered, { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } }, delivered]);
+    expect(after.filter((r) => r.kind === 'diagnostic')).toHaveLength(0);
+    expect(after[0].delivery).toEqual({ state: 'delivered' });
+  });
+
+  // 🎯T1130: one visible queue regardless of where a message is held. A
+  // message the daemon holds behind a running turn paints the SAME row
+  // family as T811's undelivered/delivered — Steer/Cut-in instead of
+  // Resend is a presentation choice the component makes, not display.ts.
+  it('a message held behind the running turn paints into its own row and clears once delivered (🎯T1130)', () => {
+    const user = { type: 'user', msg_id: 'om-held', message: { role: 'user', content: [{ type: 'text', text: 'what is the status' }] } };
+    const held = { type: 'send_error', state: 'held', msg_id: 'om-held', text: 'message queued behind the overseer\'s running turn' };
+    const before = displayRows([user, held]);
+    expect(before.map((r) => r.kind)).toEqual(['user']);
+    expect(before[0].delivery).toEqual({ state: 'held' });
+
+    const delivered = { type: 'send_error', state: 'delivered', msg_id: 'om-held', text: 'message delivered to the overseer after retry' };
+    const after = displayRows([user, held, delivered]);
     expect(after.filter((r) => r.kind === 'diagnostic')).toHaveLength(0);
     expect(after[0].delivery).toEqual({ state: 'delivered' });
   });
@@ -272,6 +319,34 @@ describe('displayRows', () => {
       long,
       'Nothing new to relay.',
     ]);
+  });
+
+  it('in-progress native tool_use shows running chrome (🎯T1218)', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-24T10:00:05Z'));
+    const frame = {
+      type: 'tool_use',
+      name: 'Bash',
+      execution_status: 'in_progress',
+      when: Date.parse('2026-10-24T10:00:00Z'),
+      input: { command: 'sleep 60' },
+    };
+    const items = stepItems(frame);
+    expect(items[0]?.text).toMatch(/^Bash: sleep 60 \(5s\)$/);
+    vi.useRealTimers();
+  });
+
+  it('main skips [target-aside:] / [attention:] owner wires (🎯T250 / 🎯T264)', () => {
+    const rows = displayRows([
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[target-aside: att-x | census]\nT540.1 census aside from journey' }] } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[attention: att-y|billing]\nhow is restic' }] } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'ordinary chat' }] } },
+    ]);
+    expect(rows.filter((r) => r.kind === 'user').map((r) => r.text)).toEqual(['ordinary chat']);
+    const inspect = displayRows([
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[target-aside: att-x | census]\nT540.1 census aside from journey' }] } },
+    ], { inspect: true });
+    expect(inspect.filter((r) => r.kind === 'user')).toHaveLength(1);
   });
 
   it('type=status is chrome, not an unsealed assistant (🎯T555.5)', () => {

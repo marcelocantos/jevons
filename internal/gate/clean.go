@@ -124,6 +124,14 @@ func (t *TreeProvenance) Token() string {
 	return fmt.Sprintf("tree=dirty+%d@%s", t.DirtyFiles, t.ShortCommit())
 }
 
+// MeasuredAsPristineCheckout reports whether the gate ran through RunClean
+// (bin/gate -clean): a detached checkout of the commit with GOWORK=off, not
+// an inherited workspace. Integrate's landing precondition (🎯T1146) accepts
+// only GREEN records that measure the tip this way.
+func (t *TreeProvenance) MeasuredAsPristineCheckout() bool {
+	return t != nil && t.Clean && t.Shared != nil
+}
+
 // Describe is the human sentence for a Summary.
 func (t *TreeProvenance) Describe() string {
 	switch {
@@ -216,6 +224,10 @@ type CleanArgs struct {
 	Store          *Store
 	Explicit       bool
 	Now            func() time.Time
+	// Prepare runs in the pristine checkout after the tree is probed (so
+	// files it creates do not DIRTY the attestation) and before Command.
+	// A non-nil error aborts the gate without running Command (🎯T1249).
+	Prepare func(dir string) error
 }
 
 // writer is io.Writer, aliased so this file does not import io for one field.
@@ -299,6 +311,7 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 		SharedTree: shared,
 		env:        append(os.Environ(), "GOWORK=off"),
 		Now:        args.Now,
+		Prepare:    args.Prepare,
 	})
 
 	res := &CleanResult{Record: rec, Worktree: wt}

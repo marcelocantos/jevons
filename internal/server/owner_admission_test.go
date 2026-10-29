@@ -44,7 +44,12 @@ func TestT1054PreJournalAdmissionAndReorderedEvidence(t *testing.T) {
 	if err := s.bindOwnerAdmission(s.ownerAdmission.authority, "turn-1", "owner-request-1"); err != nil {
 		t.Fatal(err)
 	}
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-1", Text: "I will answer your question."})
+	s.DeliverOverseerEvent(claudia.Event{
+		Type:       "assistant",
+		TurnID:     "turn-1",
+		Text:       wireOwnerReplyDecision("I will answer your question."),
+		StopReason: "end_turn",
+	})
 	auditAndChat(t, s, log, "I will answer", false)
 	if err := s.registerOwnerIncident(s.ownerAdmission.authority, "turn-1", "incident-1"); err != nil {
 		t.Fatal(err)
@@ -76,7 +81,12 @@ func TestT1054SilentToolContinuationNeedsFreshClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	auditAndChat(t, s, log, "routine worker finished", false)
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-2", Text: "Here is the owner answer"})
+	s.DeliverOverseerEvent(claudia.Event{
+		Type:       "assistant",
+		TurnID:     "turn-2",
+		Text:       wireOwnerReplyDecision("Here is the owner answer"),
+		StopReason: "end_turn",
+	})
 	auditAndChat(t, s, log, "Here is the owner answer", false)
 	if err := s.admitOwnerCandidate(s.ownerAdmission.authority, "turn-2", "request-2", AdmissionAllowed); err != nil {
 		t.Fatal(err)
@@ -90,7 +100,7 @@ func TestT1054MissingIDFailsOpenWithDaemonIndicatorAndRestrictedAudit(t *testing
 	if err := s.bindOwnerAdmission(s.ownerAdmission.authority, "turn-3", "request-3"); err != nil {
 		t.Fatal(err)
 	}
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-3", Text: "novel safety incident"})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-3", Text: wireOwnerReplyFault("novel safety incident")})
 	ch := make(chan string, 10)
 	s.mu.Lock()
 	s.chatListeners = append(s.chatListeners, ch)
@@ -150,7 +160,7 @@ func TestT1054JournalFailureDoesNotAnswerOrBroadcast(t *testing.T) {
 	s.mu.Lock()
 	s.chatListeners = append(s.chatListeners, ch)
 	s.mu.Unlock()
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-6", Text: "answer only if durable"})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-6", Text: wireOwnerReplyDecision("answer only if durable")})
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +186,7 @@ func TestT1054RestartReplayDoesNotReadRestrictedAudit(t *testing.T) {
 	if err := s.bindOwnerAdmission(s.ownerAdmission.authority, "turn-7", "request-7"); err != nil {
 		t.Fatal(err)
 	}
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-7", Text: "novel safety disclosure"})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-7", Text: wireOwnerReplyFault("novel safety disclosure")})
 	path := log.Path()
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
@@ -208,7 +218,7 @@ func TestT1054AuditFailureIsVisibleLossNotSilentBody(t *testing.T) {
 	s.mu.Unlock()
 	// Simulate the audit mount disappearing before the first body arrives.
 	s.ownerAdmission.auditDir = filepath.Join(t.TempDir(), "missing")
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-loss", Text: "unretained safety report"})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-loss", Text: wireOwnerReplyFault("unretained safety report")})
 	auditAndChat(t, s, log, "unretained safety report", false)
 	found := false
 	for len(ch) > 0 {
@@ -235,11 +245,11 @@ func TestT1054PublicationSerializesHeldBeforeLaterFragment(t *testing.T) {
 	if err := s.bindOwnerAdmission(cap, "turn-order", "request-order"); err != nil {
 		t.Fatal(err)
 	}
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-order", Text: "first-fragment"})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-order", Text: wireOwnerReplyDecision("first-fragment")})
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	s.ownerAdmission.beforePublish = func(ev claudia.Event) {
-		if ev.Text == "first-fragment" {
+		if strings.Contains(ev.Text, "first-fragment") {
 			close(entered)
 			<-release
 		}
@@ -249,7 +259,7 @@ func TestT1054PublicationSerializesHeldBeforeLaterFragment(t *testing.T) {
 	<-entered
 	late := make(chan struct{})
 	go func() {
-		s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-order", Text: "later-fragment", StopReason: "end_turn"})
+		s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-order", Text: wireOwnerReplyDecision("later-fragment"), StopReason: "end_turn"})
 		close(late)
 	}()
 	close(release)
@@ -286,7 +296,7 @@ func TestT1054IncidentEvidenceTurnBoundSingleUse(t *testing.T) {
 	if err := s.admitOwnerCandidate(cap, "turn-incident", "incident-2", AdmissionAllowed); err != nil {
 		t.Fatal(err)
 	}
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-incident", Text: "material novel incident", StopReason: "tool_use"})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-incident", Text: wireOwnerReplyFault("material novel incident"), StopReason: "tool_use"})
 	if err := s.admitOwnerCandidate(cap, "turn-incident", "incident-2", AdmissionAllowed); err == nil {
 		t.Fatal("communicated incident reauthorized")
 	}
@@ -351,7 +361,7 @@ func TestT1054LegacyJournalFailureStillBroadcastsVisibleAnswer(t *testing.T) {
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: "legacy answer"})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: wireOwnerReplyDecision("legacy answer")})
 	s.ownerMu.Lock()
 	accounted := s.ownerHealthLocked().turnVisible
 	s.ownerMu.Unlock()
@@ -539,6 +549,11 @@ func TestT1054ProgressPreviewJournalFailureNeverLeaksToAnyFanout(t *testing.T) {
 	s.mu.Unlock()
 	ev := claudia.Event{Type: "progress", ProgressType: claudia.ProgressTUIPreview, TurnID: "turn-preview", Text: "private candidate preview", Raw: []byte(`{"content":"private raw preview"}`)}
 	s.DeliverOverseerEvent(ev)
+	for len(sess.send) > 0 {
+		if line := <-sess.send; strings.Contains(string(line), "private") {
+			t.Fatalf("mux preview leak before admit: %s", line)
+		}
+	}
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -548,11 +563,6 @@ func TestT1054ProgressPreviewJournalFailureNeverLeaksToAnyFanout(t *testing.T) {
 	for _, line := range remote.lines {
 		if strings.Contains(string(line), "private") {
 			t.Fatalf("remote preview leak: %s", line)
-		}
-	}
-	for len(sess.send) > 0 {
-		if line := <-sess.send; strings.Contains(string(line), "private") {
-			t.Fatalf("mux preview leak: %s", line)
 		}
 	}
 	for _, item := range s.mux.eventsFor("jevons") {

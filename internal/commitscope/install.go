@@ -35,6 +35,12 @@ const HookMarker = "🎯T377"
 // AttributionHookMarker identifies prepare-commit-msg (🎯T760).
 const AttributionHookMarker = "🎯T760"
 
+// MergeHookMarker identifies pre-merge-commit (🎯T1144).
+const MergeHookMarker = "🎯T1144"
+
+// PushHookMarker identifies pre-push, the gate-attestation check (🎯T1279).
+const PushHookMarker = "🎯T1279"
+
 // hookMode is what git requires of a hook it will exec.
 const hookMode = 0o755
 
@@ -79,9 +85,17 @@ func ClassifyExisting(existing, ours []byte) InstallOutcome {
 		return HookCurrent
 	case bytes.Contains(existing, []byte(HookMarker)):
 		return HookUpdated
-	default:
-		return HookForeign
 	}
+	// An older copy of the pre-push or attribution hook carries its own
+	// marker, not the pre-commit one. Recognising only HookMarker left every
+	// installed copy of those hooks "foreign" for good: never refreshed,
+	// reported as not active (🎯T1299 found the 🎯T1279 hook stale).
+	for _, m := range []string{AttributionHookMarker, MergeHookMarker, PushHookMarker} {
+		if bytes.Contains(ours, []byte(m)) && bytes.Contains(existing, []byte(m)) {
+			return HookUpdated
+		}
+	}
+	return HookForeign
 }
 
 // InstallHook copies source into hooksDir/hookName unless a hook that is not
@@ -110,7 +124,13 @@ func InstallHook(hooksDir, source, hookName string) (InstallOutcome, error) {
 	outcome := HookInstalled
 	switch existing, err := os.ReadFile(dest); {
 	case err == nil:
-		if outcome = ClassifyExisting(existing, ours); outcome == HookForeign || outcome == HookCurrent {
+		outcome = ClassifyExisting(existing, ours)
+		if outcome == HookForeign && hookName == "pre-push" && IsStockLFSPrePush(existing) {
+			// Ours ends by running `git lfs pre-push` with git's ref list, so
+			// replacing git-lfs's stock hook keeps LFS uploads working (🎯T1279).
+			outcome = HookUpdated
+		}
+		if outcome == HookForeign || outcome == HookCurrent {
 			return outcome, nil
 		}
 	case !os.IsNotExist(err):
@@ -142,7 +162,27 @@ func InstallHook(hooksDir, source, hookName string) (InstallOutcome, error) {
 
 func isOurHookSource(source []byte) bool {
 	return bytes.Contains(source, []byte(HookMarker)) ||
-		bytes.Contains(source, []byte(AttributionHookMarker))
+		bytes.Contains(source, []byte(AttributionHookMarker)) ||
+		bytes.Contains(source, []byte(MergeHookMarker)) ||
+		bytes.Contains(source, []byte(PushHookMarker))
+}
+
+// IsStockLFSPrePush reports whether hook is the pre-push that `git lfs
+// install` writes: a shebang, the missing-git-lfs check, and one
+// `git lfs pre-push "$@"` line, with nothing else that replacing it would lose.
+func IsStockLFSPrePush(hook []byte) bool {
+	var other int
+	for _, line := range strings.Split(strings.TrimSpace(string(hook)), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "", strings.HasPrefix(line, "#!"):
+		case strings.HasPrefix(line, "command -v git-lfs"):
+		case line == `git lfs pre-push "$@"`:
+		default:
+			other++
+		}
+	}
+	return other == 0 && bytes.Contains(hook, []byte(`git lfs pre-push "$@"`))
 }
 
 // InstallReport is what the worker reads on stderr. A foreign hook gets the
@@ -156,6 +196,10 @@ func InstallReport(outcome InstallOutcome, hooksDir, hookName string) string {
 		switch hookName {
 		case "prepare-commit-msg":
 			return fmt.Sprintf("commitscope: commit attribution hook %s at %s (🎯T760).\n", outcome, dest)
+		case "pre-merge-commit":
+			return fmt.Sprintf("commitscope: merge ledger-shrink guard %s at %s (🎯T1144).\n", outcome, dest)
+		case "pre-push":
+			return fmt.Sprintf("commitscope: gate-attestation push check %s at %s (🎯T1279).\n", outcome, dest)
 		default:
 			return fmt.Sprintf("commitscope: shared-index commit guard %s at %s (🎯T377).\n", outcome, dest)
 		}
@@ -167,6 +211,9 @@ func InstallReport(outcome InstallOutcome, hooksDir, hookName string) string {
 		b.WriteString("here can still sweep another worker's staged hunks into your commit (🎯T377).\n")
 		b.WriteString("Chain the guard from your hook, or install it over yours with:\n")
 		b.WriteString("  cp scripts/hooks/pre-commit " + dest + "\n")
+	} else if hookName == "pre-push" {
+		b.WriteString("The gate-attestation push check is NOT active in this clone (🎯T1279):\n")
+		b.WriteString("a push to master here is not checked against `make gate`.\n")
 	} else {
 		b.WriteString("The commit attribution hook is NOT active in this clone (🎯T760).\n")
 	}

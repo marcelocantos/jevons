@@ -42,9 +42,10 @@ func TestT107410CostGuardCatchesSeatPair(t *testing.T) {
 	}
 	srv := server.New("test", dir)
 	mcp := mcpserver.New(dir, nil, nil)
-	guard := startCostGuard(ctx, config.Config{
+	replica, guard := startControlServices(ctx, config.Config{
 		StateDir: dir, SessionsDir: dir, OverseerName: "jevons",
 	}, config.NewWatcher(nil), reg, nil, srv, mcp)
+	defer replica.Close()
 	if guard == nil || guard.collector == nil {
 		t.Fatal("cost guard did not start")
 	}

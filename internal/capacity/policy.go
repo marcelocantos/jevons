@@ -42,6 +42,17 @@ type Policy struct {
 	// back to DefaultMaxPerClass. 0 = unbounded for that class.
 	MaxPerClass map[Class]int `json:"max_per_class,omitempty"`
 
+	// TestMaxProcs caps GOMAXPROCS for fleet-seat heavy test suites (🎯T781).
+	// 0 falls back to DefaultTestMaxProcs. Tunable in capacity.json alongside
+	// the governor's other knobs.
+	TestMaxProcs int `json:"test_max_procs,omitempty"`
+	// TestPkgParallel caps `go test -p` / gotest -p for those runs. 0 derives
+	// from TestMaxProcs (half, at least 1).
+	TestPkgParallel int `json:"test_pkg_parallel,omitempty"`
+	// TestNice is the nice(1) increment for fleet heavy runs. 0 uses
+	// DefaultTestNice; a negative value disables the nice wrapper.
+	TestNice int `json:"test_nice,omitempty"`
+
 	// LoadPerCoreCritical is the 1-minute load average per core at which the
 	// host itself is out of capacity (🎯T463). 0 falls back to
 	// DefaultLoadPerCoreCritical. Configurable and per-core on purpose: the

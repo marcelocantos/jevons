@@ -30,7 +30,7 @@ const capacityEventComponent = "capacity"
 // supply the per-provider load headroom. With no cost spine (usage.db
 // unavailable, or budget.json disabled) admission degrades to slot-based
 // bounds — which is still better than every loop running blind.
-func startCapacityGovernor(cfg config.Config, watcher *config.Watcher, guard *costGuard, plans *planusage.Reader, mcpSrv *mcpserver.Server, srv *server.Server) *capacity.Governor {
+func startCapacityGovernor(cfg config.Config, watcher *config.Watcher, guard *costGuard, plans *planusage.Projection, mcpSrv *mcpserver.Server, srv *server.Server) *capacity.Governor {
 	path := capacity.ConfigPath(cfg.StateDir)
 	// Leave the owner a durable retune surface on first boot, the same way
 	// the research and coach cycles do.
@@ -51,15 +51,16 @@ func startCapacityGovernor(cfg config.Config, watcher *config.Watcher, guard *co
 
 	args := mcpserver.CapacitySnapshotArgs{
 		OwnerActive:      srv.OwnerTurnInFlight,
-		ProviderLoad:     mcpSrv.HarnessLoad,
-		ProviderSoftCaps: mcpSrv.EffectiveProviderSoftCaps,
+		ProviderLoad:      mcpSrv.HarnessLoad,
+		ProviderLoadSeats: mcpSrv.HarnessLiveSeatNames,
+		ProviderSoftCaps:  mcpSrv.EffectiveProviderSoftCaps,
 		DailyTokens:      func() int64 { return policy.Get().DailyTokenBudget },
 		// The host itself, cached so a status call and an ambient tick in the
 		// same second share one sysctl (🎯T463).
 		HostLoad: hostload.Cached(0),
 	}
 	if plans != nil {
-		args.PlanRemaining = plans.CapacityRemaining
+		args.PlanRemaining = func() (*float64, string) { return plans.CapacityRemaining(mcpSrv.HarnessLoad()) }
 	}
 	if guard != nil {
 		args.Cost = guard.monitor.Snapshot

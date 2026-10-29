@@ -1,0 +1,11 @@
+name = "jevons-invariants"
+version = "0.1.0"
+keywords = ["jevons"]
+defaultTargets = ["Invariants"]
+
+[leanOptions]
+pp.unicode.fun = true
+relaxedAutoImplicit = false
+
+[[lean_lib]]
+name = "Invariants"

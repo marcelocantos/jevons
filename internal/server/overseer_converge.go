@@ -8,12 +8,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/ownerquestions"
+	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
@@ -64,14 +68,16 @@ const (
 	cockpitAttach
 	cockpitUnstickBusy
 	cockpitLaunch
+	cockpitAuthWait
 	cockpitGiveUp
 	cockpitWaitObservation
 )
 
 // cockpitObs is a snapshot of overseer + chat attach + busy state.
 type cockpitObs struct {
-	Unknown      bool // a present handle has no fresh condition observation
-	Registered   bool
+	Unknown        bool // a present handle has no fresh condition observation
+	RegistryWired  bool // registry and overseer name are attached (🎯T807)
+	Registered     bool
 	ProcAlive    bool
 	ChatAttached bool
 	// PromptInFlight from claudia (Grok ACP); false when unknown.
@@ -93,6 +99,9 @@ type cockpitObs struct {
 	// ResumeDenied is a latched Cursor session/load fail-closed
 	// (🎯T541.1). Further Launch attempts would stack store.db writers.
 	ResumeDenied bool
+	// AuthLaunchBlocked: overseer launch is in an auth-failure backoff
+	// window (🎯T607) — do not spawn another provider process yet.
+	AuthLaunchBlocked bool
 }
 
 // planCockpit is the hermetic policy (oracle for 🎯T204).
@@ -115,6 +124,9 @@ func planCockpit(o cockpitObs, attempts, maxAttempts int, stuckTimeout time.Dura
 		return cockpitGiveUp
 	}
 	if !o.ProcAlive {
+		if o.AuthLaunchBlocked {
+			return cockpitAuthWait
+		}
 		if attempts >= maxAttempts {
 			return cockpitGiveUp
 		}
@@ -177,6 +189,28 @@ func planOverseerPage(reason string, downSince time.Time, paged bool, now time.T
 	return pageNone
 }
 
+// overseerPagingOutage is whether the overseer is unavailable for owner
+// chat independent of whether the converge loop has set overseerDownReason
+// yet (🎯T807). Unknown observation is not an outage — wait for a read.
+func overseerPagingOutage(obs cockpitObs, downReason string) (bool, string) {
+	if downReason != "" {
+		return true, downReason
+	}
+	if obs.Unknown {
+		return false, ""
+	}
+	if !obs.Registered {
+		if !obs.RegistryWired {
+			return false, ""
+		}
+		return true, "overseer is not registered in the agent registry"
+	}
+	if !obs.ProcAlive {
+		return true, "overseer process is not running"
+	}
+	return false, ""
+}
+
 // SetOverseerPager overrides the out-of-band pager (tests; default blurter).
 func (s *Server) SetOverseerPager(f func(subject, body, key string, recovered bool)) {
 	s.mu.Lock()
@@ -184,12 +218,49 @@ func (s *Server) SetOverseerPager(f func(subject, body, key string, recovered bo
 	s.mu.Unlock()
 }
 
+// SetOverseerPageAfter overrides the down-streak threshold (🎯T807 isolate
+// live path). Zero restores DefaultOverseerPageAfter. Not for :13705.
+func (s *Server) SetOverseerPageAfter(d time.Duration) {
+	s.mu.Lock()
+	s.overseerPageAfter = d
+	s.mu.Unlock()
+}
+
+func (s *Server) overseerPageAfterDuration() time.Duration {
+	s.mu.RLock()
+	d := s.overseerPageAfter
+	s.mu.RUnlock()
+	if d > 0 {
+		return d
+	}
+	return DefaultOverseerPageAfter
+}
+
 // reconcileOverseerPage pages the owner out of band when the overseer has
-// been down past the threshold (🎯T775). Independent of any agent.
+// been down past the threshold (🎯T775 / 🎯T807). Independent of any agent
+// and of whether the converge loop has ticked.
 func (s *Server) reconcileOverseerPage(now time.Time) {
+	obs := s.ObserveCockpit()
+	pageAfter := s.overseerPageAfterDuration()
 	s.mu.Lock()
 	reason, since, paged, pager := s.overseerDownReason, s.overseerDownSince, s.overseerPaged, s.overseerPager
-	act := planOverseerPage(reason, since, paged, now, DefaultOverseerPageAfter)
+	pagingEpoch := s.overseerPagingEpoch
+	liveOutage, liveReason := overseerPagingOutage(obs, reason)
+	effReason := reason
+	if liveOutage {
+		if effReason == "" {
+			effReason = liveReason
+		}
+		if since.IsZero() {
+			if !pagingEpoch.IsZero() {
+				since = pagingEpoch
+			} else {
+				since = now
+			}
+			s.overseerDownSince = since
+		}
+	}
+	act := planOverseerPage(effReason, since, paged, now, pageAfter)
 	switch act {
 	case pageDown:
 		s.overseerPaged = true
@@ -197,7 +268,7 @@ func (s *Server) reconcileOverseerPage(now time.Time) {
 		s.overseerPaged = false
 		s.overseerDownSince = time.Time{}
 	}
-	if reason == "" {
+	if reason == "" && !liveOutage {
 		s.overseerDownSince = time.Time{}
 	}
 	s.mu.Unlock()
@@ -206,10 +277,36 @@ func (s *Server) reconcileOverseerPage(now time.Time) {
 	}
 	switch act {
 	case pageDown:
-		pager("jevons: overseer down for "+now.Sub(since).Round(time.Minute).String(), reason, "jevons-overseer-down", false)
+		pager("jevons: overseer down for "+now.Sub(since).Round(time.Minute).String(), effReason, "jevons-overseer-down", false)
 	case pageRecovered:
 		pager("jevons: overseer is back", "the overseer recovered", "jevons-overseer-down", true)
 	}
+}
+
+// startOverseerPageLoop re-checks overseer paging on its own schedule so an
+// outage before the converge loop's first tick still pages (🎯T807).
+func (s *Server) startOverseerPageLoop(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = DefaultCockpitInterval
+	}
+	s.mu.Lock()
+	if s.overseerPagingEpoch.IsZero() {
+		s.overseerPagingEpoch = time.Now()
+	}
+	s.mu.Unlock()
+	go func() {
+		s.reconcileOverseerPage(time.Now())
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.reconcileOverseerPage(time.Now())
+			}
+		}
+	}()
 }
 
 func blurterPage(subject, body, key string, recovered bool) {
@@ -246,6 +343,56 @@ type cockpitState struct {
 	gaveUpResumeDenied bool
 	// maxUnstickPerHour soft-cap before escalate-to-relaunch only.
 	maxUnstickBurst int
+	// authUntil / authAttempts: launch backoff after provider auth refusal (🎯T607).
+	authUntil     time.Time
+	authAttempts  int
+	authAnnounced bool
+}
+
+func (st *cockpitState) authLaunchBlocked(now time.Time) bool {
+	if st == nil {
+		return false
+	}
+	st.mu.Lock()
+	blocked := now.Before(st.authUntil)
+	st.mu.Unlock()
+	return blocked
+}
+
+func (st *cockpitState) noteAuthLaunchFailure(now time.Time, err error) time.Duration {
+	if st == nil || err == nil {
+		return 0
+	}
+	st.mu.Lock()
+	st.authAttempts++
+	n := st.authAttempts
+	announce := !st.authAnnounced
+	if announce {
+		st.authAnnounced = true
+	}
+	st.mu.Unlock()
+	delay := provider.AuthLaunchBackoff.Delay(n)
+	st.mu.Lock()
+	st.authUntil = now.Add(delay)
+	st.mu.Unlock()
+	if announce {
+		slog.Error("PROVIDER NOT AUTHENTICATED — overseer launch backing off until credentials work",
+			"fix", "sign in (`grok login` or set XAI_API_KEY for Grok overseer)",
+			"detail", agenterr.LaunchAuthOwnerCopy(err.Error()),
+			"backoff", delay)
+	}
+	return delay
+}
+
+func (st *cockpitState) clearAuthLaunchBackoff() {
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	st.authUntil = time.Time{}
+	st.authAttempts = 0
+	st.authAnnounced = false
+	st.mu.Unlock()
 }
 
 // CockpitHooks are optional fleet actuators registered from main so
@@ -286,6 +433,7 @@ func (s *Server) ObserveCockpit() cockpitObs {
 	if reg == nil || name == "" {
 		return o
 	}
+	o.RegistryWired = true
 	if reg.Def(name) == nil {
 		return o
 	}
@@ -331,6 +479,7 @@ func (s *Server) EnsureOverseer(state *cockpitState) error {
 	}
 	obs := s.ObserveCockpit()
 	now := time.Now()
+	obs.AuthLaunchBlocked = state.authLaunchBlocked(now)
 	state.mu.Lock()
 	if cockpitShouldRearm(obs, state.attempts, DefaultCockpitMaxAttempts, state.gaveUpAt, state.gaveUpResumeDenied, now, DefaultCockpitRearmAfter) {
 		slog.Info("cockpit: give-up re-armed; cause cleared", "resume_denied_cleared", state.gaveUpResumeDenied)
@@ -349,13 +498,14 @@ func (s *Server) EnsureOverseer(state *cockpitState) error {
 	state.mu.Unlock()
 
 	switch phase {
-	case cockpitWaitObservation:
+	case cockpitWaitObservation, cockpitAuthWait:
 		return nil
 	case cockpitOK:
 		state.mu.Lock()
 		state.attempts = 0
 		state.lastErr = ""
 		state.mu.Unlock()
+		state.clearAuthLaunchBackoff()
 		s.SetOverseerDownReason("")
 		return nil
 	case cockpitAttach:
@@ -580,6 +730,12 @@ func (s *Server) cockpitLaunch(state *cockpitState) error {
 		agent, err = fleet.LaunchRecovering(reg, name)
 	}
 	if err != nil {
+		if agenterr.LaunchAuthFailure(err) {
+			delay := state.noteAuthLaunchFailure(time.Now(), err)
+			reason := agenterr.LaunchAuthOwnerCopy(err.Error())
+			s.SetOverseerDownReason(reason)
+			return fmt.Errorf("cockpit: auth backoff %s", delay)
+		}
 		state.mu.Lock()
 		state.attempts++
 		if claudia.IsCursorResumeDenied(err) {
@@ -603,10 +759,28 @@ func (s *Server) cockpitLaunch(state *cockpitState) error {
 	state.attempts = 0
 	state.lastErr = ""
 	state.mu.Unlock()
+	state.clearAuthLaunchBackoff()
 	slog.Info("cockpit: overseer launched and attached", "name", name, "session", agent.SessionID())
 	s.NotifyAgentsChanged()
 	s.broadcastCockpitReady("overseer is back")
 	return nil
+}
+
+// IsolateFleetHookEveryEnv shortens the fleet pass cadence on an isolate
+// (🎯T1299). J39 steps a simulated sweep clock through 21 minutes and waited
+// out a real 30 s pass for each one; the sweep it judges is the same code at
+// any cadence. Read only when JEVONS_TEST_FAULTS=1, which the journey suite
+// sets and the development daemon does not.
+const IsolateFleetHookEveryEnv = "JEVONS_ISOLATE_FLEET_HOOK_EVERY"
+
+// fleetHookEvery is DefaultFleetHookEvery unless an isolate overrides it.
+func fleetHookEvery() int {
+	if os.Getenv("JEVONS_TEST_FAULTS") == "1" {
+		if n, err := strconv.Atoi(os.Getenv(IsolateFleetHookEveryEnv)); err == nil && n > 0 {
+			return n
+		}
+	}
+	return DefaultFleetHookEvery
 }
 
 // runFleetHooks invokes dead-agent recovery and idle nudge when due.
@@ -615,7 +789,7 @@ func (s *Server) runFleetHooks(state *cockpitState) {
 	state.tick++
 	t := state.tick
 	state.mu.Unlock()
-	if t%DefaultFleetHookEvery != 0 {
+	if t%fleetHookEvery() != 0 {
 		return
 	}
 	s.mu.RLock()
@@ -638,6 +812,7 @@ func (s *Server) StartCockpitConverge(ctx context.Context, interval time.Duratio
 	if interval <= 0 {
 		interval = DefaultCockpitInterval
 	}
+	s.startOverseerPageLoop(ctx, interval)
 	state := &cockpitState{}
 	go func() {
 		if err := s.EnsureOverseer(state); err != nil {

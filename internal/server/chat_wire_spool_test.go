@@ -12,8 +12,8 @@ import (
 
 func TestChatWireReadsSidecarSpool(t *testing.T) {
 	lines := chatWireFromSpool([]spool.Record{
-		{Type: "text", Text: "hello from sidecar", Seat: "jevons-po"},
-		{Type: "turn_end", Text: "done", Seat: "jevons-po"},
+		{Type: "text", Text: wireOwnerReplyDecision("hello from sidecar"), Seat: "jevons-po"},
+		{Type: "turn_end", Text: wireOwnerReplyDecision("done"), Seat: "jevons-po"},
 	})
 	if len(lines) == 0 {
 		t.Fatal("chat-wire produced no lines from the spool")
@@ -24,10 +24,19 @@ func TestChatWireReadsSidecarSpool(t *testing.T) {
 	}
 }
 
+func TestChatWireFromSpoolIncludesToolCall(t *testing.T) {
+	lines := chatWireFromSpool([]spool.Record{
+		{Type: "tool_call", CallID: "c0", Name: "Bash", Text: `{"cmd":"ls"}`},
+	})
+	if len(lines) != 1 {
+		t.Fatalf("tool_call wire lines: got %d want 1", len(lines))
+	}
+}
+
 func TestT870StopTokenIsNotOwnerVisible(t *testing.T) {
 	lines := chatWireFromSpool([]spool.Record{
 		{Type: "text", Text: "<|eos|>", Seat: "jevons"},
-		{Type: "text", Text: "I'll inspect <|eos|>", Seat: "jevons"},
+		{Type: "text", Text: wireOwnerReplyDecision("I'll inspect "), Seat: "jevons"},
 	})
 	joined := strings.Join(lines, "\n")
 	if strings.Contains(joined, "<|eos|>") {

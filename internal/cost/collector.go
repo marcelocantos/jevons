@@ -211,13 +211,23 @@ func (c *Collector) UsesSocketHistory() bool {
 }
 
 // BindSendReceiptQuery installs this collector's replica receipt read.
-// startCostGuard is the production caller. A nil collector, a nil replica,
-// or a nil setter leaves the query unset. This does not start Run.
+// A nil collector, a nil replica, or a nil setter leaves the query unset.
+// Daemon receipt readers bind directly to ReplicaSource so accounting may
+// be disabled without disabling control-plane observations.
 func (c *Collector) BindSendReceiptQuery(set func(func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error))) {
 	if c == nil || c.replica == nil || set == nil {
 		return
 	}
 	set(c.ReplicatedReceipt)
+}
+
+// ReplicatedReceipt preserves the collector's receipt API; the shared
+// control-plane service owns the read and does not require a collector.
+func (c *Collector) ReplicatedReceipt(ctx context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+	if c == nil {
+		return nil, fmt.Errorf("replicated receipt: no replica")
+	}
+	return c.replica.ReplicatedReceipt(ctx, q)
 }
 
 // Health reports the collector's loop state (🎯T654).
@@ -484,7 +494,7 @@ func (c *Collector) Run(ctx context.Context, scanEvery, pollEvery time.Duration)
 			for ctx.Err() == nil {
 				var err error
 				if c.replica != nil {
-					err = c.CatchUpReplicas(ctx)
+					_, err = c.CatchUpReplicas(ctx)
 				} else {
 					err = c.CatchUpOnce(ctx)
 				}

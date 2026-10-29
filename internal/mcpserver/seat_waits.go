@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/claudetrust"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // Kinds of wait a frontier target can be in. The cockpit paints both as the
@@ -92,9 +95,16 @@ func (s *Server) putSeatWait(target string, w SeatWait) {
 // frontier tooltip quotes. The journal keeps the whole thing.
 const seatFailureCauseMax = 240
 
+// seatTrustConfigPath is the 🎯T709 config a Claude seat reads its
+// workdir-trust answer from. A seam so a test can point it at a fixture
+// instead of the owner's real ~/.claude.json.
+var seatTrustConfigPath = claudetrust.ConfigPath
+
 // describeSeatFailure renders why a seat for a target is gone, for the
 // owner looking at the frontier row: which seat, under which parent, the
-// removal reason and detail, and the classified cause when the daemon has one.
+// removal reason and detail, the classified cause when the daemon has one,
+// and — for a Claude seat whose workdir Claude Code has never been told to
+// trust — the one diagnosis the daemon can make on its own.
 func describeSeatFailure(def *claudia.AgentDef, name, removalReason, removalDetail string, cause error) string {
 	var b strings.Builder
 	parent := ""
@@ -112,6 +122,16 @@ func describeSeatFailure(def *claudia.AgentDef, name, removalReason, removalDeta
 			text = text[:seatFailureCauseMax] + "…"
 		}
 		fmt.Fprintf(&b, "; cause (%s): %s", agenterr.Classify(cause), text)
+	}
+	if def != nil && seatprovider.Resolve(def.Provider).Plan == seatprovider.Claude && strings.TrimSpace(def.WorkDir) != "" {
+		if path := seatTrustConfigPath(); path != "" {
+			doc, err := os.ReadFile(path)
+			if err == nil && !claudetrust.Accepted(doc, def.WorkDir) {
+				fmt.Fprintf(&b, "; Claude Code has not trusted workdir %s (no hasTrustDialogAccepted in %s) — "+
+					"a seat there opens on the trust dialog, which no automated process can answer; "+
+					"accept it once by hand or record the answer in that file", def.WorkDir, path)
+			}
+		}
 	}
 	return b.String()
 }

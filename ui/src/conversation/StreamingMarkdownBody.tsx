@@ -34,6 +34,13 @@ export function StreamingMarkdownBody(props: {
   }, [props.text]);
 
   useEffect(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+    const id = window.setTimeout(() => session.flush(), 0);
+    return () => window.clearTimeout(id);
+  }, [props.text]);
+
+  useEffect(() => {
     return () => {
       sessionRef.current?.destroy();
       sessionRef.current = null;

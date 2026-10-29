@@ -160,14 +160,12 @@ func (s *Server) handleLogsTail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"path":          path,
-		"count":         len(page.Events),
-		"events":        page.Events,
-		"next_cursor":   page.NextCursor,
-		"head_cursor":   page.HeadCursor,
-		"scanned_bytes": page.ScannedBytes,
-	})
+	body, err := eventlog.MarshalLogsPage(path, page)
+	if err != nil {
+		http.Error(w, `{"error":"log tail failed"}`, http.StatusInternalServerError)
+		return
+	}
+	_, _ = w.Write(body)
 }
 
 func parseLogQuery(r *http.Request, stream bool) (eventlog.Query, error) {

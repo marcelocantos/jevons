@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/delivery"
@@ -198,6 +200,10 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 		return agentSendResult{}, fmt.Errorf("name and text are required")
 	}
 
+	if err := s.deliverRefuseIfProviderRequestFailed(name); err != nil {
+		return agentSendResult{}, err
+	}
+
 	s.observeQueue(name)
 
 	// 🎯T509: validate load-bearing envelopes and cap chatter on the one
@@ -298,16 +304,24 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 	// on 2026-08-29 `name=jevons-po actor=jevons` classified as needs-owner
 	// and was delivered into the overseer's own transcript, twice. The PO
 	// speaking to itself is not a report either.
+	who := strings.TrimSpace(actor)
 	destPurpose := ""
+	actorPurpose := ""
 	if s.registry != nil {
 		if def := s.registry.Def(dest); def != nil {
 			destPurpose = def.Purpose
 		}
+		if def := s.registry.Def(who); def != nil {
+			actorPurpose = def.Purpose
+		}
 	}
-	who := strings.TrimSpace(actor)
+	// 🎯T724: PO-to-PO traffic is peer coordination, not a worker report
+	// skipping the PO hop. A defect handoff from ge-po must land in jevons-po's
+	// session even when the body carries oracle/finish envelope shapes.
 	if origin == OriginAgent && !overseerArm && purposeCoordinator(s.agentRole(dest, destPurpose)) &&
 		who != "" && who != ActorOwnerSurface &&
 		!s.isOverseerAgent(who) && strings.ToLower(who) != strings.ToLower(dest) &&
+		!purposeCoordinator(s.agentRole(who, actorPurpose)) &&
 		relayroute.Classify(report) == relayroute.RouteOverseer &&
 		s.storeRelayedReport(who, report) {
 		po := dest
@@ -401,6 +415,15 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 		return agentSendResult{}, err
 	}
 
+	// 🎯T981: owner text to a paused seat is held until unpause; daemon
+	// traffic is refused so nudges cannot punch through the classifier alone.
+	if s.SeatOwnerPaused(name) {
+		if origin == OriginOwner {
+			return s.holdOwnerPauseMessage(name, text), nil
+		}
+		return agentSendResult{}, fmt.Errorf("agent %q is paused by the owner (🎯T981)", name)
+	}
+
 	// 🎯T401: an auto-reaped name is still a reachable address. Detect it
 	// before ensureAgentProcess's bare "not running", hold the payload in
 	// sendq, and name the recovery call. Never-registered stays not-found.
@@ -419,6 +442,15 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 			}
 			return s.holdSendForReapedWithRequestID(name, text, rec, requestID), nil
 		}
+	}
+
+	// 🎯T1229: ambient agent-origin deliveries (repo-watch, sentinel, coach,
+	// post-reap) to a seat whose fleet intent is not runnable go to sendq
+	// here, before ensureAgentProcess or butler.PushEvent can start a turn
+	// — including when the process is already alive. Owner-origin and
+	// overseer-direct keep the current path.
+	if held, ok, herr := s.holdAmbientIfUnrunnable(name, text, requestID, origin, actor, rel, mode); ok {
+		return held, herr
 	}
 
 	s.mu.Lock()
@@ -461,6 +493,18 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 			}
 		}
 	}
+	// 🎯T785: a fleet mode=interrupt against a seat whose tool is still
+	// fresh is demoted to submit so the running call is not cancelled the
+	// way an owner Esc would be. Owner interrupt (🎯T711) is left alone.
+	mode, _ = s.demoteFleetInterruptForTool(name, origin, mode)
+	// 🎯T785: label a fleet interrupt that still proceeds (stuck tool / no
+	// tool id) so the seat does not invent an owner rejection.
+	text = noteFleetInterruptIfNeeded(origin, mode, text)
+	// 🎯T785: queue a non-owner delivery while a tool_call_id is mid-flight
+	// even when the turn-flight ledger is idle/unknown (stale after bounce).
+	if res, handled, err := s.protectToolInFlight(name, text, requestID, origin, mode, rehydrated); handled {
+		return res, err
+	}
 	// 🎯T899: an urgent sender presses a busy seat instead of waiting for
 	// its turn to end. An explicit mode (steer, interrupt, queue) is the
 	// caller's own choice and is left alone.
@@ -469,7 +513,17 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 			return res, err
 		}
 	}
-	return deliverToSenderModeWithRequestID(s, name, text, requestID, mode, proc, rehydrated, confirm)
+	res, err = deliverToSenderModeOriginWithRequestID(s, name, text, requestID, origin == OriginOwner, mode, proc, rehydrated, confirm)
+	if err == nil && res.Status != "" {
+		s.recordLandHoldFromBrief(name, text, actor)
+	}
+	if err == nil && !overseerArm && origin == OriginOwner {
+		s.maybeRecordPOOwnerMission(name, text, requestID, origin)
+	}
+	if err == nil {
+		res = s.noteParkedSeatOnSend(name, origin, actor, rel, res)
+	}
+	return res, err
 }
 
 // relayReportBody returns the sender's report for 🎯T392.7 classification and
@@ -569,6 +623,7 @@ func stripLeadingIdentityEnvelope(text string) string {
 // this resolves the seam and reports the outcome in the same shape a fleet
 // send reports — the caller cannot tell which arm ran.
 func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentSendResult, error) {
+	atomic.CompareAndSwapInt64(&s.firstOverseerDeliveryNanos, 0, time.Now().UnixNano())
 	s.mu.Lock()
 	deliver := s.overseerDeliver
 	receipted := s.overseerDeliverReceipted

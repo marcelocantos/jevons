@@ -45,7 +45,11 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	case "":
+		sweepStaleJourneyIsolates()
 		os.Exit(m.Run())
+
+	case childTmuxFatal:
+		runT846TmuxFatalChild()
 
 	case sidecarHolderMode:
 		// Stands in for the broker's sidecar: holds the socket's lock for
@@ -55,6 +59,18 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 		os.Exit(0)
+
+	case "state-dir-fatal":
+		// 🎯T1168: same registration order as main.go for the isolate dir.
+		stateDir, err := os.MkdirTemp("", "jevons-journey-*")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		cleanups.Add(func() { os.RemoveAll(stateDir) })
+		cleanups.Add(func() { killPrivateClaudiaTmux(stateDir) })
+		catchSignals()
+		fatal(errors.New("simulated isolate failure"))
 
 	case "fatal":
 		// Exactly the shape of the leak: register teardown, then die

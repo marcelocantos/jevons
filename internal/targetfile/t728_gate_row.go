@@ -4,10 +4,7 @@
 package targetfile
 
 import (
-	"os"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // The 🎯T449 ceremony needs one thing the existing readers cannot answer:
@@ -49,55 +46,20 @@ type GateRow struct {
 // IsAchieved reports the achieved status by the ledger's own spelling.
 func (r GateRow) IsAchieved() bool { return strings.TrimSpace(r.Status) == "achieved" }
 
-type gateRowDoc struct {
-	Targets map[string]gateRowTarget `yaml:"targets"`
-}
-
-type gateRowTarget struct {
-	Status      string     `yaml:"status"`
-	Achieved    string     `yaml:"achieved"`
-	Attestation string     `yaml:"attestation"`
-	Context     string     `yaml:"context"`
-	OwnedBy     *ownedBloc `yaml:"owned_by"`
-}
-
 // LookupGateRow reads one row out of a ledger YAML document. ok is false when
 // the document does not parse or does not carry that id — unknown stays
 // unknown, the residual every other reader in this package takes.
 func LookupGateRow(data []byte, id string) (GateRow, bool) {
-	id = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(id), "🎯"))
-	if id == "" {
+	idx, ok := BuildGateRowIndex(data)
+	if !ok {
 		return GateRow{}, false
 	}
-	var doc gateRowDoc
-	if err := yaml.Unmarshal(data, &doc); err != nil || doc.Targets == nil {
-		return GateRow{}, false
-	}
-	t, found := doc.Targets[id]
-	if !found {
-		return GateRow{}, false
-	}
-	row := GateRow{
-		ID:          id,
-		Status:      strings.TrimSpace(t.Status),
-		Achieved:    strings.TrimSpace(t.Achieved),
-		Attestation: t.Attestation,
-		Context:     t.Context,
-	}
-	if t.OwnedBy != nil {
-		row.OwnedByOwner = strings.TrimSpace(t.OwnedBy.Owner)
-		row.OwnedByReason = t.OwnedBy.Reason
-	}
-	return row, true
+	return idx.Lookup(id)
 }
 
 // LoadGateRowFromCwd reads one row from the ledger nearest cwd.
 func LoadGateRowFromCwd(cwd, targetID string) (GateRow, bool) {
-	path, err := DiscoverLedgerPath(cwd)
-	if err != nil {
-		return GateRow{}, false
-	}
-	data, err := os.ReadFile(path)
+	data, _, err := ReadLedgerFromCwd(cwd)
 	if err != nil {
 		return GateRow{}, false
 	}

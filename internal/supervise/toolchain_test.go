@@ -15,10 +15,13 @@ import (
 	"github.com/marcelocantos/jevons/internal/supervise"
 )
 
-// 🎯T434 — the pure half of "the supervisor's restart does not depend on a
-// toolchain launchd cannot reach". The end-to-end half, which runs the
-// shipped restart script under launchd's own PATH, lives in
-// cmd/jevons-watchdog/t434_toolchain_test.go.
+// 🎯T434 — the pure half of "a restart does not depend on a toolchain the
+// supervisor's environment cannot reach": RestartBlocker names the missing
+// helpers and the fix when there is no `go` to build them with.
+
+// systemPATH is what a supervisor hands a program when its configuration
+// declares no environment: nothing the owner installed is on it.
+const systemPATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 // fakeLookPath answers from a table instead of the machine's PATH, so
 // these tests say the same thing on a host with no Homebrew.
@@ -31,84 +34,6 @@ func fakeLookPath(found map[string]string) supervise.LookPath {
 	}
 }
 
-func TestAgentPATHReachesTheToolsLaunchdCannotSee(t *testing.T) {
-	path, missing := supervise.AgentPATH(fakeLookPath(map[string]string{
-		"go":      "/opt/homebrew/bin/go",
-		"blurter": "/Users/someone/.local/bin/blurter",
-	}), supervise.RestartTools)
-
-	if len(missing) != 0 {
-		t.Fatalf("reported %v missing when both were found", missing)
-	}
-	if !strings.HasPrefix(path, supervise.LaunchdDefaultPATH) {
-		t.Errorf("agent PATH dropped launchd's own entries: %s", path)
-	}
-	for _, want := range []string{"/opt/homebrew/bin", "/Users/someone/.local/bin"} {
-		if !strings.Contains(path, want) {
-			t.Errorf("agent PATH %q does not reach %s", path, want)
-		}
-	}
-}
-
-func TestAgentPATHNamesWhatItCouldNotFind(t *testing.T) {
-	// The install path turns a missing `go` into a refusal and a missing
-	// blurter into a warning, so it has to be told which is which.
-	path, missing := supervise.AgentPATH(fakeLookPath(map[string]string{
-		"blurter": "/usr/local/bin/blurter",
-	}), supervise.RestartTools)
-
-	if len(missing) != 1 || missing[0] != "go" {
-		t.Fatalf("missing = %v, want exactly [go]", missing)
-	}
-	if strings.Contains(path, "homebrew") {
-		t.Errorf("agent PATH invented a toolchain directory: %s", path)
-	}
-}
-
-func TestAgentPATHDoesNotRepeatADirectory(t *testing.T) {
-	// Both tools in /usr/bin, which launchd already provides: the PATH
-	// must not grow a duplicate entry per tool.
-	path, _ := supervise.AgentPATH(fakeLookPath(map[string]string{
-		"go":      "/usr/bin/go",
-		"blurter": "/usr/bin/blurter",
-	}), supervise.RestartTools)
-
-	if path != supervise.LaunchdDefaultPATH {
-		t.Errorf("agent PATH = %q, want launchd's default unchanged", path)
-	}
-}
-
-func TestPlistCarriesTheAgentPATH(t *testing.T) {
-	xml := supervise.PlistXML(supervise.AgentSpec{
-		Binary:   "/repo/bin/jevons-watchdog",
-		Repo:     "/repo",
-		StateDir: "/state",
-		Port:     1234,
-		LogPath:  "/state/watchdog.log",
-		PathEnv:  "/usr/bin:/bin:/opt/homebrew/bin",
-	})
-
-	// The plist this replaced had ProgramArguments and log paths and no
-	// environment at all, which is how the watchdog came to run without a
-	// toolchain it needs and without the blurter that would have said so.
-	if !strings.Contains(xml, "<key>EnvironmentVariables</key>") {
-		t.Fatalf("plist declares no environment:\n%s", xml)
-	}
-	if !strings.Contains(xml, "<string>/usr/bin:/bin:/opt/homebrew/bin</string>") {
-		t.Errorf("plist does not carry the computed PATH:\n%s", xml)
-	}
-}
-
-func TestPlistWithoutAPathStaysSilent(t *testing.T) {
-	// An empty PathEnv means "say nothing", which is launchd's default —
-	// worth keeping distinct from writing an empty PATH, which would be
-	// worse than the bug.
-	xml := supervise.PlistXML(supervise.AgentSpec{Binary: "/repo/bin/jevons-watchdog"})
-	if strings.Contains(xml, "EnvironmentVariables") {
-		t.Errorf("plist invented an environment block:\n%s", xml)
-	}
-}
-
 func TestRestartBlockerIsSilentWhenTheHelpersAreThere(t *testing.T) {
 	repo := t.TempDir()
 	writeHelper(t, repo, "detach")
@@ -117,7 +42,7 @@ func TestRestartBlockerIsSilentWhenTheHelpersAreThere(t *testing.T) {
 	writeHelper(t, repo, "jevonsd")
 
 	// No `go` anywhere, and it does not matter: nothing needs building.
-	if got := supervise.RestartBlocker(repo, fakeLookPath(nil), supervise.LaunchdDefaultPATH); got != "" {
+	if got := supervise.RestartBlocker(repo, fakeLookPath(nil), systemPATH); got != "" {
 		t.Errorf("blocked a restart that can succeed: %s", got)
 	}
 }
@@ -138,7 +63,7 @@ func TestRestartBlockerNamesTheMissingHelperAndTheFix(t *testing.T) {
 	repo := t.TempDir()
 	writeHelper(t, repo, "jevonsd")
 
-	got := supervise.RestartBlocker(repo, fakeLookPath(nil), supervise.LaunchdDefaultPATH)
+	got := supervise.RestartBlocker(repo, fakeLookPath(nil), systemPATH)
 	if got == "" {
 		t.Fatal("a restart that cannot possibly succeed was reported as fine")
 	}
@@ -149,8 +74,8 @@ func TestRestartBlockerNamesTheMissingHelperAndTheFix(t *testing.T) {
 		"bin/runlock",
 		"bin/claudiapin",
 		repo,
-		supervise.LaunchdDefaultPATH,
-		"make watchdog-install",
+		systemPATH,
+		"supervisor/jevonsd.ini",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("blocker message missing %q: %s", want, got)
@@ -168,7 +93,7 @@ func TestRestartBlockerNamesAMissingClaudiapinAlone(t *testing.T) {
 	writeHelper(t, repo, "runlock")
 	writeHelper(t, repo, "jevonsd")
 
-	got := supervise.RestartBlocker(repo, fakeLookPath(nil), supervise.LaunchdDefaultPATH)
+	got := supervise.RestartBlocker(repo, fakeLookPath(nil), systemPATH)
 	if !strings.Contains(got, "bin/claudiapin") {
 		t.Errorf("missing claudiapin with no go was not reported: %q", got)
 	}
@@ -182,7 +107,7 @@ func TestRestartBlockerWantsBuildsnapOnlyWithNoBinaryToFallBackOn(t *testing.T) 
 
 	// No bin/jevonsd, so the restart has to rebuild one, which needs
 	// buildsnap, which needs go.
-	got := supervise.RestartBlocker(repo, fakeLookPath(nil), supervise.LaunchdDefaultPATH)
+	got := supervise.RestartBlocker(repo, fakeLookPath(nil), systemPATH)
 	if !strings.Contains(got, "bin/buildsnap") {
 		t.Errorf("a restart with nothing to start and no way to build it was not blocked: %q", got)
 	}
@@ -190,7 +115,7 @@ func TestRestartBlockerWantsBuildsnapOnlyWithNoBinaryToFallBackOn(t *testing.T) 
 	// With a binary present the watchdog skips the rebuild, so buildsnap
 	// is not in the way.
 	writeHelper(t, repo, "jevonsd")
-	if got := supervise.RestartBlocker(repo, fakeLookPath(nil), supervise.LaunchdDefaultPATH); got != "" {
+	if got := supervise.RestartBlocker(repo, fakeLookPath(nil), systemPATH); got != "" {
 		t.Errorf("buildsnap blocked a restart that would not have run it: %s", got)
 	}
 }
@@ -214,8 +139,9 @@ func writeHelper(t *testing.T, repo, name string) {
 // blocking the restart, which is why it is documented above RestartHelpers
 // as excluded on purpose. supervisorpolicy (🎯T1086) degrades the same way
 // across two lines: an unbuildable one makes the policy "unknown" and the
-// restart goes on.
-var restartHelperExempt = map[string]bool{"buildsnap": true, "buildident": true, "supervisorpolicy": true}
+// restart goes on. bouncetiming (🎯T794) only reports bounce timing after
+// health: an unbuildable one logs "skipped" and the restart has succeeded.
+var restartHelperExempt = map[string]bool{"buildsnap": true, "buildident": true, "supervisorpolicy": true, "bouncetiming": true}
 
 // restartBuildLineRE finds on-demand `go build -o "$X" ./cmd/y` lines in
 // the restart script. The helper name is the cmd directory. `$[^"]+`

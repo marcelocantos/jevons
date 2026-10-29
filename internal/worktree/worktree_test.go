@@ -13,6 +13,36 @@ import (
 	"github.com/marcelocantos/jevons/internal/worktree"
 )
 
+func TestValidateSeatFleetWorkdir(t *testing.T) {
+	base := "/repo/jevons"
+	own := worktree.WorktreePath(base, "jv-t995-auto")
+	sibling := worktree.WorktreePath(base, "jv-t1159-auto")
+	if err := worktree.ValidateSeatFleetWorkdir("jv-t995-auto", own); err != nil {
+		t.Fatalf("own tree: %v", err)
+	}
+	if err := worktree.ValidateSeatFleetWorkdir("jv-t995-auto", sibling); err == nil {
+		t.Fatal("sibling fleet tree must be rejected")
+	}
+	if err := worktree.ValidateSeatFleetWorkdir("jv-t995-auto", base); err != nil {
+		t.Fatalf("shared clone: %v", err)
+	}
+}
+
+func TestSharedCloneFromFleetWorktree(t *testing.T) {
+	base := "/repo/jevons"
+	wt := worktree.WorktreePath(base, "jv-t1159-auto")
+	got, ok := worktree.SharedCloneFromFleetWorktree(wt)
+	if !ok {
+		t.Fatal("expected fleet worktree path")
+	}
+	if filepath.Clean(got) != filepath.Clean(base) {
+		t.Fatalf("shared clone = %q, want %q", got, base)
+	}
+	if _, ok := worktree.SharedCloneFromFleetWorktree(base); ok {
+		t.Fatal("shared clone itself is not a fleet worktree leaf")
+	}
+}
+
 func TestWorktreePathDistinctPerAgent(t *testing.T) {
 	base := "/repo/jevons"
 	a := worktree.WorktreePath(base, "jv-t254.2-fanout-a")
@@ -28,19 +58,19 @@ func TestWorktreePathDistinctPerAgent(t *testing.T) {
 func TestNeedsIsolationClassifier(t *testing.T) {
 	cases := []struct {
 		purpose, role string
-		shared, want  bool
+		want        bool
 	}{
-		{"work", "worker", true, true},
-		{"work", "", true, true}, // empty role defaults to worker semantics
-		{"work", "worker", false, false},
-		{"work", "boss", true, false},
-		{"work", "product-owner", true, false},
-		{"aside", "worker", true, false},
+		{"work", "worker", true},
+		{"work", "", true}, // empty role defaults to worker semantics
+		{"work", "worker", true}, // 🎯T1151.1: always isolate lone workers
+		{"work", "boss", false},
+		{"work", "product-owner", false},
+		{"aside", "worker", false},
 	}
 	for _, c := range cases {
-		got := worktree.NeedsIsolation(c.purpose, c.role, c.shared)
+		got := worktree.NeedsIsolation(c.purpose, c.role)
 		if got != c.want {
-			t.Errorf("NeedsIsolation(%q,%q,%v) = %v, want %v", c.purpose, c.role, c.shared, got, c.want)
+			t.Errorf("NeedsIsolation(%q,%q) = %v, want %v", c.purpose, c.role, got, c.want)
 		}
 	}
 }

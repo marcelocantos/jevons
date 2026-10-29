@@ -14,6 +14,8 @@ import (
 // resets_at but no length (~30d billing cycle).
 const DefaultMonthlyWindowSeconds int64 = 30 * 24 * 3600
 
+const cursorAPIWindowName = claudia.PlanWindowAPI
+
 const (
 	weeklyDurationMinSeconds  int64 = 6 * 24 * 3600
 	weeklyDurationMaxSeconds  int64 = 8 * 24 * 3600

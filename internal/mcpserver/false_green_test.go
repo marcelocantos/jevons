@@ -132,8 +132,12 @@ func TestFalseGreenBannerLeadsTheDeliveredMessage(t *testing.T) {
 	rendered := gate.Banner(flags) + "\n\n" + envelope.Format(&envelope.Message{
 		Kind: envelope.KindAck, SilentLedger: envelope.SilentLedgerEmpty,
 	})
-	if got, err := envelope.Parse(rendered); err != nil || got != nil {
-		t.Fatalf("rendered false-green banner parsed: got=%v err=%v", got, err)
+	// Prose ahead of an envelope does not hide it when the envelope ends the
+	// message (T1186): it parses as a trailing envelope, not at line 1. The
+	// delivered form still uses the typed prefix below, so the fence stays
+	// at line 1 of what the author wrote.
+	if got, err := envelope.Parse(rendered); err != nil || got == nil || got.Kind != envelope.KindAck || got.AtLine1 {
+		t.Fatalf("banner ahead of a trailing envelope: got=%v err=%v", got, err)
 	}
 	led := falseGreenLead("jv-t386-gate", flags, envelope.PrefixAgentResponded+"\n"+route+"\n"+envelope.Format(&envelope.Message{
 		Kind: envelope.KindAck, SilentLedger: envelope.SilentLedgerEmpty,

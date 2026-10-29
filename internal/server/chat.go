@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatliveness"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/coder/websocket"
@@ -30,6 +31,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/seatactivity"
@@ -63,19 +65,27 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		s.historySlowHook()
 	}
 
-	s.mu.RLock()
-	clog := s.chatLog
-	s.mu.RUnlock()
-	if clog == nil {
-		http.Error(w, `{"error":"no history"}`, http.StatusServiceUnavailable)
-		return
-	}
 	end, _ := strconv.Atoi(r.URL.Query().Get("end"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 2000 {
 		limit = 200
 	}
-	lines, total, err := clog.ReadRange(end-limit, end)
+	var lines []string
+	var total int
+	var err error
+	if s.overseerCanonicalHistory() {
+		lines, total, err = s.overseerHistoryReadRange(end-limit, end)
+	} else {
+		s.mu.RLock()
+		clog := s.chatLog
+		s.mu.RUnlock()
+		if clog == nil {
+			http.Error(w, `{"error":"no history"}`, http.StatusServiceUnavailable)
+			return
+		}
+		// JSONL archive only when statedb has no canonical rows (🎯T613).
+		lines, total, err = clog.ReadRange(end-limit, end)
+	}
 	if err != nil {
 		http.Error(w, `{"error":"history read failed"}`, http.StatusInternalServerError)
 		return
@@ -262,6 +272,7 @@ func (s *Server) clearOverseerStreamID() {
 	s.overseerStreamSilent = false
 	s.overseerStreamHold = nil
 	s.mu.Unlock()
+	s.overseerClearTUIPreview()
 }
 
 // emptyEndTurnWire builds a body-less terminal assistant frame so the UI
@@ -301,6 +312,13 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	s.deliverOverseerEventAdmitted(ev)
 }
 
+func (s *Server) overseerDeliverWireLine(ev claudia.Event, ownerTurn bool) (string, bool) {
+	if s.overseerAdmissionEnabled() {
+		return chatWireLineForDeliver(ev, ownerTurn, true)
+	}
+	return chatWireLine(ev, ownerTurn)
+}
+
 func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable bool) {
 	// Current-event durability must never inherit a prior held-prefix write.
 	// The aggregate is only for crediting text in those earlier held lines.
@@ -309,6 +327,17 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 	}
 	// Any ACP traffic resets stuck-busy idle (🎯T204).
 	s.NoteOverseerProgress()
+
+	if isOverseerTUIPreviewEvent(ev) {
+		s.deliverOverseerTUIPreviewEvent(ev)
+		s.applyOverseerEventPhase(s.admissionSafeEvent(ev, false))
+		s.handleAdmissionSafeAgentEvent(ev, false)
+		s.maybeNotifyOverseerFleetProgress(ev, false)
+		return false
+	}
+	if ev.Type == "user" {
+		s.overseerClearTUIPreview()
+	}
 
 	// 🎯T406: transport-level provider refusals on the overseer wire enter
 	// (or leave alone) the fleet hard-block. Authored prose never fires —
@@ -362,12 +391,18 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 		s.mu.Unlock()
 	}
 
+	// 🎯T584: JSONL assistant text seals the oldest open TUI preview block.
+	if ev.Type == "assistant" && strings.TrimSpace(ev.Text) != "" {
+		s.overseerSealTUIPreviewForAssistant()
+	}
+
 	// 🎯T240 whole-stream silent: accumulate assistant text, suppress body.
 	if ev.Type == "assistant" && (ev.Text != "" || ev.IsTerminalStop()) {
 		s.mu.Lock()
+		ownerTurn := s.overseerOwnerTurn
 		if ev.Text != "" {
 			s.overseerStreamAcc += ev.Text
-			switch silentresponse.Classify(s.overseerStreamAcc) {
+			switch classifyOverseerOwnerStream(ownerTurn, s.overseerStreamAcc, ev.IsTerminalStop(), ev) {
 			case silentresponse.Silent:
 				s.overseerStreamSilent = true
 				s.overseerStreamHold = nil // drop any incomplete-prefix hold
@@ -382,7 +417,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 			}
 		}
 		silent := s.overseerStreamSilent
-		class := silentresponse.Classify(s.overseerStreamAcc)
+		class := classifyOverseerOwnerStream(ownerTurn, s.overseerStreamAcc, ev.IsTerminalStop(), ev)
 		s.mu.Unlock()
 
 		if silent {
@@ -401,17 +436,22 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 				// phase reduce left whatever the turn last showed (a
 				// tool, a pane preview) published until the next turn.
 				s.applyOverseerEventPhase(s.admissionSafeEvent(ev, false))
-				if s.ObserveAgentProgress(s.overseerAgentName(), s.admissionSafeEvent(ev, false)) {
-					s.NotifyAgentsChanged()
-				}
+				s.maybeNotifyOverseerFleetProgress(ev, false)
 			}
 			s.handleAdmissionSafeAgentEvent(ev, false)
 			return false
 		}
 
 		if class == silentresponse.Pending && ev.Text != "" && !ev.IsTerminalStop() {
+			s.mu.Lock()
+			accForHold := s.overseerStreamAcc
+			s.mu.Unlock()
+			if !s.overseerAdmissionEnabled() &&
+				envelope.ClassifyOverseerOwnerStream(accForHold, true) == envelope.OverseerOwnerShow {
+				s.noteOwnerVisibleText(envelope.OverseerOwnerChatBody(accForHold))
+			}
 			// Hold wire until prefix completes or stream proves visible.
-			if line, ok := chatWireLine(ev); ok {
+			if line, ok := s.overseerDeliverWireLine(ev, ownerTurn); ok {
 				if streamID != "" {
 					line = stampStreamID(line, streamID)
 				}
@@ -419,7 +459,9 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 				s.overseerStreamHold = append(s.overseerStreamHold, line)
 				s.mu.Unlock()
 			}
+			s.applyOverseerEventPhase(s.admissionSafeEvent(ev, currentDurable))
 			s.handleAdmissionSafeAgentEvent(ev, currentDurable)
+			s.maybeNotifyOverseerFleetProgress(ev, currentDurable)
 			return currentDurable
 		}
 
@@ -431,19 +473,56 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 			held := s.overseerStreamHold
 			s.overseerStreamHold = nil
 			acc := s.overseerStreamAcc
+			ownerTurnSeal := s.overseerOwnerTurn
 			s.mu.Unlock()
-			for _, h := range held {
-				s.broadcastAdmittedChat(h)
-			}
-			// 🎯T378: held fragments proved visible on seal — the owner can
-			// read them, so this turn answered.
-			if len(held) > 0 && !s.overseerAdmissionEnabled() {
-				s.noteOwnerVisibleText(acc)
+			showOnSeal := ownerTurnSeal || envelope.ClassifyOverseerOwnerStream(acc, true) != envelope.OverseerOwnerSuppress
+			if showOnSeal {
+				for _, h := range held {
+					s.broadcastAdmittedChat(h)
+				}
+				// 🎯T378: held fragments proved visible on seal — the owner can
+				// read them, so this turn answered.
+				if len(held) > 0 && !s.overseerAdmissionEnabled() {
+					s.noteOwnerVisibleText(acc)
+				}
 			}
 		}
 	}
 
-	if line, ok := chatWireLine(ev); ok {
+	// 🎯T1140: owner-reply with an owner-facing purpose paints once at seal.
+	if ev.Type == "assistant" && ev.IsTerminalStop() {
+		s.mu.Lock()
+		acc := s.overseerStreamAcc
+		ownerTurnSeal := s.overseerOwnerTurn
+		s.mu.Unlock()
+		if !ownerTurnSeal && envelope.ClassifyOverseerOwnerStream(acc, true) == envelope.OverseerOwnerShow {
+			progressEv := ev
+			progressEv.Text = acc
+			if strings.TrimSpace(envelope.OverseerOwnerChatBody(acc)) != "" {
+				if line, ok := s.overseerDeliverWireLine(progressEv, ownerTurnSeal); ok {
+					if streamID != "" {
+						line = stampStreamID(line, streamID)
+					}
+					currentDurable = s.broadcastAdmittedChat(line)
+					if !s.overseerAdmissionEnabled() {
+						s.noteOwnerVisibleText(envelope.OverseerOwnerChatBody(acc))
+					}
+				}
+			} else if line := emptyEndTurnWire(ev.StopReason, streamID); line != "" {
+				currentDurable = s.broadcastAdmittedChat(line)
+			}
+			s.clearOverseerStreamID()
+			s.applyOverseerEventPhase(s.admissionSafeEvent(progressEv, currentDurable))
+			s.handleAdmissionSafeAgentEvent(progressEv, currentDurable)
+			s.maybeNotifyOverseerFleetProgress(progressEv, currentDurable)
+			return currentDurable
+		}
+	}
+
+	s.mu.Lock()
+	ownerWireTurn := s.overseerOwnerTurn
+	s.mu.Unlock()
+	if line, ok := s.overseerDeliverWireLine(ev, ownerWireTurn); ok {
 		if streamID != "" {
 			line = stampStreamID(line, streamID)
 		}
@@ -486,9 +565,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 	// MCP event hook. The overseer stream never went through that hook,
 	// so GET /api/agents kept phase=idle through a live Grok turn while
 	// the status bar said thinking.
-	if s.ObserveAgentProgress(s.overseerAgentName(), s.admissionSafeEvent(ev, currentDurable)) {
-		s.NotifyAgentsChanged()
-	}
+	s.maybeNotifyOverseerFleetProgress(ev, currentDurable)
 	return currentDurable
 }
 
@@ -528,6 +605,19 @@ func (s *Server) SendToOverseer(text string) error {
 	return s.SendToOverseerAs(text, "")
 }
 
+// ownerReofferIsDuplicateInFlight reports whether text is exactly the owner
+// turn currently in flight to the overseer (🎯T1120). Scoped deliberately
+// narrow: only a system re-offer (caller already checked msgID == "") of the
+// SAME text as the live overseerOwnerTurnText, while that turn has not yet
+// sealed. Once the turn completes, overseerOwnerTurnText is cleared and a
+// later identical text — genuine repeat or late re-offer — is delivered
+// normally; this guard only stops the race against an answer already under way.
+func (s *Server) ownerReofferIsDuplicateInFlight(text string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.waiting && s.overseerOwnerTurn && s.overseerOwnerTurnText != "" && s.overseerOwnerTurnText == text
+}
+
 // SendToOverseerAs is SendToOverseer for an owner turn that has a message id
 // (🎯T806): the id is registered in the same lock hold that enqueues the text.
 func (s *Server) SendToOverseerAs(text, msgID string) error {
@@ -546,6 +636,24 @@ func (s *Server) sendToOverseerAs(text, msgID string) (*sentNotifyBatch, error) 
 	// calling its heartbeat here would re-enter that lock (🎯T623.1).
 	if owner && s.activityHook != nil {
 		s.activityHook()
+	}
+
+	// 🎯T1120: a system re-offer of the owner's own words (msgID == "" —
+	// 🎯T915's comment names this: "owner-health re-injections carry none")
+	// must not mint a second provider turn while the first is still the
+	// in-flight owner turn it is re-offering. A genuine fresh owner click
+	// always carries a msgID, so this only ever catches a re-offer racing
+	// the answer it was trying to rescue — the 2026-10-21 20:56 specimen
+	// where a duplicate "Same status as my last summary" bubble followed a
+	// correct answer by about 30s. This does not touch a deliberate repeat
+	// question the owner sends after the turn has actually completed: by
+	// then overseerOwnerTurnText is cleared and the text no longer matches.
+	if owner && msgID == "" && s.ownerReofferIsDuplicateInFlight(text) {
+		slog.Info("notify_queue",
+			"component", "notify_queue",
+			"decision", "dedup_reoffer_inflight",
+		)
+		return nil, nil
 	}
 
 	s.mu.Lock()
@@ -576,9 +684,16 @@ func (s *Server) sendToOverseerAs(text, msgID string) (*sentNotifyBatch, error) 
 	// Fleet-only busy: interrupt so the owner can take the session (T291).
 	// Do not interrupt an owner turn — cancel-and-send is the chat client's job.
 	fleetBusy := s.waiting && !s.overseerOwnerTurn
+	// 🎯T1130: this owner message lands behind a running turn, whatever the
+	// browser's own (possibly stale) phase belief was — s.waiting is the
+	// daemon's own truth, read under the same lock as the enqueue above.
+	heldBehindTurn := owner && msgID != "" && s.waiting
 	s.mu.Unlock()
 	if owner {
 		s.persistOwnerQueue() // 🎯T806: a bounce must not lose a displayed message
+	}
+	if heldBehindTurn {
+		s.noteOwnerHeld(text, msgID)
 	}
 
 	// 🎯T128.3: enqueue is Info so queue growth is visible at production default.
@@ -1045,6 +1160,8 @@ func (s *Server) drainOverseerNotesSent() *sentNotifyBatch {
 	ownerMsgID := ""
 	if ownerBatch {
 		ownerMsgID = s.peekOwnerMessageID(batch[0])
+	} else {
+		s.journalMachineTurnBoundary(batch)
 	}
 	requestID, err := s.sendNotes(strings.Join(batch, "\n\n"))
 
@@ -1068,10 +1185,15 @@ func (s *Server) drainOverseerNotesSent() *sentNotifyBatch {
 			"err", err,
 			"owner_batch", ownerBatch,
 		)
-		// 🎯T806: busy is ordinary queueing behind a turn. Anything else on an
-		// owner batch is a refusal the owner must be told about, and retried.
-		if ownerBatch && notifyErrClass(err) != "busy" {
-			s.announceOwnerUndelivered(batch[0], err)
+		// 🎯T806: busy is ordinary queueing behind a turn; the turn's end
+		// drains it. Anything else is a refusal nothing else will undo, so it
+		// is retried; on an owner batch the owner is also told. 🎯T1306: a
+		// fleet batch refused "process not running" mid plan-policy switch
+		// waited 2m15s for stuck-busy recovery to drain it (J45, 2026-10-29).
+		if notifyErrClass(err) != "busy" {
+			if ownerBatch {
+				s.announceOwnerUndelivered(batch[0], err)
+			}
 			s.scheduleNotifyRetry()
 		}
 		return nil
@@ -1173,6 +1295,12 @@ func (s *Server) SetRegistry(reg *claudia.Registry) {
 
 // NotifyAgentsChanged pushes a non-journaled live frame so the RHS fleet
 // panel refreshes without waiting on poll (🎯T82). Safe from any goroutine.
+//
+// 🎯T853: this rides the overseer mux/chat fan-out as a fleet refresh control
+// frame (type agents_changed), not a transcript bubble — see
+// isFleetRefreshFrame in chat_wire_test.go and TestChatWireRoundTripOverWebSocket.
+// AgentProgressHub still updates GET /api/agents (🎯T118); the wire shape
+// oracles skip non-bubble controls while requiring at least one refresh per turn.
 func (s *Server) NotifyAgentsChanged() {
 	s.projectAgents()
 	payload, err := json.Marshal(map[string]any{"type": "agents_changed"})
@@ -1237,10 +1365,12 @@ type agentInfo struct {
 	Ledger string `json:"ledger,omitempty"`
 	Status string `json:"status"`
 	// Running is process Alive() — not registry presence or last-known Launch (🎯T545.5).
-	Running  bool   `json:"running"`
-	Phase    string `json:"phase,omitempty"`
-	Step     string `json:"step,omitempty"`
-	Progress string `json:"progress,omitempty"`
+	Running bool   `json:"running"`
+	Phase   string `json:"phase,omitempty"`
+	// PhaseHealth names a disagreement between transcript/progress and the broker turn state.
+	PhaseHealth string `json:"phase_health,omitempty"`
+	Step        string `json:"step,omitempty"`
+	Progress    string `json:"progress,omitempty"`
 	// Provider / Model back the RHS company-icon + condensed model prefix
 	// (🎯T287). Provider is the agent's stored backend (claude | grok | …).
 	// Model is session truth for the badge (🎯T324): live observation,
@@ -1254,11 +1384,14 @@ type agentInfo struct {
 	// when three or more seats stopped within a minute with no daemon
 	// restart; carried on every row so the RHS can show it once.
 	StopReason string `json:"stop_reason,omitempty"`
+	StopActor  string `json:"stop_actor,omitempty"`
 	StoppedAt  string `json:"stopped_at,omitempty"`
 	// Starting marks a not-running seat that something is bringing up: a
 	// jevons_agent_start that has not returned, or a launch in flight
 	// (🎯T970). It carries no stop reason: it has not stopped.
 	Starting bool `json:"starting,omitempty"`
+	// OwnerPaused is true while the owner paused this seat from the cockpit (🎯T981).
+	OwnerPaused bool `json:"owner_paused,omitempty"`
 	// PlanWall is set when the seat's transcript ends on Cursor's
 	// "Upgrade your plan to continue" turn. The process may still be
 	// running; the row shows it the way it shows a stop reason.
@@ -1281,6 +1414,15 @@ type agentInfo struct {
 	// nothing has been heard from it and messages wait behind it (🎯T927).
 	// phase stays "working"; this says the work is not happening.
 	Wedged string `json:"wedged,omitempty"`
+	// Inert is set while a live seat accepts queued sends but its transcript
+	// age only climbs across observation windows (🎯T754).
+	Inert string `json:"inert,omitempty"`
+	// SeatLiveness is "inert" when the row is classified frozen-but-queued.
+	SeatLiveness string `json:"seat_liveness,omitempty"`
+	// QueuedPrompts / QueuedPromptsAgeSeconds surface backlog the seat has
+	// not started (🎯T754).
+	QueuedPrompts           *int     `json:"queued_prompts,omitempty"`
+	QueuedPromptsAgeSeconds *float64 `json:"queued_prompts_age_seconds,omitempty"`
 	// SpawnOrders: one line per open spawn order given to this seat
 	// (🎯T762). An incomplete order names every seat it listed that was never
 	// minted and why (refused: the start error; not_attempted: no start was
@@ -1304,6 +1446,16 @@ type agentInfo struct {
 	TranscriptLastMove       string   `json:"transcript_last_move,omitempty"`
 	TranscriptAgeSeconds     *float64 `json:"transcript_age_seconds"`
 	TranscriptActivityReason string   `json:"transcript_activity_reason,omitempty"`
+	// ProcessLiveness is live | dead | unknown from the seat authority alone
+	// (🎯T751) — distinct from phase/progress, which can stay stale after death.
+	ProcessLiveness string `json:"process_liveness,omitempty"`
+	// FailureClass / LastError: provider request failure latched on the seat (🎯T845).
+	FailureClass string `json:"failure_class,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
+	// 🎯T1121: default fleet panel filter (history rows omit from UI unless toggled).
+	Class     string `json:"class"`
+	Visible   bool   `json:"visible"`
+	PanelLine string `json:"panel_line,omitempty"`
 }
 
 // feedRelaunch is one dead seat's relaunch in progress, per registry
@@ -1382,12 +1534,34 @@ func (s *Server) SetSeatStopReader(fn func(name string) (reason string, at time.
 	s.seatStopReader = fn
 }
 
+// SetSeatStopDetailsReader wires trusted stop actor metadata with the reason
+// in one read. It supersedes the older reason-only reader when installed.
+func (s *Server) SetSeatStopDetailsReader(fn func(name string) (reason, actor string, at time.Time, ok bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seatStopDetailsReader = fn
+}
+
 // SetMassStopReader installs the 🎯T662 mass-stop line source
 // (mcpserver.MassStopLine in production).
 func (s *Server) SetMassStopReader(fn func() string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.massStopReader = fn
+}
+
+// SetPOAuditorFaultReader installs the 🎯T1192 fault line for /api/agents.
+func (s *Server) SetPOAuditorFaultReader(fn func(name string) (line string, ok bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.poAuditorFaultReader = fn
+}
+
+// SetAwaitingParentDirectionReader installs the 🎯T1233 child status for /api/agents.
+func (s *Server) SetAwaitingParentDirectionReader(fn func(name string) (line string, ok bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.awaitingParentDirectionReader = fn
 }
 
 // SetSpawnOrderReader installs the 🎯T762 open-order lines per parent
@@ -1406,13 +1580,97 @@ func (s *Server) SetWedgedReader(fn func(name string) (string, bool)) {
 	s.wedgedReader = fn
 }
 
+// SetInertReader installs the 🎯T754 inert-seat lookup
+// (mcpserver.InertSeat in production).
+func (s *Server) SetInertReader(fn func(name string) (string, bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inertReader = fn
+}
+
+// SetEmptyTurnFaultReaders installs the 🎯T1238 fault and backoff row annotations.
+func (s *Server) SetEmptyTurnFaultReaders(fault func(string) (string, bool), backoff func(string) string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emptyTurnFaultReader = fault
+	s.emptyTurnBackoffReader = backoff
+}
+
+// SetQueuedPromptsReader installs queue visibility for /api/agents (🎯T754).
+func (s *Server) SetQueuedPromptsReader(fn func(name string) (depth int, ageSec float64, ok bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queuedPromptsReader = fn
+}
+
+// SetDestinationModelValidator wires 🎯T845 migrate/mint preflight.
+func (s *Server) SetDestinationModelValidator(fn func(provider, model string, explicitPin bool) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.destinationModelValidator = fn
+}
+
+// SetProviderRequestFailureReader wires 🎯T845 /api/agents failure fields.
+func (s *Server) SetProviderRequestFailureReader(fn func(name string) (agenterr.Class, string, bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.providerRequestFailureReader = fn
+}
+
+// decoratePOAuditorFaults applies 🎯T1192 typed stall status on PO rows.
+func (s *Server) decoratePOAuditorFaults(agents []agentInfo) []agentInfo {
+	s.mu.RLock()
+	reader := s.poAuditorFaultReader
+	s.mu.RUnlock()
+	if reader == nil {
+		return agents
+	}
+	const status = "po_auditor_mutual_wait"
+	for i := range agents {
+		if line, ok := reader(agents[i].Name); ok {
+			agents[i].Status = status
+			if agents[i].PanelLine == "" {
+				agents[i].PanelLine = line
+			}
+		}
+	}
+	return agents
+}
+
+// decorateAwaitingParentDirection applies 🎯T1233 child status on fleet rows.
+func (s *Server) decorateAwaitingParentDirection(agents []agentInfo) []agentInfo {
+	s.mu.RLock()
+	reader := s.awaitingParentDirectionReader
+	s.mu.RUnlock()
+	if reader == nil {
+		return agents
+	}
+	const status = "awaiting_parent_direction"
+	for i := range agents {
+		if line, ok := reader(agents[i].Name); ok {
+			agents[i].Status = status
+			if agents[i].PanelLine == "" {
+				agents[i].PanelLine = line
+			}
+		}
+	}
+	return agents
+}
+
 // decorateSeatStops applies the 🎯T662 fields to the rows.
 func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 	s.mu.RLock()
 	stopReader := s.seatStopReader
+	stopDetailsReader := s.seatStopDetailsReader
 	startingReader := s.seatStartingReader
+	pauseCtrl := s.seatPauseControl
 	massReader := s.massStopReader
 	wedgedReader := s.wedgedReader
+	inertReader := s.inertReader
+	emptyFaultReader := s.emptyTurnFaultReader
+	emptyBackoffReader := s.emptyTurnBackoffReader
+	queuedReader := s.queuedPromptsReader
+	failureReader := s.providerRequestFailureReader
 	orderReader := s.spawnOrderReader
 	s.mu.RUnlock()
 	mass := ""
@@ -1420,15 +1678,29 @@ func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 		mass = massReader()
 	}
 	for i := range agents {
+		if pauseCtrl.Paused != nil && pauseCtrl.Paused(agents[i].Name) {
+			agents[i].OwnerPaused = true
+		}
 		if startingReader != nil && !agents[i].Running && startingReader(agents[i].Name) {
 			// 🎯T970: a row registered minutes before its process exists
 			// has not exited; saying so is what the panel showed on
 			// 2026-09-30 for four workers queued behind other launches.
 			agents[i].Starting = true
-		} else if stopReader != nil && !agents[i].Running {
-			if reason, at, ok := stopReader(agents[i].Name); ok {
+		} else if (stopDetailsReader != nil || stopReader != nil) && !agents[i].Running {
+			var reason, actor string
+			var at time.Time
+			var ok bool
+			if stopDetailsReader != nil {
+				reason, actor, at, ok = stopDetailsReader(agents[i].Name)
+			} else {
+				reason, at, ok = stopReader(agents[i].Name)
+			}
+			if ok {
 				agents[i].StopReason = reason
-				agents[i].StoppedAt = at.UTC().Format(time.RFC3339)
+				agents[i].StopActor = actor
+				if !at.IsZero() {
+					agents[i].StoppedAt = at.UTC().Format(time.RFC3339)
+				}
 			} else {
 				// A restart drops the in-memory ledger, and a seat that was
 				// already stopped at boot is never swept. Silence on that
@@ -1441,6 +1713,39 @@ func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 		if wedgedReader != nil && agents[i].Running {
 			if line, ok := wedgedReader(agents[i].Name); ok {
 				agents[i].Wedged = line
+			}
+		}
+		if inertReader != nil && agents[i].Running {
+			if line, ok := inertReader(agents[i].Name); ok {
+				agents[i].Inert = line
+				agents[i].SeatLiveness = "inert"
+				agents[i].Status = "inert"
+			}
+		}
+		if emptyFaultReader != nil && agents[i].Running {
+			if line, ok := emptyFaultReader(agents[i].Name); ok {
+				agents[i].Status = "faulted"
+				agents[i].PanelLine = line
+			} else if emptyBackoffReader != nil {
+				if line := emptyBackoffReader(agents[i].Name); line != "" {
+					agents[i].PanelLine = line
+				}
+			}
+		}
+		if queuedReader != nil && agents[i].Running {
+			if depth, age, ok := queuedReader(agents[i].Name); ok {
+				agents[i].QueuedPrompts = &depth
+				if age > 0 {
+					agents[i].QueuedPromptsAgeSeconds = &age
+				}
+			}
+		}
+		if failureReader != nil {
+			if class, last, ok := failureReader(agents[i].Name); ok {
+				agents[i].FailureClass = class.String()
+				agents[i].LastError = last
+				agents[i].Status = "failed"
+				agents[i].Running = false
 			}
 		}
 		if orderReader != nil {
@@ -1474,6 +1779,11 @@ func (s *Server) decorateSeatActivity(reg *claudia.Registry, agents []agentInfo,
 	for i := range agents {
 		d := reg.Def(agents[i].Name)
 		st := s.seatState(agents[i].Name)
+		if st.Alive == seatstate.No {
+			agents[i].TranscriptActivity = string(seatactivity.VerdictKnown)
+			agents[i].TranscriptActivityReason = "provider process not running"
+			continue
+		}
 		if d == nil || st.LastActivity.IsZero() || (st.SessionID != "" && st.SessionID != d.SessionID) {
 			agents[i].TranscriptActivity = string(seatactivity.VerdictUnknown)
 			agents[i].TranscriptActivityReason = "no activity observed for this session"
@@ -1519,6 +1829,9 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 	if reg == nil {
 		return []agentInfo{}
 	}
+	// Refresh process readings before building rows (🎯T751): a poll must not
+	// paint idle chrome from a hub snapshot while the provider is already gone.
+	seatstate.RegistryAuthority(reg).ObserveRegistry(reg)
 	var recovered []string
 	// Inline silent-death policy (same as mcpserver.deadRecoveryPlan) so the
 	// HTTP feed path does not import mcpserver (cycle). Keep in sync.
@@ -1582,6 +1895,10 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 		st := seatstate.ReadRegistry(reg, d.Name)
 		status := st.Status
 		running := st.Alive == seatstate.Yes
+		if fleet.GrantHeldRelaunchBlocked(d.Name) {
+			running = false
+			status = "stopped"
+		}
 		if st.Alive == seatstate.No {
 			status = "stopped"
 		}
@@ -1609,16 +1926,17 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 			ledgerOf[d.WorkDir] = ledger
 		}
 		info := agentInfo{
-			Name:        d.Name,
-			WorkDir:     d.WorkDir,
-			Parent:      d.Parent,
-			Purpose:     purpose,
-			Description: d.Description,
-			TargetID:    strings.TrimSpace(d.TargetID),
-			Ledger:      ledger,
-			Status:      status,
-			Running:     running,
-			Provider:    strings.TrimSpace(string(d.Provider)),
+			Name:            d.Name,
+			WorkDir:         d.WorkDir,
+			Parent:          d.Parent,
+			Purpose:         purpose,
+			Description:     d.Description,
+			TargetID:        strings.TrimSpace(d.TargetID),
+			Ledger:          ledger,
+			Status:          status,
+			Running:         running,
+			Provider:        strings.TrimSpace(string(d.Provider)),
+			ProcessLiveness: seatliveness.Served(st),
 		}
 		if !running {
 			info.Rehydrate = fleet.RehydrateHealth(d)
@@ -1630,7 +1948,7 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 		if purpose == claudia.PurposeAside {
 			info.AsideKind = asideKindFromWorkDir(d.WorkDir)
 		}
-		if progress != nil {
+		if progress != nil && st.Alive != seatstate.No {
 			p := progress.Get(d.Name)
 			if p.Summary != "" || p.Phase != "" || p.Step != "" {
 				info.Phase = st.Phase.String()
@@ -1642,6 +1960,23 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 				info.Progress = p.Summary
 			}
 		}
+		// The broker turn bit is the same authority used by the send queue. A
+		// transcript/progress idle sample can lag a turn already in flight.
+		// Surface the disagreement rather than painting the seat idle (🎯T783).
+		if running && st.InFlight == seatstate.Yes {
+			if info.Phase == "idle" || st.Phase.String() == "idle" {
+				info.PhaseHealth = "fleet health: phase idle disagrees with broker turn in flight"
+			}
+			info.Phase = "working"
+		} else if running && st.InFlight == seatstate.No && info.Phase == "working" {
+			info.PhaseHealth = "fleet health: phase working disagrees with broker turn idle"
+			info.Phase = "idle"
+		} else if running && st.InFlight == seatstate.No && info.Phase == "unknown" {
+			// A live seat that has not yet streamed a turn has no turn phase,
+			// but the broker says nothing is in flight: it is idle, not
+			// unknown (🎯T1276 J3: a fresh codex overseer read "unknown").
+			info.Phase = "idle"
+		}
 		info.Model = st.Model
 
 		agents = append(agents, info)
@@ -1650,6 +1985,25 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 		return agents[i].Name < agents[j].Name
 	})
 	return agents
+}
+
+// maybeNotifyOverseerFleetProgress refreshes the RHS fleet row during a live
+// overseer turn. ACP/tool frames change AgentProgressHub; owner-reply assistant
+// chunks may not, but the panel still needs agents_changed (🎯T853 / 🎯T118).
+func (s *Server) maybeNotifyOverseerFleetProgress(ev claudia.Event, durable bool) {
+	if s.ObserveAgentProgress(s.overseerAgentName(), s.admissionSafeEvent(ev, durable)) {
+		s.NotifyAgentsChanged()
+		return
+	}
+	if ev.Type != "assistant" && ev.Type != "progress" {
+		return
+	}
+	s.mu.RLock()
+	live := s.overseerStreamID != "" || s.overseerOwnerTurn
+	s.mu.RUnlock()
+	if live {
+		s.NotifyAgentsChanged()
+	}
 }
 
 // ObserveAgentProgress records an ACP/tool event for name and returns whether
@@ -1689,6 +2043,11 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]agentInfo{})
 		return
 	}
+	if a := s.seats.Load(); a != nil {
+		a.ObserveRegistry(reg)
+	} else {
+		seatstate.RegistryAuthority(reg).ObserveRegistry(reg)
+	}
 	// Where a slow answer spent its time (🎯T936), logged past agentsSlow.
 	start := time.Now()
 	var phases []string
@@ -1708,6 +2067,14 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	mark("auth")
 	rows = s.decorateSeatActivity(reg, rows, time.Now())
 	mark("activity")
+	rows = s.decoratePanelClass(rows)
+	mark("panel")
+	rows = s.decoratePOAuditorFaults(rows)
+	mark("po_auditor_fault")
+	rows = s.decorateAwaitingParentDirection(rows)
+	mark("awaiting_parent_direction")
+	rows = appendRegistryAbsentBrokerRows(r.Context(), reg, rows)
+	mark("broker_absent")
 	if took := time.Since(start); took > agentsSlow {
 		slog.Warn("🎯T936 /api/agents slow", "took", took.Round(time.Millisecond), "phases", strings.Join(phases, " "), "rows", len(rows))
 	}
@@ -1878,12 +2245,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// history. Older turns stay in the durable log and are fetched on
 	// demand via GET /api/history ("load earlier"); a history_meta frame
 	// tells the client how many older lines exist.
-	if clog != nil {
+	if clog != nil || s.overseerCanonicalHistory() {
 		replayStart := time.Now()
 		var frames int
 		var bytes int
 		// 🎯T142: sealed-turn replay — merge token stream into one frame/turn.
-		start, total, err := clog.ReplayTailSealed(historyReplayTurns, func(line string) error {
+		replayFn := func(line string) error {
 			// 🎯T382: pre-fix journals hold provider echoes of owner turns;
 			// replaying one repaints the message (marker and images) twice.
 			if echoedOwnerTurnLine(line) {
@@ -1894,7 +2261,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 			return conn.Write(writeCtx, websocket.MessageText, []byte(line))
-		})
+		}
+		var start, total int
+		var err error
+		if s.overseerCanonicalHistory() {
+			start, total, err = s.overseerReplayTailSealed(historyReplayTurns, replayFn)
+		} else {
+			start, total, err = clog.ReplayTailSealed(historyReplayTurns, replayFn)
+		}
 		replayMS := time.Since(replayStart).Milliseconds()
 		fields := map[string]any{
 			"conn_id":    connID,
@@ -2019,6 +2393,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 
 		slog.Info("chat: received", "msg", msg)
+		if err := s.authorizeOwnerSurfaceHTTP(r, sendOriginOwner, s.overseerAgentName()); err != nil {
+			payload, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
+			wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
+			_ = conn.Write(wctx, websocket.MessageText, payload)
+			wcancel()
+			continue
+		}
 		if _, err := s.sendToNamedAgentAs(s.overseerAgentName(), msg, sendOriginOwner); err != nil {
 			// Failure already journaled/broadcast inside sendToOverseerAsOwner.
 			_ = err
@@ -2064,7 +2445,8 @@ func (s *Server) settleCancel() {
 	s.drainOverseerNotes()
 }
 
-// sendHistory reads the JSONL file and sends each line as a raw WebSocket
+// sendHistory reads a provider session JSONL file (not the import-once owner
+// chatlog archive — 🎯T613) and sends each line as a raw WebSocket
 // message. Lines are read with bufio.Reader.ReadBytes so a multi-megabyte
 // tool_result line cannot silently truncate the rest of the transcript
 // (T38 / Fable F5). A line that cannot be written is logged and stops
@@ -2168,16 +2550,10 @@ func (s *Server) persistChatLineWithPolicy(line string, requireDurable bool) boo
 	return durable
 }
 
-// isEphemeralChatStatusLine reports type=status recovery/level chrome
-// (🎯T555.5). Those frames are live-only; they are not turns.
+// isEphemeralChatStatusLine reports live-only owner chat chrome (🎯T555.5,
+// 🎯T584 provisional TUI preview) that must not be journaled or coalesced.
 func isEphemeralChatStatusLine(line string) bool {
-	var m struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &m); err != nil {
-		return false
-	}
-	return m.Type == "status"
+	return isEphemeralChatWireLine(line)
 }
 
 // persistChatJSONL appends one line to the JSONL chat log and reports

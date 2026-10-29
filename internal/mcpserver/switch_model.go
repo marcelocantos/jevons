@@ -5,7 +5,9 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"strings"
 	"sync"
 	"time"
@@ -56,7 +58,7 @@ func (s *Server) registerAgentSwitchModel() {
 	)
 }
 
-func (s *Server) handleAgentSwitchModel(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleAgentSwitchModel(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name := strings.TrimSpace(argString(req, "name"))
 	target := strings.TrimSpace(argString(req, "provider"))
 	model := strings.TrimSpace(argString(req, "model"))
@@ -77,10 +79,13 @@ func (s *Server) handleAgentSwitchModel(_ context.Context, req mcp.CallToolReque
 	if s.switcher == nil {
 		return mcp.NewToolResultError("model switching is not available (no fleet switcher wired)"), nil
 	}
-	// The overseer is the session answering this very call: its turn is in
-	// flight until this returns, so a switch from here either refuses or, with
-	// force, interrupts the turn that asked. The owner drives it instead.
-	if s.registry != nil {
+	// When the overseer itself makes this call, its turn is in flight until
+	// this returns, so a switch from here either refuses or, with force,
+	// interrupts the turn that asked. The owner drives it instead. Any other
+	// caller (an owner-session client, a PO) is not that turn: a running
+	// overseer turn still refuses below unless force is set. Refusing every
+	// caller told an owner-session curl it was the overseer (2026-10-27).
+	if s.registry != nil && mcpOriginFrom(ctx).Seat == name {
 		if def := s.registry.Def(name); def != nil && def.Purpose == claudia.PurposeOverseer {
 			return mcp.NewToolResultError(fmt.Sprintf(
 				"%q is the overseer and is answering this call, so it cannot switch mid-turn from here. "+
@@ -88,6 +93,17 @@ func (s *Server) handleAgentSwitchModel(_ context.Context, req mcp.CallToolReque
 		}
 	}
 	sw, err := s.switcher.SwitchModel(name, claudia.Provider(target), model, force)
+	if errors.Is(err, claudia.ErrSeatNotAttached) && s.registry != nil {
+		// After a broker restart an idle seat stays unattached until
+		// something sends to it; the send path adopts on demand, and an
+		// owner's switch now does too instead of asking them to attach it
+		// (six product owners on 2026-10-28).
+		if _, aerr := s.registry.Adopt(name); aerr == nil {
+			seatstate.ObserveRegistrySeat(s.registry, name)
+			s.EnsureAgentEventsWired(name)
+			sw, err = s.switcher.SwitchModel(name, claudia.Provider(target), model, force)
+		}
+	}
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}

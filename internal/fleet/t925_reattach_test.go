@@ -65,7 +65,7 @@ func TestT925SeatsLostToABrokerRestartComeBack(t *testing.T) {
 	intent := fleetintent.Snapshot{Agents: map[string]fleetintent.Record{"po-lost-parked": {State: fleetintent.Parked}}}
 	now := time.Date(2026, 9, 29, 20, 35, 0, 0, time.UTC)
 
-	got := reattachWith(reg, intent, now, func(n string) bool { return lost[n] }).Back
+	got := reattachWith(reg, intent, now, func(n string) bool { return lost[n] }, nil).Back
 	sort.Strings(got)
 	if want := []string{"po-running", "worker-lost", "worker-lost-running"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("back = %v, want %v", got, want)

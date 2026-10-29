@@ -370,21 +370,54 @@ func TestT760OtherActorProductCommitStaysSilent(t *testing.T) {
 
 func TestT760UnattributedProductCommitDoesNotBlameReapedSeat(t *testing.T) {
 	s, parent, repo := t734Server(t)
+	var events []map[string]any
+	s.eventLogger = func(component, decision string, fields map[string]any) {
+		if component == postReapEventComponent {
+			fields["decision"] = decision
+			events = append(events, fields)
+		}
+	}
 	t734Reap(t, s, t734Worker)
 	sha := t734Commit(t, repo, "leftover.go", "still going\n", "fix(T717): no actor trailer")
 	s.SweepPostReapCommits()
+	// 🎯T1074.7.1: an unattributed commit is information, not a violation.
+	if len(parent.sent) != 0 {
+		t.Fatalf("unattributed commit woke the parent: %v", parent.sent)
+	}
+	if len(events) != 1 || events[0]["decision"] != postReapObserve {
+		t.Fatalf("want one observe event, got %v", events)
+	}
+	line, _ := events[0]["line"].(string)
+	if !strings.Contains(line, "unattributed commit") || !strings.Contains(line, shortCommitSHA(sha)) {
+		t.Fatalf("observe line should name the unattributed commit:\n%s", line)
+	}
+	if strings.Contains(line, "reaped seat "+t734Worker) {
+		t.Fatalf("observe line blamed the watch seat without provenance:\n%s", line)
+	}
+}
+
+// 🎯T1074.7.1: the reaped seat's own commits escalate once per reap episode;
+// later commits from it are observed without another model turn.
+func TestT10747ViolationEscalatesOncePerEpisode(t *testing.T) {
+	s, parent, repo := t734Server(t)
+	var observed int
+	s.eventLogger = func(component, decision string, _ map[string]any) {
+		if component == postReapEventComponent && decision == postReapObserve {
+			observed++
+		}
+	}
+	t734Reap(t, s, t734Worker)
+	t734CommitAttributed(t, repo, "a.go", "a\n", "fix(T717): first leftover", t734Worker)
+	s.SweepPostReapCommits()
+	t734CommitAttributed(t, repo, "b.go", "b\n", "fix(T717): second leftover", t734Worker)
+	t734Commit(t, repo, "c.go", "c\n", "fix(T717): unattributed")
+	s.SweepPostReapCommits()
+	s.SweepPostReapCommits()
 	if len(parent.sent) != 1 {
-		t.Fatalf("parent deliveries=%d want 1; got %v", len(parent.sent), parent.sent)
+		t.Fatalf("parent deliveries=%d want exactly 1; got %v", len(parent.sent), parent.sent)
 	}
-	got := parent.sent[0]
-	if !strings.Contains(got, "unattributed commit") {
-		t.Fatalf("notice should say unattributed:\n%s", got)
-	}
-	if strings.Contains(got, "reaped seat "+t734Worker) {
-		t.Fatalf("notice blamed the watch seat without provenance:\n%s", got)
-	}
-	if !strings.Contains(got, sha) {
-		t.Fatalf("notice missing commit %s:\n%s", sha, got)
+	if observed != 1 {
+		t.Fatalf("observe events=%d want 1 (second sweep's batch)", observed)
 	}
 }
 

@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
@@ -75,9 +76,16 @@ func FormatReapedSend(name string, rec fleetintent.Record, reportID string, queu
 	return b.String()
 }
 
+// reapedListLimit bounds the reaped section of a default jevons_agent_list.
+// The whole history ran to 89 KB of a 107 KB listing (2026-10-27), paid on
+// every PO and overseer call; a send to an older reaped name is still held
+// and answered by holdSendForReaped, so the list need not be exhaustive.
+const reapedListLimit = 10
+
 // FormatReapedListSection lists finished-and-reaped names so agent_list
 // distinguishes them from never-existed before the caller composes a send.
-func FormatReapedListSection(snap fleetintent.Snapshot) string {
+// It shows the limit most recent (all when limit <= 0) and counts the rest.
+func FormatReapedListSection(snap fleetintent.Snapshot, limit int) string {
 	var names []string
 	for _, name := range snap.NotWorking() {
 		if snap.AgentState(name) == fleetintent.Reaped {
@@ -87,13 +95,30 @@ func FormatReapedListSection(snap fleetintent.Snapshot) string {
 	if len(names) == 0 {
 		return ""
 	}
+	shown, omitted := newestIntents(snap, names, limit)
 	var b strings.Builder
 	b.WriteString("Finished-and-reaped (recoverable; not live seats):\n")
-	for _, name := range names {
+	for _, name := range shown {
 		fmt.Fprintf(&b, "  %-20s %s\n", name, snap.Agents[name].Describe())
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&b, "  … %d older reaped name(s) omitted; history=true lists them.\n", omitted)
 	}
 	b.WriteString("Recovery: jevons_agent_start under the same name (or jevons_fleet_intent state=working then start). Gate feedback held in sendq drains on start.\n")
 	return b.String()
+}
+
+// newestIntents orders names by their intent's time, newest first, and keeps
+// limit of them (all when limit <= 0). It returns how many it dropped.
+func newestIntents(snap fleetintent.Snapshot, names []string, limit int) ([]string, int) {
+	out := append([]string(nil), names...)
+	sort.SliceStable(out, func(i, j int) bool {
+		return snap.Agents[out[i]].At.After(snap.Agents[out[j]].At)
+	})
+	if limit <= 0 || len(out) <= limit {
+		return out, 0
+	}
+	return out[:limit], len(out) - limit
 }
 
 // holdSendForReaped enqueues text for a reaped name and returns the

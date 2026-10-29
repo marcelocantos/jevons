@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/keepgoing"
 	"github.com/marcelocantos/jevons/internal/poproactive"
 	"github.com/marcelocantos/jevons/internal/targetfile"
@@ -1124,5 +1125,48 @@ func TestFrontierConsumeSweepAssemblyPOMissing(t *testing.T) {
 		if r.TargetID == "T500" && (r.Action != FrontierConsumePark || r.Reason != FrontierReasonPOMissing) {
 			t.Fatalf("T500: %+v", r)
 		}
+	}
+}
+
+func TestSweepFrontierConsumeMaxLiveWorkersSkipsSpawn(t *testing.T) {
+	spawned := 0
+	reps := SweepFrontierConsume(FrontierConsumeArgs{
+		Leaves: []poproactive.LeafObs{
+			{ID: "T1", Name: "Ready A"},
+			{ID: "T2", Name: "Ready B"},
+		},
+		Now:              frontierNow(),
+		PORegistered:     true,
+		LiveSweepWorkers: 4,
+		MaxLiveWorkers:   4,
+		Spawn: func(poproactive.LeafObs, string) error {
+			spawned++
+			return nil
+		},
+	})
+	if spawned != 0 {
+		t.Fatalf("spawned = %d, want 0 at live cap", spawned)
+	}
+	for _, r := range reps {
+		if r.Action != FrontierConsumeSkip || r.Reason != FrontierReasonMaxLiveWorkers {
+			t.Errorf("%s: action=%s reason=%s, want skip/%s", r.TargetID, r.Action, r.Reason, FrontierReasonMaxLiveWorkers)
+		}
+	}
+	// Parked and reaped auto seats do not count toward the ceiling, and
+	// neither does a jv-tN-auto seat the PO minted (no sweep stamp).
+	names := []string{"jv-t9001-auto", "jv-t9002-auto", "jv-t9003-auto", "jv-t9004-auto", "jv-t9005-auto", "jv-t9006-auto", "jv-t9007-auto"}
+	intent := fleetintent.Snapshot{Agents: map[string]fleetintent.Record{
+		"jv-t9001-auto": {State: fleetintent.Parked, By: frontierSpawnActor},
+		"jv-t9002-auto": {State: fleetintent.Reaped, By: frontierSpawnActor},
+		"jv-t9003-auto": {State: fleetintent.Working, By: frontierSpawnActor},
+		"jv-t9004-auto": {State: fleetintent.Working, By: frontierSpawnActor},
+		"jv-t9005-auto": {State: fleetintent.Working, By: frontierSpawnActor},
+		"jv-t9006-auto": {State: fleetintent.Working, By: "jevons-po"},
+	}}
+	if got := liveSweepSpawnedWorkerCount(names, intent); got != 3 {
+		t.Fatalf("liveSweepSpawnedWorkerCount = %d, want 3 (parked/reaped and PO-minted excluded)", got)
+	}
+	if liveSweepSpawnedWorkerCount([]string{"jv-release-candidate-auto", "jv-t1196-hand"}, intent) != 0 {
+		t.Fatal("non-auto-spawn names must not count")
 	}
 }

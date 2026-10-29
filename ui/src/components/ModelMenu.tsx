@@ -1,6 +1,8 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { useEffect, useRef } from 'react';
+
 /** One provider row from GET /api/migrate/options (🎯T285.2). */
 export type ProviderOption = {
   provider: string;
@@ -42,16 +44,38 @@ export function ModelMenu(props: {
     ? { position: 'fixed' as const, top: props.anchor.top, left: props.anchor.left }
     : undefined;
   const here = (props.currentProvider || '').trim().toLowerCase();
+  const ref = useRef<HTMLDivElement>(null);
+  const onClose = props.onClose;
+  // A menu closes the way menus do: Escape, or a press anywhere outside it.
+  // The labelled Close button alone read as one more menu row (2026-10-22).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    const onDown = (e: PointerEvent) => {
+      // The opener lives beside the menu (the model badge) and toggles it
+      // itself; a press there is not "outside".
+      const scope = ref.current?.parentElement ?? ref.current;
+      if (scope && !scope.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onDown);
+    };
+  }, [onClose]);
   return (
     <div
+      ref={ref}
       className="model-menu"
       role="menu"
       aria-label="Provider and model"
       style={placed}
       onClick={(e) => e.stopPropagation()}
     >
-      <button type="button" className="model-menu-close" onClick={props.onClose}>
-        Close
+      <button type="button" className="model-menu-close" aria-label="Close" title="Close (Esc)" onClick={props.onClose}>
+        ×
       </button>
       {props.error ? <p className="model-menu-error">{props.error}</p> : null}
       {props.loading ? <p className="model-menu-head">Loading…</p> : null}

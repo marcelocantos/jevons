@@ -138,16 +138,58 @@ func heldBacklogKey(b sendq.Backlog) string {
 // per held backlog is the whole point of the target: the sweep runs on a
 // timer, and a timer plus an unconditional notify is a repeating alarm.
 func (s *Server) noticedReapedBacklog(name, hold string) bool {
+	hold = strings.TrimSpace(hold)
+	if hold == "" {
+		return false
+	}
+	s.loadHeldReapedAnnounced()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.heldReapedAnnounced == nil {
+		s.heldReapedAnnounced = map[string]struct{}{}
+	}
 	if s.heldReapedNoticed == nil {
 		s.heldReapedNoticed = map[string]string{}
 	}
-	if s.heldReapedNoticed[name] == hold {
+	if _, seen := s.heldReapedAnnounced[hold]; seen {
+		s.mu.Unlock()
 		return true
 	}
+	s.heldReapedAnnounced[hold] = struct{}{}
 	s.heldReapedNoticed[name] = hold
+	s.mu.Unlock()
+	s.persistHeldReapedAnnounced(hold, name)
 	return false
+}
+
+// dropAchieveGateFeedback removes gate feedback held for a seat reaped on
+// achieve. The target is closed; the message cannot ever be delivered to that
+// seat and has no remaining actor (🎯T1187 / 🎯T582 attestation).
+func (s *Server) dropAchieveGateFeedback(agent, entryID string, seen sendq.Entry) bool {
+	if s == nil || strings.TrimSpace(agent) == "" || entryID == "" {
+		return false
+	}
+	q := s.sendQueue()
+	e, claimed, err := q.ClaimID(agent, entryID)
+	if err != nil {
+		slog.Error("held backlog drop claim failed", "agent", agent, "entry_id", entryID, "err", err)
+		return false
+	}
+	if !claimed {
+		return false
+	}
+	reason := "gate feedback about an already-achieved target; cannot deliver to finished seat"
+	if err := q.Resolve(agent, e, sendq.TerminalUndelivered, reason); err != nil {
+		slog.Error("held backlog drop not persisted", "agent", agent, "entry_id", entryID, "err", err)
+		return false
+	}
+	s.LogEvent("agent_send", "held_backlog_dropped", map[string]any{
+		"target":   "T1187",
+		"agent":    agent,
+		"entry_id": e.ID,
+		"reason":   reason,
+		"bytes":    len(seen.Text),
+	})
+	return true
 }
 
 // forgetReapedBacklogNotice lets a name be announced again after a genuine new
@@ -200,6 +242,11 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 		// Resolve that followed would be a daemon disposition. The payload
 		// stays in the phase it already has.
 		if parent == "" || (achieve && looksLikeGateFeedback(seen.Text)) {
+			if achieve && looksLikeGateFeedback(seen.Text) {
+				if s.dropAchieveGateFeedback(b.Agent, id, seen) {
+					continue
+				}
+			}
 			if held == 0 {
 				heldHead = seen
 			}
@@ -249,7 +296,7 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 			if err := q.Resolve(b.Agent, e, sendq.Unverified, "parent delivery outcome uncertain: "+derr.Error()); err != nil {
 				slog.Error("held backlog route outcome not persisted", "agent", b.Agent, "entry_id", e.ID, "err", err)
 			}
-			s.notifyFleetHealth(e.ID, fmt.Sprintf("Uncertain route of held message %s from %q to %q. The payload remains held; reconcile before retrying.", e.ID, b.Agent, parent))
+			s.notifyFleetHealth(noticeAct, e.ID, fmt.Sprintf("Uncertain route of held message %s from %q to %q. The payload remains held; reconcile before retrying.", e.ID, b.Agent, parent))
 			return
 		}
 		outcome := sendq.Confirmed
@@ -309,5 +356,5 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 	}
 	b2.WriteString("No action: the seat finished its mission and was deregistered — do NOT jevons_agent_start it to drain this. " +
 		"This notice is sent once per reaped seat (🎯T582).")
-	s.notifyFleetHealth(hold, b2.String())
+	s.notifyFleetHealth(noticeInform, hold, b2.String())
 }

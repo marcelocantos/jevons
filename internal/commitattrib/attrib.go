@@ -19,6 +19,11 @@ import (
 // no actor declaration — guards must say "unattributed", not guess from timing.
 const ActorEnv = "JEVONS_AGENT"
 
+// RoleEnv and PurposeEnv name the committing seat's declared fleet role and
+// purpose for commitscope guards (🎯T1160 achieve is PO-only).
+const RoleEnv = "JEVONS_ROLE"
+const PurposeEnv = "JEVONS_PURPOSE"
+
 // TargetEnv names the target IDs the committer claims (comma / whitespace
 // separated). Same variable commitscope reads for ledger row scope (🎯T748).
 const TargetEnv = "JEVONS_TARGET_ID"

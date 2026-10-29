@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -47,6 +48,10 @@ type RunArgs struct {
 	Explicit bool
 	// Now defaults to time.Now; tests pin it.
 	Now func() time.Time
+	// Prepare runs after the tree is probed and before Command. Used by
+	// RunClean so a repo-declared integrate prerequisite can materialise
+	// generated artifacts without DIRTY-ing the attestation (🎯T1249).
+	Prepare func(dir string) error
 }
 
 // Run executes the gate and returns what it actually did.
@@ -60,6 +65,7 @@ func Run(args *RunArgs) (*Record, error) {
 	if args == nil || len(args.Command) == 0 {
 		return nil, errors.New("gate run: no command")
 	}
+	disownFromCallerProcessGroup()
 	now := args.Now
 	if now == nil {
 		now = time.Now
@@ -73,10 +79,14 @@ func Run(args *RunArgs) (*Record, error) {
 		stderr = os.Stderr
 	}
 
+	command := append([]string(nil), args.Command...)
+	childEnv := args.env
+	_, command, childEnv = fleetHeavyTestBudget(command, childEnv)
+
 	started := now()
 	rec := &Record{
-		Name:     gateName(args.Name, args.Command),
-		Command:  append([]string(nil), args.Command...),
+		Name:     gateName(args.Name, command),
+		Command:  command,
 		Dir:      args.Dir,
 		Started:  started,
 		Explicit: args.Explicit,
@@ -88,7 +98,7 @@ func Run(args *RunArgs) (*Record, error) {
 	// output it left behind would read as uncommitted work of its own. A
 	// directory that is not a git work tree answers nil, which stays "unknown"
 	// and is never rounded up to clean (🎯T397).
-	if dir, ok := ResolveMeasuredDir(args.Command, args.Dir); ok {
+	if dir, ok := ResolveMeasuredDir(command, args.Dir); ok {
 		rec.Tree = ProbeTree(dir)
 	}
 	if rec.Tree != nil {
@@ -100,19 +110,37 @@ func Run(args *RunArgs) (*Record, error) {
 	var mu sync.Mutex
 	var captured bytes.Buffer
 
-	cmd := exec.Command(args.Command[0], args.Command[1:]...)
+	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = args.Dir
-	cmd.Env = args.env
+	cmd.Env = childEnv
+	// The worker marker belongs to gate itself, never to the program being
+	// tested. A nested gate inside a test must still watch its own caller.
+	if os.Getenv("JEVONS_GATE_BACKGROUND_CHILD") == "1" {
+		env := cmd.Environ()
+		cmd.Env = env[:0]
+		for _, kv := range env {
+			if !strings.HasPrefix(kv, "JEVONS_GATE_BACKGROUND_CHILD=") {
+				cmd.Env = append(cmd.Env, kv)
+			}
+		}
+	}
 	cmd.Stdin = nil
 	cmd.Stdout = &teeWriter{mu: &mu, buf: &captured, out: stdout}
 	cmd.Stderr = &teeWriter{mu: &mu, buf: &captured, out: stderr}
+	setGateCommandGroup(cmd)
+
+	callerPID := CallerPID()
+	if os.Getenv("JEVONS_GATE_BACKGROUND_CHILD") == "1" {
+		callerPID = 0
+	}
+	var callerStopped atomic.Bool
 
 	// 🎯T603 — a heavy package run (go test, or a make target that runs one)
 	// waits for the host-pressure lease before it starts, so N seats each
 	// running the same heavy suite queue rather than collectively OOM the
 	// host. A store-less Run (tests only) skips the lease.
-	if args.Store != nil && HeavyCommand(args.Command) {
-		release, token, err := acquireHeavyLeaseCommand(args.Store.Root, os.Getenv(heavyLeaseEnv), args.Command, args.Dir)
+	if args.Store != nil && HeavyCommand(command) {
+		release, token, err := acquireHeavyLeaseCommand(args.Store.Root, os.Getenv(heavyLeaseEnv), command, args.Dir)
 		if err != nil {
 			return rec, fmt.Errorf("gate run %s: heavy lease: %w", rec.ID, err)
 		}
@@ -120,7 +148,16 @@ func Run(args *RunArgs) (*Record, error) {
 		cmd.Env = append(cmd.Environ(), heavyLeaseEnv+"="+token)
 	}
 
-	runErr := cmd.Run()
+	if args.Prepare != nil {
+		if err := args.Prepare(args.Dir); err != nil {
+			rec.Ended = now()
+			rec.StatusKnown = false
+			rec.StatusNote = "prerequisite failed: " + err.Error()
+			return rec, fmt.Errorf("gate run: prerequisite: %w", err)
+		}
+	}
+
+	runErr := startGatedCommand(cmd, callerPID, &callerStopped)
 	rec.Ended = now()
 
 	out := captured.Bytes()
@@ -154,15 +191,21 @@ func Run(args *RunArgs) (*Record, error) {
 		rec.StatusNote = "gate could not run the command: " + runErr.Error()
 	}
 	outStr := string(out)
-	hostKill := HostKill(signaled, rec.StatusKnown, rec.ExitStatus, outStr)
-	if hostKill && rec.StatusNote == "" {
-		rec.StatusNote = hostKillNote(rec.StatusKnown, rec.ExitStatus, outStr)
-	}
 	rec.EmptyPackages = EmptyPackages(outStr)
-	rec.Verdict = applyTreeVerdict(
-		verdictFor(rec.StatusKnown, rec.ExitStatus, rec.Anomalies, hostKill, EmptyRun(outStr)),
-		rec.Tree,
-	)
+	if callerStopped.Load() {
+		rec.StatusNote = CallerGoneNote
+		rec.StatusKnown = false
+		rec.Verdict = applyTreeVerdict(VerdictKilled, rec.Tree)
+	} else {
+		hostKill := HostKill(signaled, rec.StatusKnown, rec.ExitStatus, outStr)
+		if hostKill && rec.StatusNote == "" {
+			rec.StatusNote = hostKillNote(rec.StatusKnown, rec.ExitStatus, outStr)
+		}
+		rec.Verdict = applyTreeVerdict(
+			verdictFor(rec.StatusKnown, rec.ExitStatus, rec.Anomalies, hostKill, EmptyRun(outStr)),
+			rec.Tree,
+		)
+	}
 
 	if args.Store != nil {
 		if err := persistRun(args.Store, rec, out); err != nil {

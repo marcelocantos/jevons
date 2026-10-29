@@ -83,7 +83,9 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 			if err != nil {
 				return result, err
 			}
-			return s.recordedGateQuestion(cwd, target, rec.Question, by, result)
+			res, err := s.recordedGateQuestion(cwd, target, rec.Question, by, result)
+			s.observeTargetLedgerOwnerBlockers(cwd, target)
+			return res, err
 		}
 		reason, err := rec.Reason()
 		if err != nil {
@@ -96,7 +98,9 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		result := mcp.NewToolResultText(fmt.Sprintf(
 			"🎯%s recorded as %s (🎯T449). Frontier-consume will park it, not spawn against it; the owner's accept/reject is the only thing left.\nReason written:\n%s\n\n%s",
 			target, ownergate.MarkerAwaiting, reason, out))
-		return s.recordedGateQuestion(cwd, target, rec.Question, by, result)
+		res, err := s.recordedGateQuestion(cwd, target, rec.Question, by, result)
+		s.observeTargetLedgerOwnerBlockers(cwd, target)
+		return res, err
 
 	case "answer":
 		verdict, err := ownergate.ParseVerdict(str(args["verdict"]))
@@ -112,6 +116,7 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 			result, err := answerGateOnReopenedRow(cwd, target, verdict, str(args["note"]), by, row)
 			if err == nil && result != nil && !result.IsError {
 				s.resolveGateNotification(cwd, target)
+				s.observeTargetLedgerOwnerBlockers(cwd, target)
 			}
 			return result, err
 		}
@@ -124,6 +129,7 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 			return mcp.NewToolResultError(fmt.Sprintf("bullseye unassign failed: %v\n%s", err, out)), nil
 		}
 		s.resolveGateNotification(cwd, target)
+		s.observeTargetLedgerOwnerBlockers(cwd, target)
 		next := "Owner accepted: achieve the target now, citing the landed commit and the gate ids."
 		if verdict == ownergate.VerdictReject {
 			next = "Owner rejected: resume from the landed commit — do not reopen from scratch."

@@ -44,6 +44,8 @@ func newTail(prev, now []byte) string {
 // jT418QueueBounce proves that one request, accepted while a real agent is
 // busy, produces its own shell effect after restart on the selected provider.
 // Recovery logs and a "queued" reply alone cannot establish this property.
+// It is also the 🎯T769 isolate journey: the worker had a live process before
+// the bounce, regains running status without jevons_agent_start, then drains.
 func (s *suite) jT418QueueBounce() error {
 	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
@@ -158,6 +160,16 @@ func (s *suite) jT418QueueBounce() error {
 	}
 	if err := s.startDaemon(); err != nil {
 		return fmt.Errorf("restart: %w", err)
+	}
+	postRestartLogs, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return err
+	}
+	if err := t769NoManualAgentStart([]byte(newTail(preLogs, postRestartLogs)), name); err != nil {
+		return fmt.Errorf("🎯T769: %w", err)
+	}
+	if err := s.waitAgentStatus(name, "running", turnTimeout); err != nil {
+		return fmt.Errorf("🎯T769: seat did not regain a live process after restart: %w", err)
 	}
 	if err := os.WriteFile(release, nil, 0o600); err != nil {
 		return err
@@ -294,10 +306,15 @@ func queueJourneyNoResult(path string) error {
 	return fmt.Errorf("queued result already exists before restart")
 }
 
-// jT418Mute queues a send, then stops every registered agent so nobody
-// can press Enter, and asserts the daemon reports MUTE.
+// jT418Mute queues a send, then stops the seats this journey planted (and
+// the overseer) so nobody can press Enter, and asserts the daemon reports
+// MUTE. Stray workers left registered by earlier journeys are reaped first
+// so they cannot keep a live rescuer or skew the mute predicate (🎯T835).
 func (s *suite) jT418Mute() error {
 	if err := portguard.RefuseDevelopment(s.port); err != nil {
+		return err
+	}
+	if err := s.t418ReapStrayWorkers(); err != nil {
 		return err
 	}
 	name := fmt.Sprintf("jv-t418h-%d", time.Now().Unix()%100000)
@@ -352,29 +369,14 @@ func (s *suite) jT418Mute() error {
 	preLogs, _ := os.ReadFile(s.logPath)
 	preEvents, _ := os.ReadFile(s.eventsPath())
 
-	agents, err := s.ListAgentsHTTP()
-	if err != nil {
-		return fmt.Errorf("list agents: %w", err)
-	}
-	if len(agents) == 0 {
-		return fmt.Errorf("mute fixture: no registered agents")
-	}
-	var overseer string
-	var others []string
-	for _, a := range agents {
-		if a.Name == "jevons" {
-			overseer = a.Name
-			continue
-		}
-		others = append(others, a.Name)
-	}
+	planted := []string{name}
 	// 🎯T664: a seat mid-turn refuses a plain stop, and the busy fixture is
-	// mid-turn by construction; this journey means every agent stopped.
-	for _, n := range others {
+	// mid-turn by construction; stop only what this journey planted.
+	for _, n := range t418AgentsToStopForMute(planted) {
 		_, _ = s.MCPToolCall("jevons_agent_stop", map[string]any{"name": n, "force": true})
 	}
-	if overseer != "" {
-		_, _ = s.MCPToolCall("jevons_agent_stop", map[string]any{"name": overseer, "force": true})
+	if err := s.waitNoRunningAgents(20 * time.Second); err != nil {
+		return fmt.Errorf("mute stop: %w", err)
 	}
 
 	wait := time.Now().Add(30 * time.Second)
@@ -392,7 +394,72 @@ func (s *suite) jT418Mute() error {
 		time.Sleep(1 * time.Second)
 	}
 	if !sawMute {
-		return fmt.Errorf("no MUTE report after stopping every registered agent with queued work")
+		return fmt.Errorf("no MUTE report after stopping planted agents with queued work")
 	}
 	return nil
+}
+
+// t418AgentsToStopForMute is the stop set for 🎯T418 clause 6 in J18: the
+// planted busy seat plus the overseer — not a full-registry sweep that can
+// disturb another journey's queued work or leave a live rescuer uncounted.
+func t418AgentsToStopForMute(planted []string) []string {
+	out := append([]string(nil), planted...)
+	out = append(out, overseerName)
+	return out
+}
+
+func (s *suite) t418ReapStrayWorkers() error {
+	agents, err := s.ListAgentsHTTP()
+	if err != nil {
+		return fmt.Errorf("list agents before mute: %w", err)
+	}
+	for _, a := range agents {
+		if a.Name == overseerName {
+			continue
+		}
+		_, _ = s.MCPToolCall("jevons_agent_kill", map[string]any{
+			"name": a.Name, "actor": "jevons", "force": true,
+		})
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		agents, err := s.ListAgentsHTTP()
+		if err != nil {
+			return err
+		}
+		stray := false
+		for _, a := range agents {
+			if a.Name != overseerName {
+				stray = true
+				break
+			}
+		}
+		if !stray {
+			return nil
+		}
+		time.Sleep(400 * time.Millisecond)
+	}
+	return fmt.Errorf("stray registered workers remain before mute fixture")
+}
+
+func (s *suite) waitNoRunningAgents(d time.Duration) error {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		agents, err := s.ListAgentsHTTP()
+		if err != nil {
+			return err
+		}
+		running := false
+		for _, a := range agents {
+			if a.Status == "running" {
+				running = true
+				break
+			}
+		}
+		if !running {
+			return nil
+		}
+		time.Sleep(400 * time.Millisecond)
+	}
+	return fmt.Errorf("registered agents still running")
 }

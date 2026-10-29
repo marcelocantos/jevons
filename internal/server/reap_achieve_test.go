@@ -134,8 +134,8 @@ targets:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got["T1"] || got["T195"] || got["T2"] {
-		t.Fatalf("achieved set=%v want T1 only", got)
+	if !got["T1"] || got["T195"] || !got["T2"] {
+		t.Fatalf("closed set=%v want T1 and T2 (achieved, set aside)", got)
 	}
 
 	yaml2 := `schema_version: 1
@@ -209,5 +209,43 @@ targets:
 	s.maybeReapOnLedgerAchieve(ledger)
 	if reg.Def("jv-t195-reap-achieve") != nil {
 		t.Fatal("implementer must be reaped after ledger achieve")
+	}
+}
+
+// A target set aside will not be worked, so its worker is reaped as it is
+// on achieve (2026-10-23: jv-t1138-auto lingered after T1138 was set aside).
+func TestSetAsideTargetReapsItsWorker(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-t1138-auto", WorkDir: dir, SessionID: "s-w",
+		Purpose: claudia.PurposeWork, Parent: "jevons-po", Materialized: true,
+		Provider: "grok", TargetID: "T1138",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ledger := filepath.Join(dir, "bullseye.yaml")
+	write := func(status string) {
+		t.Helper()
+		if err := os.WriteFile(ledger, []byte("schema_version: 1\ntargets:\n  T1138:\n    name: work\n    status: "+status+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("identified")
+	s := New("test", dir)
+	s.SetRegistry(reg)
+	s.SetOverseerName("jevons")
+	s.seedAchievedFromLedger(ledger)
+	s.maybeReapOnLedgerAchieve(ledger)
+	if reg.Def("jv-t1138-auto") == nil {
+		t.Fatal("reaped before the target closed")
+	}
+	write("set_aside")
+	s.maybeReapOnLedgerAchieve(ledger)
+	if reg.Def("jv-t1138-auto") != nil {
+		t.Fatal("worker stayed registered after its target was set aside")
 	}
 }

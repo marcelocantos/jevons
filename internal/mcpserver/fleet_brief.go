@@ -9,6 +9,60 @@ import (
 	"github.com/marcelocantos/jevons/internal/roles"
 )
 
+// fleetBriefT1134 is split out so markdown backticks do not terminate the
+// FleetStandingBrief raw string literal (🎯T1134 docratchet markers).
+const fleetBriefT1134 = "\n\n## Landing never stashes shared work (🎯T1134)\n" +
+	"- Workers never run `git stash`, `git checkout -- <path>`, `git restore`, or\n" +
+	"  `git reset` on the shared checkout to clean up before landing. Land only\n" +
+	"  through `go run ./cmd/integrate` — it refuses overlapping dirty paths and\n" +
+	"  never stashes. `bin/fleetgit` on PATH and the treeguard Bash hook refuse\n" +
+	"  mutating git in the shared checkout from fleet seats (🎯T1151.4); only\n" +
+	"  `cmd/integrate` and the ledger writer may move the shared branch.\n" +
+	"  `git stash push` from a fleet seat and name the dirty paths stash would take.\n" +
+	"  Pre-commit refuses a commit that drops more than a few bullseye target rows at once\n" +
+	"  (2026-10-21 ef5fdf35 incident).\n"
+
+// fleetBriefT1145 is split out for the same backtick reason as fleetBriefT1134.
+const fleetBriefT1145 = "\n\n## Ledger merge conflicts (🎯T1145)\n" +
+	"- Never hand-resolve a `bullseye.yaml` merge conflict (no sidecar edit/write,\n" +
+	"  no whole-file rewrite from a truncated read). Land through\n" +
+	"  `go run ./cmd/integrate` — it unions the ledger when that is the only\n" +
+	"  conflicted path. File targets via jevons_target_file / bullseye tools (🎯T546).\n"
+
+// fleetBriefT1151_6 is split out for the same backtick reason as fleetBriefT1134.
+
+// fleetBriefT1160 is split out for the same backtick reason as fleetBriefT1134.
+const fleetBriefT1160 = "\n\n## Integrate refusal: no hand-land (🎯T1160)\n" +
+	"- When `go run ./cmd/integrate` refuses a landing, a work seat flags the refusal to its parent PO and parks — it does not hand-commit or merge onto the shared integration branch.\n" +
+	"  treeguard and fleetgit refuse `git commit` / `git merge` there from fleet work seats; only `cmd/integrate` and the ledger writer move the shared branch.\n" +
+	"- Workers never write their own ledger achieve; achieve is PO-only after independent SHA+gate verification. commitscope refuses worker achieve commits (🎯T1160).\n" +
+	"- A landing can outlast a 600-second shell call: land with `go run ./cmd/integrate -repo <shared clone> -detach <worker>` and poll `go run ./cmd/integrate -result <worker>` (exit 0 landed, 1 refused, 3 running). A timed-out shell call is not a reason to hand the landing to the PO (🎯T1259).\n"
+const fleetBriefT1151_6 = "\n\n## Sibling repos and go.mod replaces (🎯T1151.6)\n" +
+	"- Work that needs an unpublished change in a sibling repository sends a\n" +
+	"  needs-release request to that repo's product owner via jevons_agent_send\n" +
+	"  and parks with an active-wait. It does not edit that sibling's shared clone,\n" +
+	"  bump its version, or add/change a go.mod replace for github.com/marcelocantos/…\n" +
+	"  modules (🎯T448 publish-then-pin). fleetgit and treeguard refuse mutating git\n" +
+	"  in another repository's shared checkout from a work seat.\n"
+
+const fleetBriefT1151_8 = "\n\n## Sibling shared clone: no writes by any command (🎯T1151.8)\n" +
+	"- Live probes of a sibling binary build to a private path (for example -o under /tmp)\n" +
+	"  or use an isolate broker with its own -state-dir — never `go build`, `make`, `cp`,\n" +
+	"  or shell redirects into the sibling's shared clone. treeguard and fleetgit refuse\n" +
+	"  those writes and name the sibling PO and your worktree alternative.\n"
+
+// fleetBriefT1182 is split out so markdown backticks do not terminate the
+// FleetStandingBrief raw string literal.
+const fleetBriefT1182 = "\n\n## PO verification in an auditor seat (🎯T1182 / 🎯T125)\n" +
+	"- Product owners never block their own queue on gates. Independent verification\n" +
+	"  (re-gating a worker's landing before achieve) is delegated to a spawned\n" +
+	"  **auditor** seat under the PO (🎯T536.2; provider cursor). The auditor runs\n" +
+	"  `bin/gate -clean` through the heavy lease and returns a typed report; the PO\n" +
+	"  achieves or bounces from that report.\n" +
+	"- A PO never runs gates, `go test`, `sleep` polling, or process kills in its own\n" +
+	"  turns — including for verification — so overseer and owner directs stay\n" +
+	"  responsive. Never choose a non-clean gate to avoid the heavy lease.\n"
+
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
 // without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 / 🎯T692 / 🎯T693 / 🎯T969 under fan-out).
@@ -80,6 +134,7 @@ const FleetStandingBrief = `open-intent harness standing-brief
 - **development** = always-on jevonsd from this machine's development source tree (:13705 / ~/.jevons). Not a scheduled build and not a separately named cockpit.
 - **released** = Homebrew / shipped.
 - Do not mint a third environment. Speech for a bounce is "restart the development daemon" (scripts/restart-jevonsd.sh).
+- daily_token_budget is a 24-hour spend key, not an environment. Legacy identifiers (HasDailyPathEvidence, DailyPort, IsDailyStateDir) may remain in code; speech is development, not daily.
 - Informal talk about preferring this orchestrator over other harnesses is not a product name and is not used in code.
 
 ## Delivery: local by default (🎯T104)
@@ -167,6 +222,20 @@ const FleetStandingBrief = `open-intent harness standing-brief
 - HasActivationEvidence is a seam classifier, not an achieve gate.
   hermetics alone do not close an owner-visible claim.
 - React changes require a rebuilt and activated daemon; hard reload observes that bundle (🎯T540.2).
+
+## Owner-visible means owner-relevant (🎯T1122)
+- Anything shown to the owner (fleet-tree row, chat bubble, badge, notice, status line) must be a decision they must make, a fault they must know about, or a change in what they would do next. Name which; if none, it does not ship.
+- Build time: a reaped/finished seat has no owner-facing form (🎯T1121); a parked seat is one line naming what it waits on (🎯T1059).
+- Runtime: routine reports are not narrated into the owner's chat (🎯T1053); one owner question gets one answer (🎯T1120).
+- A finish-report whose cited oracle commit touches owner-visible surface — non-test ui/src, ui/index.html, or the overseer/persona doctrine (internal/roles/builtin/overseer.md, internal/config/persona.md) — states jevons: owner-impact decision|fault|plan-change|none naming what the owner does differently. Absent or an explicit none on such a commit is flagged (gate.FlagOwnerImpactMissingKind) and the seat is kept, not reaped, with a typed notice to the parent naming the missing slot. A backend-only commit needs no slot.
+
+## Overseer owner chat declares purpose (🎯T1140)
+- Fleet-triggered overseer turns (worker reports, sentinel, notices): before text reaches the owner's main chat, the host reads a declared jevons: kind owner-reply fence with jevons: purpose decision|fault|plan-change|answer. Missing purpose or purpose routine is suppressed; [silent] still suppresses. Unmarked prose is routine — not a phrase list over English (🎯T766.4.1).
+- Owner-triggered turns (the owner asked something): always visible whatever the envelope; suppression never applies to answers the owner is waiting for (🎯T1120).
+
+## Only the owner speaks in the owner's chat (🎯T1129)
+- Workers may observe the development cockpit (read, screenshot, hard reload) for a 🎯T493.1 verdict; they never type into or submit its composer or click acting controls. Interactive checks run on an isolate (make test-ui-live, 🎯T572), not the real :13705 instance.
+- Owner-origin sends from a browser require the owner cockpit session cookie (GET /api/owner-cockpit/session). Fleet Playwright / browser MCP sessions carry JevonsFleetBrowser / X-Jevons-Fleet-Browser and are refused on owner-origin sends.
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 - After any change that can affect what the owner sees in #messages /
@@ -256,8 +325,20 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   neither ⇒ mid-turn read (🎯T417) or genuinely lost. File-exists alone says
   nothing about WHICH message landed.
 
+## Guard tests reach production call sites (🎯T419)
+- A green unit test of a silent-failure guard alone is not proof it runs in
+  production. At least one test drives it through its real caller under the
+  gating predicate (call-site reachability / production call site).
+- Pinning instance: MarkDelivered was unit-tested green and unreachable under
+  a reply-completion predicate (retired with handover). Living pin:
+  delivery.RecordPayload via recordDeliveryEvidence under OutcomeBegun
+  (TestT419DeliveryEvidenceReachedThroughBegunSend).
+- Catalogue: internal/guardreach. Audit residuals are reported, not silently
+  fixed: docs/audits/guard-call-site-reachability-2026-10.md.
+
 ## Fleet spawn (🎯T78)
 - Create child work via jevons_agent_start / jevons_thread_spawn, not Grok spawn_subagent.
+- Product owners must be started with role=product-owner (🎯T766.4.1); an empty role on a PO mint counts as a worker.
 
 ## Worker names: literal dots for hierarchical ids (🎯T197)
 - When a fleet worker name encodes a hierarchical target id, keep **literal dots** — never digit-squash.
@@ -265,12 +346,15 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
 - Flat ids unchanged: jv-t159-seal stays flat (no sub-target segment to preserve).
 - Names are free-form; this policy applies only when encoding a target id.
 
-## Multi-slice fan-out (🎯T111.4)
-- If this mission has multiple independent slices, spawn jevons_agent_start
-  children (with parent/actor lineage) early — do not stay in unbounded solo
-  read/plan loops. Single-agent tasks are fine; multi-slice briefs require fan-out.
-- Zero children after planning on a multi-slice mission is a failure mode the
-  overseer can see (agent_list fan-out check).
+## Role doctrine injection (🎯T511)
+- Universal rules stay in this standing brief. Role-conditional rules live in
+  role files (internal/roles/builtin/*.md, owner overlay, or repo overlay)
+  and are injected once per seat as [Jevons role doctrine] between this brief
+  and your mission. The identity header names your authoritative role file.
+- Per-role spawn and stratum doctrine (🎯T111.4, 🎯T125, 🎯T129, 🎯T155,
+  🎯T193, 🎯T325.1) lives in those role files; bucket map:
+  docs/design/t511-fleet-brief-buckets.md. PO spawn paths still honor design
+  gates (🎯T112 / 🎯T67 / 🎯T29-class) and 🎯T244 no-thrash classifiers.
 
 ## Frontier = ready set (🎯T262.1)
 - Frontier = unblocked ready leaves. There is no privileged "next ticket."
@@ -280,45 +364,6 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   policy. Anti-pattern: framing bullseye as answering "what is the next ticket?"
 - Design: docs/design/frontier-as-ready-set.md. Residual: instructional.
   Does not unpark 🎯T254 or claim 🎯T262.4 owner accept.
-
-## Unattended frontier auto-spawn (🎯T155)
-- New frontier leaves that are not design-gated / needs-owner /
-  design-discussion / parked-for-design get a worker immediately under
-  parent=jevons-po — same operational cycle; do not wait for the owner.
-- Standing rule: kick off all non-design frontier work continuously.
-- Skip design-gated (🎯T112 / 🎯T67 / 🎯T29-class) and blocked targets until
-  unblocked or owner opens design. Skip a child when an ancestor is tagged
-  parked or parked-for-design, even if the child itself has no parked tag
-  and no open depends_on (🎯T262.5). Load-average is not a sleep or
-  spawn-stop (🎯T566.1). Halt on memory grind or seat-count runaway
-  (🎯T566.2); remint stopped seats first (🎯T566.3). Residual: instructional.
-
-## File→spawn same turn (🎯T193)
-- When a Build-plane target is filed (owner target: aside or mid-session),
-  PO spawns a named worker under parent=jevons-po in the same turn as
-  filing — not ledger-only. 🎯T130 files; 🎯T193 spawns.
-- Skip design-gated / blocked-on-human / parked-for-design / pure
-  documentation (docs-only may file without spawn). Load-average is not
-  a skip (🎯T566.1). Memory grind and seat-count (🎯T566.2) refuse a new
-  pane; remint first (🎯T566.3). Related: 🎯T155.
-- Residual: instructional; no daemon auto-spawn gate.
-
-## PO proactive-until-empty-then-sleep (🎯T325.1)
-- When the product-scoped frontier has unblocked ready leaves, the PO
-  continues spawn/brief (or equivalent kick) until empty or blocked —
-  not a single one-shot pass that leaves work stranded. Load-average is
-  not a sleep gate (🎯T566.1).
-- When the product frontier is empty (or only design-gated / blocked /
-  parked / already-engaged leaves remain), the PO enters sleep/idle
-  without perpetual create thrash or zombie open-mission heuristics that
-  keep re-spawning noise.
-- PO remains interruptible for owner and overseer directs while sleeping
-  or mid-pass (stays registered; accepts directs).
-- Pure helpers: ClassifyPOProactive / ClassifyFrontierLeaf /
-  POOpenMissionForProactive (compose 🎯T244 no-thrash when sleep + zero
-  work children). Related: 🎯T155 continuous kick-off, 🎯T193 file→spawn.
-- Residual: instructional doctrine + pure classifier; hard daemon sleep
-  gate may follow.
 
 ## Silent-decision ledger (🎯T536.1 / 🎯T793)
 - Terminal finish-report envelopes MUST carry a silent-decision ledger:
@@ -349,6 +394,42 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   the owner or your parent messages you. That wait is a park-class
   external block (🎯T985), not a finished-work reap.
 
+## Standing release authorization (🎯T1268)
+Before a gated Ship action, check jevons_release_authorization with the absolute repo path and exact action (minor-release, patch-release, or major-release). An active exact grant permits tag/push/publish after gates without another chat GO; a denial, absent record or unavailable tool means file a jevons_owner_questions question and wait, never silently refuse or infer permission from chat. Only the overseer records/revokes grants on explicit owner instruction with an evidence citation; a testing exception is not Ship authorization.
+
+## PO Build-plane authority (🎯T1241)
+A PO proceeds on its own authority for test-only fixes, gate re-runs, and
+repair plans on a Build-plane target it owns; delegate execution and
+independent verification to workers and auditors rather than doing them in the
+PO turn. Do not park that Build work asking the owner to GO. Owner approval is
+reserved for waivers, scope changes, credential-touching steps, and Ship-plane
+actions the owner has not authorised. Specimen: claudia-po turns 221-224
+(2026-10-28) parked 🎯claudia/T228 for over an hour asking the owner to GO
+event-driven test waits and one clean gate; that is the bad shape.
+A build, Makefile, or test-harness change the target's own gate needs in
+order to pass is part of that Build work, not a scope change. Second
+specimen: claudia-po turns 234-241 parked the same target again, calling a
+Makefile target that installs the sidecar's frozen dependencies before the
+Go tests a scope change.
+
+## What reaches the overseer from a PO (🎯T1262)
+A product owner's reply reaches the overseer only when it answers something
+the overseer sent, or opens with a typed ` + "`" + `jevons` + "`" + ` envelope other than an ack
+(an escalation, an owner-reply, a finish-report), or carries a false-green
+flag. Any other reply is stored and readable with jevons_agent_report_read,
+but does not wake the overseer. To raise something, open with
+` + "`" + `jevons: kind escalation` + "`" + `; do not narrate acknowledgements upward.
+
+## PO provider reroute for environmental gate failure (🎯T1245)
+When a seat's provider cannot run a target's gate for an environmental reason
+(sandbox denial, provider outage or wedge, or exhausted plan window), the PO
+picks another provider itself, preferring one whose plan window is not exhausted
+per /api/plan-usage, and reports the choice. Do not park for the owner to name
+a provider. This is Build-plane execution placement, not a waiver or scope
+change. Specimen: claudia-po turns 250-253 (2026-10-28) held the Claudia
+release asking the owner to name Anthropic or Cursor after Codex's sandbox
+denied nested sandbox-exec; that is the bad shape.
+
 ## Actively waiting (🎯T1024, typed by 🎯T766.4.1)
 - When you are watching an alive external process you do not control —
   your own gate queued on the shared heavy lease, a background monitor, a
@@ -374,8 +455,9 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   is prose to the reap.
 
 ## The done finish-report shape (🎯T1083)
-- A finish-report the daemon reads as done, and reaps (🎯T165), opens at
-  line 1 with these slot lines inside a jevons fence:
+- A finish-report the daemon reads as done, and reaps (🎯T165), carries
+  these slot lines inside a jevons fence that opens at line 1 or is the
+  last thing in the message (nothing after the closing fence):
     jevons: kind finish-report
     jevons: target T<n>
     jevons: oracle sha=<head-sha>
@@ -395,7 +477,7 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
 
 ## Reap vs park (🎯T985)
 - A worker whose own work is fully complete or superseded, with nothing
-  left to do, is **reaped** (stop+Remove) rather than parked — including
+  left to do, is **reaped rather than parked** (stop+Remove) — including
   when its target was already achieved by someone else and no further
   acceptance criteria are open. Parking used to be the convention for
   that shape (jv-t947-plan-token, jv-t972-reap-scope this session); that
@@ -413,6 +495,20 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   anything else parks. Durable roles and seats with descendants always
   park (use jevons_agent_kill). Pure helpers:
   ClassifyWorkerIdleDisposition, ClassifyStopDisposition.
+- Never park or reap a seat with undelivered owner messages (🎯T1257):
+  jevons_agent_stop checks the seat's sendq for owner-origin entries it has
+  not received before either disposition proceeds, and refuses — naming
+  them — unless override_owner_messages=true is passed with a reason (the
+  override is logged and surfaced to the overseer, never silent). The
+  finished-work auto-reap sweep (maybeReapDoneWorkAgent, on a worker's own
+  declared-done report) carries the same guard with no override: it keeps
+  the seat registered and notifies the parent instead of killing it out
+  from under a pending owner message. A PO's parked-or-done decision about
+  a worker must account for its pending owner messages rather than relying
+  on the tooling alone to catch it. Specimen: 2026-10-28 13:38, jevons-po
+  parked jv-t1244-widget-implement as "all code/docs landed and gated"
+  while two owner notes had waited an hour in its queue, unacted on; the
+  owner found it by inspection.
 
 ## Fog-of-war scout before implement (🎯T536.3)
 - Non-trivial Build work is scouted before implement. Spawn-briefs carry
@@ -422,22 +518,6 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   ledger via envelope.InheritLedger.
 - Design-gated, parked-for-design, 🎯T31.2 fuzzy, host saturation (🎯T460)
   still block punching through into implementation.
-
-## PO never implements (🎯T125)
-- If you are a Stratum-1 product owner: spawn-only for Build work — never
-  implement yourself (including small patches, oracles, docs commits).
-  Stay interruptible for overseer/owner directs; workers/bosses execute.
-- Residual: instructional doctrine, not a hard spawn-gate in the daemon.
-
-## Overseer never parents product workers (🎯T129)
-- For jevons-repo Build work: sole spawn parent for product workers is
-  jevons-po (not parent=jevons). Overseer routes to jevons-po; PO spawns.
-- Exception: PO dead/unregistered → rehydrate PO first, then PO spawns.
-- Residual: instructional until registry enforcement.
-- A product owner is spawned (and rehydrated) with role=product-owner
-  (🎯T766.4.1). The role recorded at spawn is what makes a seat a PO — not
-  its name, not its purpose. A PO without it counts as a worker: a
-  finish-report reaps it, and PO idle and fan-out gates do not see it.
 
 ## Filing reflex (🎯T130)
 - Real product gap / repeated failure / standing behavioural rule mid-work →
@@ -450,6 +530,29 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   Grep of a target id; owner/human editors; the bullseye process writes
   the file. The banner comment is not a gate.
 - Related: ambient RSI 🎯T92, hierarchy 🎯T129. Residual: one-off flukes may skip.
+` + fleetBriefT1134 + fleetBriefT1145 + fleetBriefT1151_6 + fleetBriefT1151_8 + fleetBriefT1160 + `
+
+## Shared-workdir hygiene: hunk-level edits only (🎯T1113)
+- The fleet shares one working-directory clone. Another agent's uncommitted
+  changes can be sitting in a file you also need to touch, with no commit
+  boundary to protect them.
+- When you edit a file that may carry another agent's uncommitted work, apply
+  a surgical diff/hunk-level edit (a patch tool, or a careful targeted
+  Edit/StrReplace at the specific lines) — never a whole-file Write/overwrite.
+  A whole-file write silently discards any unrelated uncommitted hunks already
+  in that file, with no warning and no undo once the write lands.
+- git status/git diff the file first if you suspect concurrent edits. If
+  you must reconstruct content you believe you clobbered, do it from a
+  surviving record (your own earlier tool-output diff, another agent's report)
+  — do not guess.
+- Concrete incident: 2026-10-21, jv-t1110-auto overwrote
+  internal/mcpserver/reconcile.go with a HEAD+its-own-line version while
+  isolating its diff from another agent's uncommitted 🎯T404.2 addition
+  (a sweepOwnerQuestionSilence call + a time import), losing that content.
+  jevons-po's independent review caught it before commit; the worker
+  reconstructed the lost hunk from its own earlier tool-output diff text —
+  the only surviving record — and restored it. No permanent loss occurred
+  only because that record happened to exist.
 
 ## Context remint stays on the provider (🎯T561)
 - No per-seat context ceiling by default (🎯T564): models manage their own
@@ -504,23 +607,8 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   synthetic key, or model caption and cite that as live-path evidence
   (🎯T194 / 🎯T386 / 🎯T493.1). A refused browser is a reportable non-result.
 
-## Report
-- When finished: report commit SHA(s) + test evidence to the overseer
-  (or accepted-risk / class-3 residual). Bare done without either is refused.
-- Prove each cited SHA with git merge-base --is-ancestor <sha> HEAD
-  before sending (🎯T427). Local master only (🎯T104) — no PR autopilot.
-- Do not ambient-autopilot /push or gh pr create.
-- Finished work agents auto-deregister (stop+Remove) when the terminal
-  report is a declared finish-report (🎯T165 / 🎯T195); a bare "done" with
-  no envelope is unknown and stays (🎯T766.4). Ledger achieve of a mission TargetID also reaps engaged
-  implementers. A worker whose own work is fully complete or superseded is
-  reaped rather than parked (🎯T985), including already-achieved-by-someone-else
-  with no further acceptance open. Parking is reserved for a worker blocked
-  on something external that may resume. POs and the overseer stay. Do not
-  rely on hand-pruning zombies from the RHS.
-
 ---
-`
+` + fleetBriefT1182
 
 // EnsureFleetBrief prefixes text with FleetStandingBrief when this is the
 // first send to name in this process. already maps agent name → briefed.

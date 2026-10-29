@@ -138,6 +138,10 @@ func (s *Server) writeInspectReplay(ctx context.Context, conn inspectWriter, nam
 		defer cancel()
 		return conn.Write(wctx, websocket.MessageText, []byte(frame))
 	}
+	if s.isOverseerAgent(name) && s.overseerCanonicalHistory() {
+		_, _, err := s.overseerReplayTailSealed(historyReplayTurns, writeLine)
+		return err
+	}
 	if s.stateStore() != nil {
 		for _, event := range s.muxCoalesced(name, true) {
 			if err := writeLine(string(event.Body)); err != nil {

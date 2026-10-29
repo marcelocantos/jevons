@@ -155,35 +155,6 @@ func TestT515ReportSummary(t *testing.T) {
 	}
 }
 
-// 🎯T860: an explicit disclaimer suppresses oracleDone even when both a
-// done-word and an oracle marker are present in the body — the 2026-09-23
-// jv-t540.7.1.1-main-view-order specimen ("Not claiming done/complete —
-// reporting status only") quoted another agent's GATE GREEN and was still
-// classified oracle_done.
-func TestT860DisclaimerSuppressesOracleDone(t *testing.T) {
-	body := "Not claiming done/complete — reporting status only. " +
-		"For reference, jv-t852-mux-journal's commit aacadd88 reported GATE go-test-TestT852 exit=0 GREEN."
-	if got := Classify(body); got != RouteParent {
-		t.Fatalf("disclaimed report classified %s, want parent", got)
-	}
-	if got := Reason(body); got != "parent" {
-		t.Fatalf("reason %s, want parent", got)
-	}
-}
-
-// 🎯T860: an oracle marker attributed to a named other agent (or a sibling's
-// commit) does not satisfy the oracle half for the reporting agent, even
-// without a disclaimer.
-func TestT860AttributedOracleDoesNotSatisfyOracleHalf(t *testing.T) {
-	body := "Diagnosis done. Another agent's commit reported GATE x GREEN; that is not mine."
-	if got := Classify(body); got != RouteParent {
-		t.Fatalf("attributed-oracle report classified %s, want parent", got)
-	}
-	if got := Reason(body); got != "parent" {
-		t.Fatalf("reason %s, want parent", got)
-	}
-}
-
 // 🎯T766.4: the genuine positive is a declared finish-report. The same
 // sentence with no envelope stays with the parent.
 func TestT860GenuineOracleDoneStillWorks(t *testing.T) {

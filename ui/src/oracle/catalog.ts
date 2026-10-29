@@ -70,7 +70,7 @@ export const CATALOG: readonly OracleFamily[] = [
     title: 'Transcript geometry — pin, PageUp, overscan, no jiggle, connect tail',
     file: 'transcript-geom.test.ts',
     layer: 'hermetic',
-    covers: covers('transcript-geom', ['T30.2', 'T56', 'T119', 'T119.1', 'T119.3', 'T336', 'T341', 'T347', 'T351', 'T363', 'T491', 'T494', 'T494.1.2']),
+    covers: covers('transcript-geom', ['T30.2', 'T56', 'T119', 'T119.1', 'T119.3', 'T336', 'T341', 'T347', 'T351', 'T363', 'T491', 'T494', 'T494.1', 'T494.1.2']),
   },
   {
     id: 'plan-ticker',

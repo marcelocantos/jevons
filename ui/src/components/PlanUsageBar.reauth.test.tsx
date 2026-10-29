@@ -5,17 +5,18 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { PlanUsageBar, type RefusedSeat } from './PlanUsageBar';
+import type { MuxClient } from '../mux/client';
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
-function renderBar(refusedSeats?: RefusedSeat[]) {
+function renderBar(refusedSeats?: RefusedSeat[], mux?: MuxClient) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <PlanUsageBar refusedSeats={refusedSeats} />
+      <PlanUsageBar refusedSeats={refusedSeats} mux={mux} />
     </QueryClientProvider>,
   );
 }
@@ -125,4 +126,46 @@ it('folds refused seats into one entry per plan', async () => {
   expect(menuItems()).toHaveLength(1);
   fireEvent.click(item);
   await waitFor(() => expect(posts).toEqual(['/api/agents/claudia-po/auth/recover']));
+});
+
+// 🎯T1100: App only passes reauth_available seats; a missing-conversation
+// broken seat must not be folded into Sign in.
+it('does not show Sign in when refusedSeats is empty even if a seat is broken elsewhere', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+    if (input === '/api/plan-usage/decisions') return { ok: true, json: async () => [] };
+    if (input === '/api/plan-usage/auth') return { ok: true, json: async () => ({ plans: [{ provider: 'anthropic', state: 'ok' }] }) };
+    return { ok: true, json: async () => ({ backends: [] }) };
+  }));
+  const { container } = renderBar([]);
+  await waitFor(() => expect(screen.queryByRole('button', { name: /Sign in/ })).toBeNull());
+  expect(container.querySelector('#plan-reauth-menu')).toBeNull();
+});
+
+// 🎯T1199: the billing reader and the agent can have different credentials.
+// A failed meter must be visible without inventing a fleet sign-in failure.
+it.each(['http', 'mux'])('reports usage failure independently of healthy agent auth: %s', async (transport) => {
+  const reads: string[] = [];
+  const unavailable = { backends: [{ provider: 'grok', status: 'unavailable', reason: 'grok billing: HTTP 401', windows: [] }] };
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+    reads.push(input);
+    expect(init?.method).not.toBe('POST');
+    if (input === '/api/plan-usage/decisions') return { ok: true, json: async () => [] };
+    if (input === '/api/plan-usage/auth') return { ok: true, json: async () => ({ plans: [{ provider: 'xai-oauth', state: 'ok' }] }) };
+    return { ok: true, json: async () => unavailable };
+  }));
+  const mux = transport === 'mux' ? {
+    subscribe(_channel: string, handler: (frame: unknown) => void) {
+      queueMicrotask(() => handler({ t: 'frame', body: unavailable }));
+      return () => {};
+    },
+    openChannel() {}, closeChannel() {},
+  } as unknown as MuxClient : undefined;
+  const { container } = renderBar([], mux);
+  await waitFor(() => expect(container.textContent).toContain('usage unavailable'));
+  fireEvent.pointerEnter(container.querySelector('[data-instant-tip-host]')!);
+  await waitFor(() => expect(container.textContent).toContain('The agent login is healthy; this is a usage-reader failure.'));
+  expect(container.textContent).toContain('grok billing: HTTP 401');
+  expect(screen.queryByRole('button', { name: /Sign in/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Retry usage' })).toBeNull();
+  expect(reads.filter((r) => r.includes('recover') || r.includes('refresh='))).toEqual([]);
 });

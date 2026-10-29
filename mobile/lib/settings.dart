@@ -1,4 +1,7 @@
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform, visibleForTesting;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// The only place the cockpit URL is written down. Everything else reads it
@@ -10,20 +13,44 @@ const String _kCockpitUrlKey = 'cockpit_url';
 
 /// Persisted shell settings. One value for now: the cockpit URL.
 class CockpitSettings extends ChangeNotifier {
-  CockpitSettings._(this._prefs, this._url);
+  CockpitSettings._(this._url);
 
-  final SharedPreferences _prefs;
+  static const MethodChannel _store = MethodChannel('jevons/device_store');
+
+  // The widget and its sqlpipe database exist on Android only. Preserve the
+  // existing iOS settings backend until that platform gains a sqlpipe bridge.
+  @visibleForTesting
+  static bool? androidOverrideForTests;
+  static bool get _android =>
+      androidOverrideForTests ??
+      defaultTargetPlatform == TargetPlatform.android;
+
+  static Future<String?> _read() async => _android
+      ? _store.invokeMethod<String>('get', {'key': _kCockpitUrlKey})
+      : (await SharedPreferences.getInstance()).getString(_kCockpitUrlKey);
+
+  static Future<void> _write(String value) async {
+    if (_android) {
+      await _store.invokeMethod<void>('put', {
+        'key': _kCockpitUrlKey,
+        'value': value,
+      });
+    } else {
+      await (await SharedPreferences.getInstance())
+          .setString(_kCockpitUrlKey, value);
+    }
+  }
+
   String _url;
 
   String get url => _url;
 
   static Future<CockpitSettings> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final stored = prefs.getString(_kCockpitUrlKey);
+    final stored = await _read();
     final url = (stored == null || stored.trim().isEmpty)
         ? kDefaultCockpitUrl
         : stored.trim();
-    return CockpitSettings._(prefs, url);
+    return CockpitSettings._(url);
   }
 
   /// Stores [value] and notifies listeners. Returns false when the URL did
@@ -31,8 +58,8 @@ class CockpitSettings extends ChangeNotifier {
   Future<bool> setUrl(String value) async {
     final next = value.trim().isEmpty ? kDefaultCockpitUrl : value.trim();
     if (next == _url) return false;
+    await _write(next);
     _url = next;
-    await _prefs.setString(_kCockpitUrlKey, next);
     notifyListeners();
     return true;
   }

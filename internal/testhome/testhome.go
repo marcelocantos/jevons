@@ -27,16 +27,6 @@
 // a test that shells out to `go build` or `npm ci` must not fetch the world
 // again.
 //
-// The init also puts a stub launchctl first on PATH (🎯T1097). launchd is
-// owner state too: a child process a test starts — a built watchdog or
-// daemon, the restart script — addresses the gui/<uid> domain the owner's
-// development jobs live in, and a stray bootstrap, bootout or kickstart
-// from it changes the owner's machine. The stub answers as an empty domain,
-// refuses every change, and appends each invocation to LaunchctlLog. It
-// covers children that inherit this process's PATH; in-process calls go
-// through the internal/supervise seam, which internal/launchdfake fakes,
-// and a child given a PATH built from scratch needs its own stub.
-//
 // A live run (any *_LIVE variable set, as for testbroker.DeadEnd) is left
 // alone: it means to reach real providers. The ratchet in this package's
 // tests requires every test binary in the module to link this one.
@@ -61,29 +51,6 @@ const AccountHomeEnv = "JEVONS_TEST_ACCOUNT_HOME"
 // Dir is the private home this process runs under, or "" in a live run.
 var Dir string
 
-// LaunchctlLog is the file the PATH stub launchctl appends each invocation
-// to, one line of arguments per call, or "" in a live run. It is also
-// exported to children as LaunchctlLogEnv.
-var LaunchctlLog string
-
-// LaunchctlLogEnv names LaunchctlLog in the environment.
-const LaunchctlLogEnv = "JEVONS_TEST_LAUNCHCTL_LOG"
-
-// launchctlStub answers launchctl as a domain holding no jobs and no
-// overrides — the same answers internal/launchdfake gives in process —
-// and refuses anything that would change it. The log path is baked in so
-// a child that rebuilds its environment still records.
-const launchctlStub = `#!/bin/sh
-# internal/testhome (🎯T1097): tests never reach the owner's launchd.
-printf '%%s\n' "$*" >>%q
-case "$1" in
-print-disabled) printf 'disabled services = {\n}\n'; exit 0 ;;
-print|list) echo "Could not find service \"$2\"" >&2; exit 113 ;;
-esac
-echo "testhome launchctl stub: $* refused in tests" >&2
-exit 1
-`
-
 func init() {
 	if !testing.Testing() {
 		panic("testhome is for test binaries only; it rewrites HOME")
@@ -104,7 +71,11 @@ func init() {
 		"BUN_INSTALL_CACHE_DIR": filepath.Join(home, ".bun", "install", "cache"),
 		"npm_config_cache":      filepath.Join(home, ".npm"),
 		"GIT_CONFIG_GLOBAL":     filepath.Join(home, ".gitconfig"),
-		AccountHomeEnv:          home,
+		// 🎯T1309: the Lean toolchain. Under a private HOME elan found none
+		// and downloaded all of Lean 4.35 on every run of the T863 oracle;
+		// gate b5934142 failed on that download's SSL error.
+		"ELAN_HOME":    filepath.Join(home, ".elan"),
+		AccountHomeEnv: home,
 	}
 	if cache, err := os.UserCacheDir(); err == nil {
 		keep["GOCACHE"] = filepath.Join(cache, "go-build")
@@ -129,19 +100,15 @@ func init() {
 	for name, path := range set {
 		_ = os.Setenv(name, path)
 	}
+	// `make test-go` inherits a jobserver MAKEFLAGS token the go test process
+	// does not serve. Any nested `make` then blocks forever on the pipe
+	// (🎯T1176: TestT438CleanCheckoutUISuiteInvocable looked like a subprocess
+	// I/O hang). Drop the inherited make parallel state for this process and
+	// every child it starts.
+	_ = os.Unsetenv("MAKEFLAGS")
+	_ = os.Unsetenv("MFLAGS")
 	Dir = dir
 
-	stubDir := filepath.Join(dir, ".testhome-bin")
-	log := filepath.Join(dir, "launchctl.log")
-	if err := os.MkdirAll(stubDir, 0o755); err != nil {
-		panic(err)
-	}
-	if err := os.WriteFile(filepath.Join(stubDir, "launchctl"), []byte(fmt.Sprintf(launchctlStub, log)), 0o755); err != nil {
-		panic(err)
-	}
-	_ = os.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	_ = os.Setenv(LaunchctlLogEnv, log)
-	LaunchctlLog = log
 }
 
 // LiveRun reports whether env (in os.Environ form) opts into a live run: any

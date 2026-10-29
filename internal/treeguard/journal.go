@@ -45,6 +45,7 @@ const (
 	ViaTool  = "tool"  // an allowed Write/Edit, or a Read that observed disk
 	ViaBash  = "bash"  // an allowed shell command, re-read afterwards
 	ViaSweep = "sweep" // the sweep itself, adopting current disk as the new base
+	// ViaBullseye is defined in bullseye_write.go (🎯T1247).
 )
 
 // JournalEntry is the last content of a guarded path that the guard saw.
@@ -151,19 +152,29 @@ func (e *Env) Sweep(now time.Time) ([]SweepFinding, error) {
 		if entry.Hash == diskHash {
 			continue
 		}
-		lost := LostLines(seen, content)
+		rel, err := filepath.Rel(e.RepoRoot, abs)
+		if err != nil {
+			rel = abs
+		}
+		rel = filepath.ToSlash(rel)
+		// A sanctioned bullseye tool write never passed the hook (commit-tree
+		// + update-ref). Recognise it so a content replacement is not a loss
+		// alarm; a raw sed / stale overwrite still is (🎯T1247).
+		if IsLedgerPath(rel) && isSanctionedBullseyeWrite(e.RepoRoot, rel, content, entry.At) {
+			if err := e.Store.Journal(abs, content, now, "", ViaBullseye); err != nil {
+				return findings, err
+			}
+			continue
+		}
+		lost := withoutDerivedLines(LostLines(seen, content), content)
 		if err := e.Store.Journal(abs, content, now, "", ViaSweep); err != nil {
 			return findings, err
 		}
 		if len(lost) == 0 {
 			continue
 		}
-		rel, err := filepath.Rel(e.RepoRoot, abs)
-		if err != nil {
-			rel = abs
-		}
 		findings = append(findings, SweepFinding{
-			RelPath:  filepath.ToSlash(rel),
+			RelPath:  rel,
 			WasHash:  entry.Hash,
 			NowHash:  diskHash,
 			Lost:     lost,
@@ -217,6 +228,29 @@ func LostLines(was, now []byte) []string {
 		if len(out) == MaxAtRisk {
 			break
 		}
+	}
+	return out
+}
+
+// withoutDerivedLines drops lost lines whose content did not go anywhere. The
+// bullseye tools rewrite bullseye.yaml's `# content_hash:` header on every
+// write, and reflow a `key: value` field into a `key: |-` block when it grows,
+// so the old hash and the old one-line field always "disappear"; reporting
+// them made most sweep alarms a false loss (🎯T1243).
+func withoutDerivedLines(lost []string, now []byte) []string {
+	present := lineSet(now)
+	out := lost[:0]
+	for _, line := range lost {
+		if strings.HasPrefix(line, "# content_hash: sha256:") {
+			continue
+		}
+		if _, value, ok := strings.Cut(line, ": "); ok {
+			value = strings.Trim(strings.TrimSpace(value), `'"`)
+			if value != "" && present[value] {
+				continue
+			}
+		}
+		out = append(out, line)
 	}
 	return out
 }

@@ -33,5 +33,5 @@ func (s *Server) reportFleetMuteIfNeeded() {
 		return
 	}
 	slog.Error("🎯T418 fleet mute", "reason", reason)
-	s.notifyFleetHealth("mute", reason)
+	s.notifyFleetHealth(noticeAct, "mute", reason)
 }

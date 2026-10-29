@@ -44,8 +44,8 @@ func TestMixFleetHealthOccurrence(t *testing.T) {
 func TestT717SecondOccurrenceReachesOverseer(t *testing.T) {
 	s, inbox := t428Server(t, TurnEvidence{Observed: true, PayloadSeen: true})
 
-	s.notifyFleetHealth("entry-aaaa", t717StableLine)
-	s.notifyFleetHealth("entry-bbbb", t717StableLine)
+	s.notifyFleetHealth(noticeAct, "entry-aaaa", t717StableLine)
+	s.notifyFleetHealth(noticeAct, "entry-bbbb", t717StableLine)
 	if len(inbox.texts) != 2 {
 		t.Fatalf("overseer received %d notices; want 2 distinct occurrences\n%v",
 			len(inbox.texts), inbox.texts)
@@ -69,8 +69,8 @@ func TestT717SecondOccurrenceReachesOverseer(t *testing.T) {
 func TestT717SameOccurrenceStillSuppressed(t *testing.T) {
 	s, inbox := t428Server(t, TurnEvidence{Observed: true, PayloadSeen: true})
 
-	s.notifyFleetHealth("entry-aaaa", t717StableLine)
-	s.notifyFleetHealth("entry-aaaa", t717StableLine)
+	s.notifyFleetHealth(noticeAct, "entry-aaaa", t717StableLine)
+	s.notifyFleetHealth(noticeAct, "entry-aaaa", t717StableLine)
 	if len(inbox.texts) != 1 {
 		t.Fatalf("overseer received %d copies of one occurrence; want 1 (🎯T428 still holds)\n%v",
 			len(inbox.texts), inbox.texts)
@@ -87,8 +87,8 @@ func TestT717SameOccurrenceStillSuppressed(t *testing.T) {
 
 func TestT717EmptyOccurrenceDoesNotSend(t *testing.T) {
 	s, inbox := t428Server(t, TurnEvidence{Observed: true, PayloadSeen: true})
-	s.notifyFleetHealth("", t717StableLine)
-	s.notifyFleetHealth("entry-aaaa", "")
+	s.notifyFleetHealth(noticeAct, "", t717StableLine)
+	s.notifyFleetHealth(noticeAct, "entry-aaaa", "")
 	if len(inbox.texts) != 0 {
 		t.Fatalf("empty occurrence or line reached the overseer: %v", inbox.texts)
 	}
@@ -101,14 +101,14 @@ func TestT717BounceDoesNotCollapseNewOccurrence(t *testing.T) {
 	dir := t.TempDir()
 	first := &overseerInbox{}
 	s1 := t568Server(t, dir, first)
-	s1.notifyFleetHealth("entry-aaaa", t717StableLine)
+	s1.notifyFleetHealth(noticeAct, "entry-aaaa", t717StableLine)
 	if len(first.texts) != 1 {
 		t.Fatalf("first process inbox=%v want 1", first.texts)
 	}
 
 	second := &overseerInbox{}
 	s2 := t568Server(t, dir, second)
-	s2.notifyFleetHealth("entry-bbbb", t717StableLine)
+	s2.notifyFleetHealth(noticeAct, "entry-bbbb", t717StableLine)
 	if len(second.texts) != 1 {
 		t.Fatalf("post-restart occurrence B suppressed (got %d); T568 must not collapse a new occurrence\n%v",
 			len(second.texts), second.texts)
@@ -135,9 +135,7 @@ func TestT717SecondRoutedHoldReachesOverseer(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.sweepFor(2 * time.Minute)
-	if got := heldReapedNotices(f.up.all()); got != 1 {
-		t.Fatalf("first hold notices = %d; want 1\n%s", got, strings.Join(f.up.all(), "\n"))
-	}
+	finishedSeatInformText(t, f, 1)
 
 	if _, _, err := q.Append(agent, "second, unrelated follow-up",
 		f.now.Add(-StalledBacklogAfter-time.Minute)); err != nil {
@@ -160,10 +158,7 @@ func TestT717SecondRoutedHoldReachesOverseer(t *testing.T) {
 	if err != nil || len(held) != 1 || !strings.Contains(held[0].Text, "first follow-up") || held[0].State != sendq.Uncertain {
 		t.Fatalf("first hold = %+v %v", held, err)
 	}
-	if got := heldReapedNotices(f.up.all()); got != 1 {
-		t.Fatalf("notices after a second message on the same hold = %d; want 1\n%s",
-			got, strings.Join(f.up.all(), "\n"))
-	}
+	finishedSeatInformText(t, f, 1)
 }
 
 func TestT717EventOccurrenceDistinguishesRecurrence(t *testing.T) {
@@ -188,12 +183,12 @@ func TestT717MCPHealthT530FrontierSecondEventReachesOverseer(t *testing.T) {
 
 	t0 := time.Date(2026, 9, 21, 2, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)
-	s.notifyFleetHealth(fleetHealthEventOccurrence("sess-1", t0), mcp)
-	s.notifyFleetHealth(fleetHealthEventOccurrence("sess-1", t1), mcp)
-	s.notifyFleetHealth(fleetHealthEventOccurrence("jv-t717", t0), t530)
-	s.notifyFleetHealth(fleetHealthEventOccurrence("jv-t717", t1), t530)
-	s.notifyFleetHealth(fleetHealthEventOccurrence("jv-t717-replay-digest:T717", t0), frontier)
-	s.notifyFleetHealth(fleetHealthEventOccurrence("jv-t717-replay-digest:T717", t1), frontier)
+	s.notifyFleetHealth(noticeAct, fleetHealthEventOccurrence("sess-1", t0), mcp)
+	s.notifyFleetHealth(noticeAct, fleetHealthEventOccurrence("sess-1", t1), mcp)
+	s.notifyFleetHealth(noticeAct, fleetHealthEventOccurrence("jv-t717", t0), t530)
+	s.notifyFleetHealth(noticeAct, fleetHealthEventOccurrence("jv-t717", t1), t530)
+	s.notifyFleetHealth(noticeAct, fleetHealthEventOccurrence("jv-t717-replay-digest:T717", t0), frontier)
+	s.notifyFleetHealth(noticeAct, fleetHealthEventOccurrence("jv-t717-replay-digest:T717", t1), frontier)
 	if len(inbox.texts) != 6 {
 		t.Fatalf("overseer received %d; want 6 (two starts, two drain-restarts, two spawns)\n%v",
 			len(inbox.texts), inbox.texts)

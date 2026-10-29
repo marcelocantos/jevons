@@ -105,8 +105,13 @@ func TestT10749CorruptStatusFailsCatchUp(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	c := NewCollector(&CollectorArgs{Replica: src})
-	err = c.CatchUpReplicas(context.Background())
+	store, err := OpenStore(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	c := NewCollector(&CollectorArgs{Store: store, Replica: src})
+	_, err = c.CatchUpReplicas(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "not json") {
 		t.Fatalf("catch-up = %v", err)
 	}

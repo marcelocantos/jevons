@@ -47,7 +47,7 @@ func TestT693PickPlanDestUnderBeatsOkDespiteGrokSlack(t *testing.T) {
 		{Provider: "claude", Backend: claude, Load: 8},
 		{Provider: "grok", Backend: grok, Load: 1},
 	}
-	got, ok := PickPlanDest(cands, now, th)
+	got, ok := PickPlanDest(cands, now, th, nil)
 	if !ok || got != "claude" {
 		t.Fatalf("under outranks ok: dest=%q ok=%v", got, ok)
 	}
@@ -62,7 +62,7 @@ func TestT693PickPlanDestUnderBeatsOkDespiteGrokSlack(t *testing.T) {
 	pick, err := ResolveMint(context.Background(), []DestCand{
 		{Provider: "claude", Backend: claude, Load: 8},
 		{Provider: "grok", Backend: grok, Load: 1},
-	}, now, th)
+	}, now, th, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestT693FableSpentDoesNotVetoClaude(t *testing.T) {
 	got, ok := PickPlanDest([]DestCand{
 		{Provider: "claude", Backend: claude, Load: 3},
 		{Provider: "grok", Backend: grok, Load: 1},
-	}, now, th)
+	}, now, th, nil)
 	if !ok || got != "claude" {
 		t.Fatalf("Fable spent ≠ Claude unavailable: dest=%q ok=%v", got, ok)
 	}
@@ -117,7 +117,7 @@ func TestT693FableSpentDoesNotVetoClaude(t *testing.T) {
 	pick, err := ResolveMint(context.Background(), []DestCand{
 		{Provider: "claude", Backend: claude},
 		{Provider: "grok", Backend: grok},
-	}, now, th)
+	}, now, th, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,14 +161,14 @@ func TestT693BandOrderLockedThenUnderThenOK(t *testing.T) {
 	got, yes := PickPlanDest([]DestCand{
 		{Provider: "grok", Backend: ok, Load: 0},
 		{Provider: "claude", Backend: under, Load: 9},
-	}, now, th)
+	}, now, th, nil)
 	if !yes || got != "claude" {
 		t.Fatalf("under beats ok: dest=%q ok=%v", got, yes)
 	}
 	got, yes = PickPlanDest([]DestCand{
 		{Provider: "claude", Backend: under, Load: 9},
 		{Provider: "codex", Backend: locked, Load: 9},
-	}, now, th)
+	}, now, th, nil)
 	if !yes || got != "codex" {
 		t.Fatalf("locked beats under: dest=%q ok=%v", got, yes)
 	}

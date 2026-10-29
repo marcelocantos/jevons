@@ -210,6 +210,33 @@ func isWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
+// developmentSurfaceEvidenceMarkers cite an activated development surface in
+// legacy finish-report prose. HasActivationEvidence does not read these
+// (🎯T766.4); HasDailyPathEvidence does (🎯T572 legacy accept).
+var developmentSurfaceEvidenceMarkers = []string{
+	"restart-jevonsd",
+	"restart-daily-jevonsd",
+	"live probe",
+	"development path",
+	"development surface",
+	"daily path", // legacy accept — speech is development (🎯T572)
+	"daily-path",
+	"curl ",
+	"curl\t",
+	"http 200",
+	"http/1.1 200",
+	"non-404",
+	"not 404",
+	":13705",
+	"127.0.0.1:13705",
+	"localhost:13705",
+	"/api/frontier",
+	"/health",
+	"stale binary",
+	"zero-downtime upgrade",
+	"proven zero-downtime",
+}
+
 // HasActivationEvidence reports whether a finish report declares activation
 // of the development surface in the envelope daily slot. 🎯T552 / 🎯T553.2:
 // this is a seam classifier, not an achieve gate. Observation of the
@@ -218,6 +245,31 @@ func isWordRune(r rune) bool {
 func HasActivationEvidence(report string) bool {
 	m, err := envelope.Parse(report)
 	return m != nil && err == nil && m.HasActivation()
+}
+
+// HasDailyPathEvidence is the legacy name for classifying development-surface
+// activation citations in finish reports (🎯T572). It accepts the envelope
+// daily slot and legacy prose (including "daily path") so older reports still
+// classify. Not an achieve gate — observation of the running surface is.
+func HasDailyPathEvidence(report string) bool {
+	if HasActivationEvidence(report) {
+		return true
+	}
+	s := strings.ToLower(strings.TrimSpace(oracleScanBody(report)))
+	if s == "" {
+		return false
+	}
+	for _, m := range developmentSurfaceEvidenceMarkers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	if strings.Contains(s, "get ") && (strings.Contains(s, "200") || strings.Contains(s, "non-404")) {
+		if strings.Contains(s, "http") || strings.Contains(s, "/api/") || strings.Contains(s, ":13705") {
+			return true
+		}
+	}
+	return false
 }
 
 // reportCitesOracleID is true only for a valid envelope oracle slot

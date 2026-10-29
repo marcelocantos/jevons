@@ -261,6 +261,19 @@ func namesSeatLoad(s string) bool {
 // looksLikeLoadNameLine matches the governor's own sentence for the NAME
 // verdict (capacity.FormatLoadAction: `LOAD NAME (🎯T708): seat "x" holds …`).
 // Narrow on purpose: NAME is the verdict where the naming *is* the repair.
+// BenignResizeObserverWindowError reports event:error:window residuals whose
+// detail is Chromium's ResizeObserver loop warning (🎯T1194).
+func BenignResizeObserverWindowError(sig Signal) bool {
+	if strings.TrimSpace(sig.Kind) != "daemon_error" {
+		return false
+	}
+	sym := strings.ToLower(strings.TrimSpace(sig.Symptom))
+	if !strings.Contains(sym, "event:error:window") {
+		return false
+	}
+	return strings.Contains(sig.Detail, resizeObserverLoopBenign)
+}
+
 func looksLikeLoadNameLine(detail string) bool {
 	d := strings.ToLower(detail)
 	if !strings.Contains(d, "t708") {
@@ -472,6 +485,17 @@ func Classify(sig Signal) Decision {
 		}
 	}
 
+	// 🎯T1194: Chromium's benign ResizeObserver loop warning is not a product
+	// exception. Historical rows may still reach Classify when journaled before
+	// the cockpit filter shipped.
+	if BenignResizeObserverWindowError(sig) {
+		return Decision{
+			Signal: sig,
+			Action: ActionIgnore,
+			Reason: "benign ResizeObserver loop — browser quirk, not a product exception",
+		}
+	}
+
 	// 🎯T410: finished-awaiting-gate → close the target (file+PO), never
 	// rehydrate/interrupt/nudge the worker. Before mechanical idle-residue
 	// repair so the same phase=idle observation does not fall through to
@@ -495,6 +519,59 @@ func Classify(sig Signal) Decision {
 			Signal: sig,
 			Action: ActionFilePO,
 			Reason: "finished awaiting gate — close target, no worker nudge",
+		}
+	}
+
+	// 🎯T1193: typed child terminal reports after the PO's last turn — the
+	// sentinel tick wakes the PO directly; staffops records the fault only.
+	if kind == "po_unacted_child_reports" {
+		return Decision{
+			Signal: sig,
+			Action: ActionIgnore,
+			Reason: "unacted child terminal reports — PO wake delivered by sentinel (🎯T1193)",
+		}
+	}
+
+	// 🎯T1195: open bounded owner mission — sentinel wakes the PO directly.
+	if kind == "po_owner_mission" {
+		return Decision{
+			Signal: sig,
+			Action: ActionIgnore,
+			Reason: "open owner mission — PO wake delivered by sentinel (🎯T1195)",
+		}
+	}
+
+	// 🎯T1182: PO inbound queue older than the direct budget — file+PO so the
+	// seat drains directs and delegates verification to its auditor seat.
+	if kind == "po_queue_backlog" {
+		if d := fleetintent.Allows(sig.FleetIntent, sig.Intent, fleetintent.ControlRepair); !d.Allow {
+			return Decision{
+				Signal: sig,
+				Action: ActionIgnore,
+				Reason: "po queue backlog, but intent says do not run — " + fleetintent.Describe(d.Blocking) + " (" + d.Reason + ")",
+			}
+		}
+		return Decision{
+			Signal: sig,
+			Action: ActionFilePO,
+			Reason: "po queue backlog — stay interruptible; route auditor gate, do not run verification in PO turns",
+		}
+	}
+
+	// 🎯T1192: PO and auditor both idle while children hold finish-reports —
+	// wake the PO with the handoff list; do not wait for owner prose.
+	if kind == "po_auditor_mutual_wait" {
+		if d := fleetintent.Allows(sig.FleetIntent, sig.Intent, fleetintent.ControlRepair); !d.Allow {
+			return Decision{
+				Signal: sig,
+				Action: ActionIgnore,
+				Reason: "po/auditor mutual wait, but intent says do not run — " + fleetintent.Describe(d.Blocking) + " (" + d.Reason + ")",
+			}
+		}
+		return Decision{
+			Signal: sig,
+			Action: ActionFilePO,
+			Reason: "po/auditor mutual wait — route auditor or integrate/achieve pending handoffs",
 		}
 	}
 
@@ -789,7 +866,9 @@ func FormatResourceSnapshot(r ResourceSnapshot) string {
 // spawning or nudging the finished worker.
 func FormatPOMission(res CycleResult) string {
 	var b strings.Builder
-	if onlyFinishedAwaitingGate(res) {
+	if onlyPOAuditorMutualWait(res) {
+		b.WriteString("[sentinel mission 🎯T1192] PO and auditor are both idle while children hold finish-reports on open targets. Route the auditor or integrate/achieve — pending handoffs:\n")
+	} else if onlyFinishedAwaitingGate(res) {
 		b.WriteString("[sentinel mission 🎯T410] Worker finished; target still open — achieve/close the target. Do not rehydrate/interrupt/nudge the worker.\n")
 	} else {
 		b.WriteString("[sentinel mission 🎯T219] Residual wrongness — file bullseye if missing, then spawn Build workers under parent=jevons-po (T125 spawn-only; no product implement by PO).\n")
@@ -813,10 +892,26 @@ func FormatPOMission(res CycleResult) string {
 			fmt.Fprintf(&b, "  evidence: %s\n", d.Signal.Detail)
 		}
 	}
-	if onlyFinishedAwaitingGate(res) {
+	if onlyPOAuditorMutualWait(res) {
+		b.WriteString("Constraints: clear the handoff queue — auditor gate or PO integrate/achieve; no Ship unless owner opens it.\n")
+	} else if onlyFinishedAwaitingGate(res) {
 		b.WriteString("Constraints: close/achieve only; no worker nudge; no Ship unless owner opens it.\n")
 	} else {
 		b.WriteString("Constraints: no Ship plane; local Build only unless owner opens Ship. Cite oracle evidence on finish.\n")
 	}
 	return b.String()
+}
+
+func onlyPOAuditorMutualWait(res CycleResult) bool {
+	saw := false
+	for _, d := range res.Decisions {
+		if d.Action != ActionFilePO {
+			continue
+		}
+		if d.Signal.Kind != "po_auditor_mutual_wait" {
+			return false
+		}
+		saw = true
+	}
+	return saw
 }

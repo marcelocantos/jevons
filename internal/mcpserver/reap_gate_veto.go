@@ -48,7 +48,8 @@ func reapGateVeto(report, workDir string) []gate.Flag {
 		lookup = store.Lookup
 	}
 	known, _ := gate.CommitKnownIn(workDir)
-	return TypedGateFlags(m, lookup, known)
+	flags := append(TypedGateFlags(m, lookup, known), gate.FlagLandingSHA(m.SHA, workDir)...)
+	return append(flags, gate.CheckOwnerImpactMissing(m, workDir)...)
 }
 
 // TypedGateFlags is the pure decision behind reapGateVeto: the ways an

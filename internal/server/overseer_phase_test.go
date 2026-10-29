@@ -6,6 +6,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -90,7 +91,7 @@ func TestT555_1FleetDrainAcceptedWithCorrespondent(t *testing.T) {
 		t.Fatalf("want correspondent [jevons-po], got %v", got)
 	}
 	// Later ACP progress inherits the correspondent; idle clears it.
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: "hi"})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: wireOwnerReplyDecision("hi")})
 	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
 	fr = cap.frames(t)
 	var phases []string
@@ -124,7 +125,7 @@ func TestT555_1QueuedFleetNoteIsNotCorrespondent(t *testing.T) {
 	_ = s.SendToOverseer(userTurnPrefix + "owner speaks")
 	busy = true
 	_ = s.SendToOverseer(envelope.PrefixAgentResponded + "\n" + envelope.SeatFact(envelope.IntentRoute, "jevons-po") + "\nqueued behind owner")
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: "answering owner"})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: wireOwnerReplyDecision("answering owner")})
 	for _, f := range cap.frames(t) {
 		if _, has := f["correspondent"]; has {
 			t.Fatalf("queued fleet note leaked into owner turn: %v", f)
@@ -263,5 +264,73 @@ func TestT555_2MuxMetaAndFanCarryPhaseSample(t *testing.T) {
 		}
 	default:
 		t.Fatal("mux fan did not publish phase")
+	}
+}
+
+func TestT576CorrespondentWorkerIdleNamesAgent(t *testing.T) {
+	note := idleNote("jevons-po", "[event: worker-idle] entered idle\nWorker: jevons-po\n")
+	for _, n := range []string{note, "[event: worker-idle] entered idle\nWorker: jevons-po\n"} {
+		if got := correspondentForBatch([]string{n}, false); len(got) != 1 || got[0] != "jevons-po" {
+			t.Fatalf("worker-idle: want [jevons-po], got %v", got)
+		}
+	}
+	if got := correspondentForBatch([]string{note}, true); got != nil {
+		t.Fatalf("owner batch must have no correspondent, got %v", got)
+	}
+}
+
+func TestT576CorrespondentDrainOrderAndNamelessFallback(t *testing.T) {
+	batch := []string{
+		agentNote("jevons-po", "responded"),
+		idleNote("jv-t555", "[event: worker-idle]\nWorker: jv-t555\n"),
+		"[event: daemon-restarted] bounced",
+		idleNote("jevons-po", "[event: worker-idle]\nWorker: jevons-po\n"),
+	}
+	got := correspondentForBatch(batch, false)
+	want := []string{"jevons-po", "jv-t555", CorrespondentFleet}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+	// A report quoting Worker: is not itself a Worker event.
+	if name := correspondentName("arbitrary note\nWorker: jv-fake"); name != CorrespondentFleet {
+		t.Fatalf("arbitrary Worker: line misread as correspondent: %s", name)
+	}
+}
+
+func TestT576WorkerIdleDrainAcceptedWithNamedCorrespondent(t *testing.T) {
+	s := &Server{}
+	s.notifySender = func(string) error { return nil }
+	cap := newPhaseCapture(s)
+	_ = s.SendToOverseer(idleNote("jevons-po", "[event: worker-idle]\nWorker: jevons-po\n"))
+	frames := cap.frames(t)
+	if len(frames) != 1 || frames[0]["phase"] != PhaseAccepted {
+		t.Fatalf("want one accepted frame, got %v", frames)
+	}
+	if got := correspondents(frames[0]); !reflect.DeepEqual(got, []string{"jevons-po"}) {
+		t.Fatalf("want [jevons-po], got %v", got)
+	}
+}
+
+func TestT576QueuedWorkerIdleIsNotCorrespondent(t *testing.T) {
+	s := &Server{}
+	busy := false
+	s.notifySender = func(string) error {
+		if busy {
+			return fmt.Errorf("grok acp: prompt already in flight")
+		}
+		return nil
+	}
+	cap := newPhaseCapture(s)
+	_ = s.SendToOverseer(userTurnPrefix + "owner speaks")
+	busy = true
+	_ = s.SendToOverseer(idleNote("jevons-po", "[event: worker-idle]\nWorker: jevons-po\n"))
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: "answering owner"})
+	for _, f := range cap.frames(t) {
+		if _, has := f["correspondent"]; has {
+			t.Fatalf("queued worker-idle leaked into owner turn: %v", f)
+		}
+	}
+	if p := s.OverseerPhase(); p.Phase != PhaseStreaming || p.Correspondent != nil {
+		t.Fatalf("owner in flight sample wrong: %+v", p)
 	}
 }

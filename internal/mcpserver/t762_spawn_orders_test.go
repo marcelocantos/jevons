@@ -99,7 +99,7 @@ func TestT762HalfExecutedOrderNamesTheDroppedSeats(t *testing.T) {
 	out = t762Call(t, s, map[string]any{"action": "status", "id": "o-0635"})
 	for _, frag := range []string{
 		"order o-0635: 1/4 minted (INCOMPLETE)",
-		"jv-t760-attrib (grok) refused: name and workdir are required",
+		"jv-t760-attrib (grok) refused: outcome=not-started: name and workdir are required",
 		"jv-t755-loose (grok) unknown: a daemon start for this name was observed",
 		"jv-t759-dropped (grok) not_attempted: no matching daemon start observed",
 	} {

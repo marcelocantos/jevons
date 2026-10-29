@@ -7,10 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/marcelocantos/jevons/internal/spool"
+	"github.com/marcelocantos/jevons/internal/tmpdirsweep"
 )
 
 // TestMain isolates the suite from the owner's live claudia state.
@@ -26,13 +26,14 @@ import (
 // mode granted a real seat on the owner's development broker, which resumed it
 // on every restart and spent plan quota (2026-10-01).
 //
-// And it points claudia's tmux socket at a private path. Jevons no longer
-// touches tmux, but claudia v0.53's Registry.Remove still calls its legacy
-// tmuxagent.KillWindowsForSession, which starts a "claudia-anchor" tmux server
-// on that socket. Left on the default it would reach the owner's real socket;
-// left private and un-torn-down it orphaned one server per run (~200 on
-// Colossus by 2026-10-14). The suite kills its own server before removing the
-// directory.
+// And it points claudia's tmux socket at a private path (🎯T740 / 🎯T755).
+// Jevons no longer runs fleet pane census (🎯T459), but claudia's
+// Registry.Remove still calls legacy tmuxagent.KillWindowsForSession on that
+// socket. Left on the default it would reach the owner's real socket; left
+// private and un-torn-down it orphaned one server per run (~200 on Colossus
+// by 2026-10-14). Unguarded handleAgentList must never exec tmux kill-pane on
+// a live fleet socket — TestMain's env is the suite-wide seam. The suite kills
+// its own server before removing the directory.
 func TestMain(m *testing.M) {
 	sweepStaleTestDirs()
 
@@ -51,29 +52,16 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// sweepStaleTestDirs removes mcpserver-test-* directories left behind by a
-// prior run of this suite whose process is no longer alive (🎯T1087): a
-// binary killed by timeout or panic skips the os.RemoveAll in this
-// TestMain's normal return path, and the dir never gets another chance to
-// be cleaned since each run mints a fresh random name. A dir is only
-// removed when its tmux.sock has no owning server, so a concurrently
-// running suite's directory is left alone.
+// mcpserverTempPrefixes are private suite roots under $TMPDIR. The legacy
+// mcpserver-tmux-* name predates 🎯T579's rename to mcpserver-test-*.
+var mcpserverTempPrefixes = []string{"mcpserver-test-", "mcpserver-tmux-"}
+
+// sweepStaleTestDirs removes mcpserver-* directories left behind by a prior
+// run whose process is no longer alive (🎯T1087 / 🎯T1168).
 func sweepStaleTestDirs() {
-	entries, err := os.ReadDir(os.TempDir())
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), "mcpserver-test-") {
-			continue
-		}
-		dir := filepath.Join(os.TempDir(), e.Name())
-		sock := filepath.Join(dir, "tmux.sock")
-		if _, err := os.Stat(sock); err == nil {
-			killPrivateTmuxServer(sock)
-		}
-		os.RemoveAll(dir)
-	}
+	tmpdirsweep.SweepPrefixes(os.TempDir(), mcpserverTempPrefixes, func(dir string) {
+		killPrivateTmuxServer(filepath.Join(dir, "tmux.sock"))
+	})
 }
 
 // killPrivateTmuxServer stops the tmux server claudia may have started on

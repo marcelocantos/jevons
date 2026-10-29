@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -140,6 +141,11 @@ type Request struct {
 	// Claimed is target IDs the actor says they wrote (ClaimEnv). Empty
 	// means none, so every semantically-changed ledger row is named.
 	Claimed []string
+	// Actor, Role, Purpose are the committing fleet seat (JEVONS_AGENT /
+	// JEVONS_ROLE / JEVONS_PURPOSE) for achieve guard (🎯T1160).
+	Actor   string
+	Role    string
+	Purpose string
 }
 
 // Verdict is the decision plus the text the worker sees.
@@ -164,9 +170,17 @@ const MaxNamed = 20
 //
 // Two cases pass that might look like they should not. An empty staged set
 // cannot misattribute anything (git will reject the commit itself, or it is
-// an `--amend` of the message alone). And a disabled guard passes by
-// construction — the point of the escape hatch is that it is explicit.
+// an `--amend` of the message alone). Disabling shared-index scope checks
+// leaves independent ledger-syntax and bundle checks active.
 func Decide(req *Request) Verdict {
+	for _, c := range req.Contents {
+		if !IsSharedLedger(c.Path) || !slices.Contains(req.Staged, c.Path) {
+			continue
+		}
+		if refuse, msg := LedgerSyntaxRefusal(c.Staged); refuse {
+			return Verdict{Refused: true, Kind: Classify(req.IndexFile), Message: msg}
+		}
+	}
 	v := decideScope(req)
 	if v.Refused {
 		return v
@@ -184,6 +198,17 @@ func decideScope(req *Request) Verdict {
 		return Verdict{Kind: kind}
 	case kind.Sweeps():
 		return Verdict{Refused: true, Kind: kind, Message: refusal(kind, req.Staged)}
+	}
+	for _, c := range req.Contents {
+		if !IsSharedLedger(c.Path) {
+			continue
+		}
+		if refuse, msg := LedgerShrinkRefusal(c.Head, c.Staged); refuse {
+			return Verdict{Refused: true, Kind: kind, Message: msg}
+		}
+		if refuse, msg := WorkerLedgerAchieveRefusal(req.Actor, req.Role, req.Purpose, c.Head, c.Staged); refuse {
+			return Verdict{Refused: true, Kind: kind, Message: msg}
+		}
 	}
 	if msg := ledgerContentWarning(req); msg != "" {
 		return Verdict{Kind: kind, Message: msg}

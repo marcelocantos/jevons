@@ -27,6 +27,10 @@ export type FrontierRow = {
   discovered?: string;
   achieved?: string;
   extra?: Record<string, unknown>;
+  /** True when depends_on are satisfied (targetfile.FrontierLeaves / sweep). */
+  ready?: boolean;
+  /** True when active but blocked on an open depends_on. */
+  blocked?: boolean;
 };
 
 export type FanoutCell = { text: string; title: string; visible: boolean };
@@ -139,7 +143,32 @@ export function toFrontierRow(raw: unknown): FrontierRow | null {
   if (t.achieved != null) row.achieved = String(t.achieved);
   const extra = extraRecord(t.extra);
   if (extra) row.extra = extra;
+  if (t.ready === true) row.ready = true;
+  else if (t.ready === false) row.ready = false;
+  if (t.blocked === true) row.blocked = true;
+  else if (t.blocked === false) row.blocked = false;
   return row;
+}
+
+/** True when the API payload carries explicit readiness (🎯T1119). */
+export function frontierReadinessDeclared(rows: readonly FrontierRow[]): boolean {
+  for (const r of rows) {
+    if (r.ready === true || r.blocked === true) return true;
+  }
+  return false;
+}
+
+/** Ready leaf for the Frontier tab — matches sweep / FrontierLeaves. */
+export function isFrontierRowReady(row: FrontierRow): boolean {
+  if (row.ready === true) return true;
+  if (row.blocked === true || row.ready === false) return false;
+  // Legacy payloads listed only ready leaves with no flags.
+  return true;
+}
+
+export function readyFrontierRows(rows: readonly FrontierRow[]): FrontierRow[] {
+  if (!rows.length || !frontierReadinessDeclared(rows)) return rows.slice();
+  return rows.filter(isFrontierRowReady);
 }
 
 export function toFrontierRows(data: unknown): FrontierRow[] {

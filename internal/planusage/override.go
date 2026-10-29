@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 )
 
 // Override is the owner's verdict on a plan's band (🎯T948). A plan that
@@ -38,6 +40,7 @@ const OverrideFile = "plan-overrides.json"
 // grok, cursor).
 type OverrideStore struct {
 	path     string
+	replica  Replica
 	mu       sync.Mutex
 	last     map[string]Override
 	onChange func()
@@ -58,6 +61,9 @@ func (o *OverrideStore) OnChange(f func()) {
 // Load reads the overrides. A missing file is none; a file that cannot be
 // parsed is an error.
 func (o *OverrideStore) Load() (map[string]Override, error) {
+	if o != nil && o.replica != nil {
+		return o.loadReplica()
+	}
 	if o == nil || o.path == "" {
 		return map[string]Override{}, nil
 	}
@@ -97,11 +103,25 @@ func (o *OverrideStore) current() map[string]Override {
 
 // Set overrides plan's band.
 func (o *OverrideStore) Set(plan string, ov Override) error {
+	if o != nil && o.replica != nil {
+		raw, err := json.Marshal(ov)
+		if err != nil {
+			return err
+		}
+		return o.replica.Write(func(db *sqlpipe.Database) error {
+			return db.Exec("INSERT INTO jv_plan_overrides(provider, override_json) VALUES (?, ?) ON CONFLICT(provider) DO UPDATE SET override_json=excluded.override_json", strings.ToLower(plan), string(raw))
+		})
+	}
 	return o.update(func(m map[string]Override) { m[strings.ToLower(plan)] = ov })
 }
 
 // Clear removes plan's override.
 func (o *OverrideStore) Clear(plan string) error {
+	if o != nil && o.replica != nil {
+		return o.replica.Write(func(db *sqlpipe.Database) error {
+			return db.Exec("DELETE FROM jv_plan_overrides WHERE provider=?", strings.ToLower(plan))
+		})
+	}
 	return o.update(func(m map[string]Override) { delete(m, strings.ToLower(plan)) })
 }
 

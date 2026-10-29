@@ -25,6 +25,7 @@ var seatObservationFiles = map[string]bool{
 	"internal/seatactivity/activity.go":       true,
 	"internal/server/seat_observations.go":    true,
 	"internal/mcpserver/session_phase.go":     true,
+	"internal/brokerreg/absent.go":            true, // 🎯T1174 broker listing vs registry
 }
 
 type seatSourceFile struct {

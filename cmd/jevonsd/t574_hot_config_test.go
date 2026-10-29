@@ -179,18 +179,23 @@ func TestT574CoachConfigIsHot(t *testing.T) {
 	}
 }
 
-// mcpscope owner map: the element is bounce-required, but only a change to
-// the servers themselves counts — Claude Code rewrites ~/.claude.json for
-// its own state constantly, and that must never bounce the daemon.
+// mcpscope owner map: only a change to the servers themselves counts —
+// Claude Code rewrites ~/.claude.json for its own state constantly, and
+// jevonsmcp scrub toggles must not look like an owner edit (🎯T1133).
 func TestT574MCPOwnerMapFingerprintIgnoresNonServerRewrites(t *testing.T) {
 	a := &claudia.MCPInventory{Servers: []claudia.MCPServer{{Name: "b", Type: "http", URL: "http://x"}, {Name: "a", Type: "stdio", Command: "c"}}}
 	b := &claudia.MCPInventory{Servers: []claudia.MCPServer{{Name: "a", Type: "stdio", Command: "c"}, {Name: "b", Type: "http", URL: "http://x"}}, Source: "other", Sources: []string{"other"}}
-	if mcpMapFingerprint(a) != mcpMapFingerprint(b) {
+	skip := map[string]bool{"jevonsmcp": true}
+	if mcpMapFingerprint(a, skip) != mcpMapFingerprint(b, skip) {
 		t.Fatal("same servers in a different order / from a different source must fingerprint equal")
 	}
 	c := &claudia.MCPInventory{Servers: []claudia.MCPServer{{Name: "a", Type: "stdio", Command: "c"}, {Name: "b", Type: "http", URL: "http://y"}}}
-	if mcpMapFingerprint(a) == mcpMapFingerprint(c) {
+	if mcpMapFingerprint(a, skip) == mcpMapFingerprint(c, skip) {
 		t.Fatal("a changed endpoint must change the fingerprint")
+	}
+	j := &claudia.MCPInventory{Servers: []claudia.MCPServer{{Name: "a", Type: "stdio", Command: "c"}, {Name: "b", Type: "http", URL: "http://x"}, {Name: "jevonsmcp", Type: "http", URL: "http://old"}}}
+	if mcpMapFingerprint(a, skip) != mcpMapFingerprint(j, skip) {
+		t.Fatal("jevonsmcp entry changes must not affect the owner-map fingerprint")
 	}
 }
 

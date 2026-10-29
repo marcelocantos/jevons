@@ -40,6 +40,7 @@ describe('createSession', () => {
     const session = createSession(root);
     expect(session).not.toBeNull();
     session!.writeFull('overseer is back');
+    session!.end();
     expect(root.textContent).toBe('overseer is back');
   });
 });

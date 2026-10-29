@@ -6,7 +6,9 @@ import {
   BUILD_META_NAME,
   buildReloadVerdict,
   CHAT_PING,
+  CHAT_PONG,
   HEARTBEAT_MS,
+  PONG_TIMEOUT_MS,
   loadedBuildFromDocument,
   MuxClient,
   type MuxClientOptions,
@@ -134,16 +136,20 @@ describe('MuxClient resend (T811)', () => {
 describe('MuxClient heartbeat (T537.2.1)', () => {
   it('sends the vanilla chat ping on open and every heartbeat interval', () => {
     const { client, ws } = connectClient();
+    const ackPong = () => ws.onmessage?.({ data: CHAT_PONG });
     expect(ws.sent).toEqual([CHAT_PING]);
     expect(CHAT_PING).toBe('{"type":"ping"}');
     expect(HEARTBEAT_MS).toBe(15000);
+    ackPong();
 
     vi.advanceTimersByTime(HEARTBEAT_MS - 1);
     expect(ws.sent).toEqual([CHAT_PING]);
     vi.advanceTimersByTime(1);
     expect(ws.sent).toEqual([CHAT_PING, CHAT_PING]);
+    ackPong();
     vi.advanceTimersByTime(HEARTBEAT_MS);
     expect(ws.sent).toEqual([CHAT_PING, CHAT_PING, CHAT_PING]);
+    ackPong();
 
     client.close();
     vi.advanceTimersByTime(HEARTBEAT_MS * 2);
@@ -154,9 +160,45 @@ describe('MuxClient heartbeat (T537.2.1)', () => {
     const { client, ws } = connectClient();
     const seen: string[] = [];
     client.subscribe('*', (env) => seen.push(env.t));
-    ws.onmessage?.({ data: '{"type":"pong"}' });
+    ws.onmessage?.({ data: CHAT_PONG });
     expect(seen).toEqual([]);
     client.close();
+  });
+
+  it('reconnects a CLOSING socket without onclose and ignores its late pong and frame', () => {
+    const errs = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { client, ws } = connectClient();
+    client.openChannel('plan-usage');
+    const seen: string[] = [];
+    client.subscribe('plan-usage', (env) => seen.push(env.t));
+    const oldMessage = ws.onmessage;
+    ws.close = () => { ws.readyState = FakeWebSocket.CLOSING; };
+    vi.advanceTimersByTime(PONG_TIMEOUT_MS + 1);
+    expect(ws.readyState).toBe(FakeWebSocket.CLOSING);
+    vi.advanceTimersByTime(RECONNECT_CAP_MS);
+    const replacement = FakeWebSocket.instances[1]!;
+    expect(replacement).toBeDefined();
+    replacement.open();
+    expect(replacement.sent.some((raw) => raw.includes('"ch":"plan-usage"'))).toBe(true);
+    oldMessage?.({ data: CHAT_PONG });
+    oldMessage?.({ data: encodeMux('plan-usage', 'frame', { stale: true }) });
+    expect(seen).toEqual(['reset']);
+    vi.advanceTimersByTime(PONG_TIMEOUT_MS + RECONNECT_CAP_MS);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    client.close();
+    errs.mockRestore();
+  });
+
+  it('closes a blackholed OPEN socket when pong never arrives (T1224)', () => {
+    const errs = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { client, ws } = connectClient();
+    expect(ws.readyState).toBe(FakeWebSocket.OPEN);
+    vi.advanceTimersByTime(PONG_TIMEOUT_MS + 1);
+    expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
+    vi.advanceTimersByTime(RECONNECT_CAP_MS);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    client.close();
+    errs.mockRestore();
   });
 });
 

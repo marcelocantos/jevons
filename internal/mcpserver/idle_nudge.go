@@ -92,6 +92,9 @@ const (
 	// IdleSkipWaitingOnGate: the last turn's status slot says the work is
 	// not idle for want of direction (🎯T565). A sentence is not that claim.
 	IdleSkipWaitingOnGate = "waiting_on_gate"
+	// IdleSkipProviderRequestFailed: provider latched a non-retryable request
+	// failure on this seat (🎯T845 / 🎯T1052 unsupported model pin).
+	IdleSkipProviderRequestFailed = "provider_request_failed"
 )
 
 // DeclaresBlockingGateWait reports whether a completed turn declares a
@@ -174,9 +177,12 @@ type IdleNudgeObs struct {
 	// finish-report declares status blocked and nothing has cleared it
 	// (🎯T938). Empty = not blocked.
 	BlockedOnOwner string
-	IdleThreshold  time.Duration // 0 → DefaultIdleNudgeThreshold
-	MaxNudges      int           // 0 → DefaultIdleNudgeMax
-	Backoffs       []time.Duration
+	// ProviderRequestFailed: seat latched a provider request error that must
+	// not be idle-nudged until cleared (🎯T845 / 🎯T1052).
+	ProviderRequestFailed bool
+	IdleThreshold         time.Duration // 0 → DefaultIdleNudgeThreshold
+	MaxNudges             int           // 0 → DefaultIdleNudgeMax
+	Backoffs              []time.Duration
 }
 
 // ClassifyIdleNudge decides skip | nudge | maxed for one agent.
@@ -195,6 +201,9 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	// no way to ask whether the agent was supposed to be working at all.
 	if d := fleetintent.Allows(o.FleetIntent, o.Intent, fleetintent.ControlNudge); !d.Allow {
 		return IdleNudgeSkip, d.Reason
+	}
+	if o.ProviderRequestFailed {
+		return IdleNudgeSkip, IdleSkipProviderRequestFailed
 	}
 	// 🎯T1066: the 2026-10-11 07:13Z incident — frontier_consume.disabled was
 	// already set, but idle-nudge woke a pre-existing auto seat anyway,
@@ -360,7 +369,7 @@ func FormatIdleNudgeText(a IdleNudgeTextArgs) string {
 		} else {
 			b.WriteString("NUDGE — you are phase=idle with brief already present; continue mid-mission work. ")
 		}
-		b.WriteString("Local master, 🎯T104 (no PR). ")
+		b.WriteString("Local master, no PR (🎯jevons/T104). ")
 		if tid != "" {
 			fmt.Fprintf(&b, "Target %s. ", tid)
 		}
@@ -389,7 +398,7 @@ func FormatIdleNudgeText(a IdleNudgeTextArgs) string {
 	if acc := strings.TrimSpace(a.Acceptance); acc != "" {
 		fmt.Fprintf(&b, "Acceptance:\n%s\n", acc)
 	}
-	b.WriteString("\nLocal master only (🎯T104). No PR unless owner opened Ship.\n")
+	b.WriteString("\nLocal master only (🎯jevons/T104). No PR unless owner opened Ship.\n")
 	if a.Reason != "" {
 		fmt.Fprintf(&b, "Classifier: %s.\n", a.Reason)
 	}
@@ -487,6 +496,12 @@ type IdleActivity struct {
 	NeedsRecover bool
 	// TerminalEmpty is true when the last terminal stop had empty text.
 	TerminalEmpty bool
+	// EmptyStreak counts consecutive silent terminal turns. RecoverAfterEmpty
+	// records an accepted rebrief between the first and second silent turn.
+	EmptyStreak        int
+	RecoverAfterEmpty  bool
+	EmptyFaultNotified bool
+	EmptyCause         string
 	// RefusalHold is true after a refusal-only terminal until a substantive
 	// turn clears it (🎯T454). Impatience must not treat phase=working under
 	// a hold as satisfaction.
@@ -508,6 +523,14 @@ type IdleActivity struct {
 	// TurnErrored is true when the backend reported the latest turn as a
 	// failure (Event.IsError), not a reply that merely reads like one.
 	TurnErrored bool
+	// ProviderErrorStreak counts consecutive terminal turns the provider
+	// reported as errors (🎯T845).
+	ProviderErrorStreak int
+	// LastProviderError is the latest provider refusal detail for the row.
+	LastProviderError string
+	// ProviderRequestFailed is latched once ProviderErrorStreak crosses the
+	// threshold — the seat is not running/idle for control purposes.
+	ProviderRequestFailed bool
 	// ProseWorking is set by an assistant event that moved the phase to
 	// working without a tool call. It is not satisfaction (🎯T869). A
 	// caller that stamps Phase directly leaves this false, so a positive
@@ -589,20 +612,24 @@ func (t *IdleActivityTracker) ObserveTransition(name string, ev claudia.Event) (
 	// Updated still refreshes (worker heartbeats); ToolCallSince does not
 	// when the id is unchanged (🎯T254.5.2).
 	next := IdleActivity{
-		Phase:            phase,
-		Updated:          now,
-		FailureClass:     prev.FailureClass,
-		NeedsRecover:     prev.NeedsRecover,
-		TerminalEmpty:    prev.TerminalEmpty,
-		RefusalHold:      prev.RefusalHold,
-		LastTerminal:     prev.LastTerminal,
-		SubstantivePulse: prev.SubstantivePulse,
-		PlanOnly:         planOnly,
-		LastToolCalls:    prev.LastToolCalls,
-		ProseWorking:     phase == "working" && !sawTool,
-		ToolCallID:       toolID,
-		ToolCallSince:    toolSince,
-		RateLimitStrikes: prev.RateLimitStrikes,
+		Phase:              phase,
+		Updated:            now,
+		FailureClass:       prev.FailureClass,
+		NeedsRecover:       prev.NeedsRecover,
+		TerminalEmpty:      prev.TerminalEmpty,
+		EmptyStreak:        prev.EmptyStreak,
+		RecoverAfterEmpty:  prev.RecoverAfterEmpty,
+		EmptyFaultNotified: prev.EmptyFaultNotified,
+		EmptyCause:         prev.EmptyCause,
+		RefusalHold:        prev.RefusalHold,
+		LastTerminal:       prev.LastTerminal,
+		SubstantivePulse:   prev.SubstantivePulse,
+		PlanOnly:           planOnly,
+		LastToolCalls:      prev.LastToolCalls,
+		ProseWorking:       phase == "working" && !sawTool,
+		ToolCallID:         toolID,
+		ToolCallSince:      toolSince,
+		RateLimitStrikes:   prev.RateLimitStrikes,
 	}
 	// Fresh working progress clears stale recover latch only when we see
 	// real tool/assistant activity after a prior recover cycle was delivered
@@ -904,6 +931,9 @@ type IdleNudgeSweepArgs struct {
 	BlockerCleared func(name, report string) bool
 	// TurnInFlight optional: send-path flight ledger (🎯T761). Nil = not in flight.
 	TurnInFlight func(name string) bool
+	// TryReapStoredDone optional: when the latest stored report classifies
+	// Done, attempt the 🎯T165 reap before nudging (🎯T1186). Nil = no reap try.
+	TryReapStoredDone func(name string) bool
 	// MissionAcceptance optional: targetID → acceptance text for full brief.
 	MissionAcceptance func(targetID string) string
 	// HostLoadCritical is optional: reports whether the host's run queue is
@@ -941,6 +971,8 @@ type IdleNudgeSweepArgs struct {
 	// (the zero value, every existing caller/test) preserves prior
 	// behaviour exactly.
 	AutoSpawnPaused bool
+	// OwnerPaused optional: seat paused from the cockpit (🎯T981). Nil = not paused.
+	OwnerPaused func(name string) bool
 	// SeatRole optionally answers a row's declared fleet role (🎯T766.4):
 	// production wires Server.seatRoleOf, which reads the role recorded at
 	// spawn. Nil reads the row alone (AgentDef.Role, else its purpose).
@@ -1036,9 +1068,11 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 	} else if proc := args.Reg.Get(d.Name); proc != nil {
 		running = (seatstate.ReadRegistry(args.Reg, d.Name).Alive == seatstate.Yes)
 	}
+	ownerPaused := args.OwnerPaused != nil && args.OwnerPaused(d.Name)
 	// Deliberate stop: registered, not running, and not a dead AutoStart
 	// handle we expect recoverDeadHandles to rehydrate — stop without kill.
-	deliberateStop := !running && !d.AutoStart
+	// Owner pause also scopes the seat out while it waits (🎯T981).
+	deliberateStop := ownerPauseDeliberateStop(running, d.AutoStart, ownerPaused)
 
 	act := IdleActivity{}
 	if args.Activity != nil {
@@ -1104,6 +1138,16 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 		}
 		hasStoredTerminal, looksFinished, blockedOn = classifyStoredReport(args.LastTerminalReport(d.Name), cleared)
 	}
+	if looksFinished && args.TryReapStoredDone != nil {
+		if args.TryReapStoredDone(d.Name) {
+			return IdleNudgeReport{
+				Name:        d.Name,
+				Action:      IdleNudgeSkip,
+				Reason:      "reap_done",
+				PostRestart: args.PostRestart,
+			}
+		}
+	}
 
 	briefPresent := false
 	if args.BriefPresent != nil {
@@ -1128,30 +1172,31 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 	phase := decoded.String()
 
 	obs := IdleNudgeObs{
-		Name:              d.Name,
-		Purpose:           purpose,
-		FleetIntent:       args.Intent.FleetState(),
-		Intent:            args.Intent.AgentState(d.Name),
-		ProcessRunning:    running,
-		DeliberateStop:    deliberateStop,
-		Phase:             phase,
-		IdleFor:           idleFor,
-		HostLoadCritical:  args.HostLoadCritical != nil && args.HostLoadCritical(),
-		HasOpenMission:    hasMission,
-		DesignGated:       designGated,
-		LooksFinished:     looksFinished,
-		BriefPresent:      briefPresent,
-		NudgeCount:        count,
-		SinceLastNudge:    since,
-		EverNudged:        ever,
-		PostRestart:       args.PostRestart,
-		SessionReminted:   args.SessionReminted != nil && args.SessionReminted(d.Name),
-		WaitingOnGate:     DeclaresBlockingGateWait(act.LastTerminal),
-		TurnInFlight:      args.TurnInFlight != nil && args.TurnInFlight(d.Name),
-		HasStoredTerminal: hasStoredTerminal,
-		BlockedOnOwner:    blockedOn,
-		AutoSpawnPaused:   args.AutoSpawnPaused,
-		IsAutoSeat:        IsAutoSpawnedWorkerName(d.Name),
+		Name:                  d.Name,
+		Purpose:               purpose,
+		FleetIntent:           args.Intent.FleetState(),
+		Intent:                args.Intent.AgentState(d.Name),
+		ProcessRunning:        running,
+		DeliberateStop:        deliberateStop,
+		Phase:                 phase,
+		IdleFor:               idleFor,
+		HostLoadCritical:      args.HostLoadCritical != nil && args.HostLoadCritical(),
+		HasOpenMission:        hasMission,
+		DesignGated:           designGated,
+		LooksFinished:         looksFinished,
+		BriefPresent:          briefPresent,
+		NudgeCount:            count,
+		SinceLastNudge:        since,
+		EverNudged:            ever,
+		PostRestart:           args.PostRestart,
+		SessionReminted:       args.SessionReminted != nil && args.SessionReminted(d.Name),
+		WaitingOnGate:         DeclaresBlockingGateWait(act.LastTerminal),
+		TurnInFlight:          args.TurnInFlight != nil && args.TurnInFlight(d.Name),
+		HasStoredTerminal:     hasStoredTerminal,
+		BlockedOnOwner:        blockedOn,
+		ProviderRequestFailed: act.ProviderRequestFailed,
+		AutoSpawnPaused:       args.AutoSpawnPaused,
+		IsAutoSeat:            IsAutoSpawnedWorkerName(d.Name),
 	}
 	action, reason := ClassifyIdleNudge(obs)
 	if args.PostRestart && action == IdleNudgeNudge && !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished, args.Intent) {
@@ -1487,22 +1532,12 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 		PostRestart:     false,
 		OverseerName:    overseer,
 		AutoSpawnPaused: s.AutoSpawnPaused(),
+		OwnerPaused:     s.SeatOwnerPaused,
 		// 🎯T708: a seat quiet behind a melted host is starved, not stalled.
-		HostLoadCritical: s.hostLoadCritical,
-		SessionReminted:  s.bounceReminted,
-		BriefPresent: func(name string) bool {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			return s.fleetBriefed != nil && s.fleetBriefed[name]
-		},
-		MarkBriefed: func(name string) {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			if s.fleetBriefed == nil {
-				s.fleetBriefed = map[string]bool{}
-			}
-			s.fleetBriefed[name] = true
-		},
+		HostLoadCritical:   s.hostLoadCritical,
+		SessionReminted:    s.bounceReminted,
+		BriefPresent:       s.fleetBriefPresent,
+		MarkBriefed:        s.markFleetBriefed,
 		MissionOpen:        hooks.MissionOpen,
 		DesignGated:        hooks.DesignGated,
 		LastTerminalReport: hooks.LooksSatisfied,
@@ -1510,8 +1545,9 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 		TurnInFlight: func(name string) bool {
 			return s.flightState(name) == FlightInFlight
 		},
-		ProcessRunning: deps.Running,
-		Intent:         s.fleetIntent(),
+		TryReapStoredDone: s.maybeReapStoredDoneWorkAgent,
+		ProcessRunning:    deps.Running,
+		Intent:            s.fleetIntent(),
 		Eligible: func(d claudia.AgentDef) bool {
 			// 🎯T244: unbound PO/boss with no work children is standing idle.
 			// 🎯T330: PO/boss with engaged implementers is sleep-OK (no thrash).
@@ -1576,11 +1612,20 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 
 	push := func(target string, interrupt bool, event, text string) error {
-		msg := formatIdleNudgeWire(event, text)
+		body := text
+		if interrupt {
+			body = withFleetInterruptNotice(text) // 🎯T785: label fleet cut
+		}
+		msg := formatIdleNudgeWire(event, body)
 		_, err := s.sendDaemonComposed(target, msg, interrupt)
 		return err
 	}
 	interruptFn := func(name string) error {
+		// 🎯T785: a fresh tool call is not stuck — never Esc it from recover.
+		if s.toolCallFresh(name) {
+			id, since, _ := s.toolCallProgress(name)
+			return fmt.Errorf("tool %s still fresh (since %s) — not interrupting (🎯T785)", id, since.Round(time.Second))
+		}
 		proc := s.registry.Get(name)
 		if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 			s.cancelMCPFlights(name)
@@ -1592,12 +1637,13 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 
 	reps := SweepFleetRecover(FleetRecoverSweepArgs{
-		SeatRole:  s.seatRoleOf,
-		Reg:       s.registry,
-		Activity:  activity,
-		Ledger:    ledger,
-		Push:      push,
-		Interrupt: interruptFn,
+		SeatRole:    s.seatRoleOf,
+		Reg:         s.registry,
+		Activity:    activity,
+		Ledger:      ledger,
+		Push:        push,
+		Interrupt:   interruptFn,
+		OwnerPaused: s.SeatOwnerPaused,
 		// 🎯T1066: Unstick's Interrupt call reaches the process directly,
 		// bypassing deliverByName and both its gates — read intent here,
 		// the one place left before that call. Also honours
@@ -1640,19 +1686,8 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 			_, err := s.switcher.SwitchModel(name, "", model, false)
 			return err
 		},
-		BriefPresent: func(name string) bool {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			return s.fleetBriefed != nil && s.fleetBriefed[name]
-		},
-		MarkBriefed: func(name string) {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			if s.fleetBriefed == nil {
-				s.fleetBriefed = map[string]bool{}
-			}
-			s.fleetBriefed[name] = true
-		},
+		BriefPresent: s.fleetBriefPresent,
+		MarkBriefed:  s.markFleetBriefed,
 	})
 	delivered := 0
 	for _, r := range reps {
@@ -1724,6 +1759,9 @@ func (s *Server) emitWorkerIdleToParent(name, prevPhase, nextPhase string) {
 	engagedKids := CountEngagedWorkChildren(defs, name, phaseOf, missionOpen)
 	intent := s.fleetIntent()
 	openMission := HasOpenMissionForIdle(s.withSeatRole(*def), missionOpen, workKids, engagedKids)
+	if s.maybeReapStoredDoneWorkAgent(name) {
+		return
+	}
 	if suppress, reason := s.workerIdleSuppressReason(name); suppress {
 		slog.Info("worker-idle notification withheld — terminal or in-flight",
 			"agent", name, "reason", reason)
@@ -1859,7 +1897,10 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 		kids := byParent[target]
 		if target != overseer {
 			nKids := restartNotifyWorkChildren(target, byParent, defs)
-			if skip, reason := SkipSleepingCoordinatorRestart(target, overseer, running(target), previewIntent.Recoverable(), nKids); skip {
+			// 🎯T1118: per-agent intent outranks work-children/open-intent —
+			// a parked PO is left down exactly like restart reattach leaves it.
+			stoodDown := fleetintent.StoodDown(s.fleetIntent().Allow(target, fleetintent.ControlRevive).Agent)
+			if skip, reason := SkipSleepingCoordinatorRestart(target, overseer, running(target), previewIntent.Recoverable(), nKids, stoodDown); skip {
 				slog.Info("daemon restart skip sleeping coordinator",
 					"target", target, "reason", reason,
 					"open_intent", false, "workers", nKids, "process", "stopped")
@@ -2095,22 +2136,12 @@ func (s *Server) resumeOpenMissionWorkers(overseer, stateDir string, activity *I
 		OverseerName:    overseer,
 		Eligible:        eligible,
 		AutoSpawnPaused: s.AutoSpawnPaused(),
+		OwnerPaused:     s.SeatOwnerPaused,
 		// 🎯T708: a seat quiet behind a melted host is starved, not stalled.
 		HostLoadCritical: s.hostLoadCritical,
 		SessionReminted:  s.bounceReminted,
-		BriefPresent: func(name string) bool {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			return s.fleetBriefed != nil && s.fleetBriefed[name]
-		},
-		MarkBriefed: func(name string) {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			if s.fleetBriefed == nil {
-				s.fleetBriefed = map[string]bool{}
-			}
-			s.fleetBriefed[name] = true
-		},
+		BriefPresent:     s.fleetBriefPresent,
+		MarkBriefed:      s.markFleetBriefed,
 		// 🎯T414: the restart reattach path is the first of the three
 		// resurrections of 2026-08-10 — the daemon came back, found workers
 		// with open missions and no process, and started them. Intent is the

@@ -167,10 +167,10 @@ func TestT513AssistantQuotingHeaderStillDelivered(t *testing.T) {
 	s.chatListeners = append(s.chatListeners, ch)
 	s.mu.Unlock()
 
-	report := "A misaddressed brief arrived; it began:\n" +
+	report := wireOwnerReplyFault("A misaddressed brief arrived; it began:\n" +
 		"[Who you are — from the fleet registry, read at send time (🎯T425)]\n" +
 		"- NAME: jevons-po\n" +
-		"I did not adopt it (🎯T452)."
+		"I did not adopt it (🎯T452).")
 	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: report})
 	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
 

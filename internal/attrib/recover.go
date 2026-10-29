@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/commitscope"
 )
 
 // Kind classifies how a dirty path has to be handled, because git cannot undo
@@ -172,6 +176,11 @@ func Discard(repoRoot string, paths []string, saved *SavedSlice) error {
 		}
 		switch saved.Kinds[p] {
 		case KindTracked:
+			if commitscope.IsSharedLedger(p) {
+				if err := refuseLedgerDiscardToHEAD(repoRoot); err != nil {
+					return err
+				}
+			}
 			if _, err := Git(repoRoot, "restore", "--source=HEAD", "--staged", "--worktree", "--", p); err != nil {
 				return err
 			}
@@ -206,6 +215,17 @@ func Restore(repoRoot string, saved *SavedSlice) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
+		if commitscope.IsSharedLedger(p) {
+			head, err := exec.Command("git", "-C", repoRoot, "show", "HEAD:"+commitscope.SharedLedger).Output()
+			if err == nil {
+				working, _ := os.ReadFile(dst)
+				merged, err := commitscope.UnionPreservingWorkingDivergence(head, working, data)
+				if err != nil {
+					return err
+				}
+				data = merged
+			}
+		}
 		if err := os.WriteFile(dst, data, 0o644); err != nil {
 			return err
 		}
@@ -215,6 +235,26 @@ func Restore(repoRoot string, saved *SavedSlice) error {
 	}
 	_, err := Git(repoRoot, "apply", "--3way", filepath.Join(saved.Dir, saved.Patch))
 	return err
+}
+
+func refuseLedgerDiscardToHEAD(repoRoot string) error {
+	head, err := exec.Command("git", "-C", repoRoot, "show", "HEAD:"+commitscope.SharedLedger).Output()
+	if err != nil {
+		return nil // no ledger at HEAD — nothing to guard
+	}
+	path := filepath.Join(repoRoot, commitscope.SharedLedger)
+	working, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	drop, ids, err := commitscope.WouldDropWorkingDivergence(head, working, head)
+	if err != nil {
+		return err
+	}
+	if !drop {
+		return nil
+	}
+	return errors.New(strings.TrimSpace(commitscope.FormatWorkingDivergenceRefusal("attrib discard", ids)))
 }
 
 // LoadSaved reads a manifest written by Save.

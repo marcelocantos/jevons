@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-/** Same bar-membership rules as web/scripts/plan_usage.js (🎯T390.1). */
+/** Presentation of the canonical subscribed usage projection. */
 
 export type PlanHistoryPoint = {
   at: string;
@@ -23,6 +23,7 @@ export type PlanWindow = {
   pace?: string;
   /** Stored vendor remaining samples for this period (🎯T634). */
   history?: PlanHistoryPoint[] | null;
+  burn_profile?: { weekday_shares: number[]; windows: number; fallback: boolean } | null;
 };
 
 export type PlanBackend = {
@@ -32,6 +33,10 @@ export type PlanBackend = {
   fleet_agents?: number;
   stale?: boolean;
   plan_type?: string;
+  success_at?: string;
+  stale_at?: string;
+  attempted_at?: string;
+  next_attempt_at?: string;
   windows?: PlanWindow[];
   /** 🎯T948: the owner's band override; reason is free text. */
   override?: PlanOverride;
@@ -62,11 +67,13 @@ export type TickerGroup = {
   provider: string;
   available: boolean;
   stale?: boolean;
+  staleAt?: number;
   reason?: string;
   windows: PlanWindow[];
   override?: PlanOverride;
   /** 🎯T681: the last reading that did arrive, for a provider now unreadable. */
   last?: LastReading;
+  nextAttemptAt?: string;
   /** 🎯T967.1: see PlanBackend.spend. */
   spend?: PlanSpend;
 };
@@ -81,30 +88,6 @@ const PROVIDER_RANK: Record<string, number> = {
   bedrock: 3,
   cursor: 4,
 };
-
-/**
- * holdGroupReadings remembers the last reading a provider did publish, so
- * a provider that has gone unreadable can say what it last knew and how
- * old that is instead of showing a bar with nothing in it (🎯T681).
- *
- * Pure: the caller owns the map across renders.
- */
-export function holdGroupReadings(
-  prev: Map<string, LastReading>,
-  groups: TickerGroup[],
-  nowMs: number,
-): { groups: TickerGroup[]; last: Map<string, LastReading> } {
-  const last = new Map(prev);
-  const out = groups.map((g) => {
-    if (g.available && g.windows.length) {
-      last.set(g.provider, { at: nowMs, windows: g.windows });
-      return g;
-    }
-    const held = last.get(g.provider);
-    return held ? { ...g, last: held } : g;
-  });
-  return { groups: out, last };
-}
 
 export function showOnBar(row: { provider: string; available: boolean; running: boolean }): boolean {
   if (row.provider === 'bedrock' && !row.available && !row.running) return false;
@@ -164,24 +147,18 @@ export function tickerGroups(snap: PlanSnapshot | undefined): TickerGroup[] {
     const available = b.status === 'available' && windows.length > 0;
     const running = (b.fleet_agents || 0) > 0;
     if (!showOnBar({ provider, available, running })) continue;
-    if (!available) {
-      out.push({
-        provider,
-        available: false,
-        stale: b.stale,
-        reason: b.reason,
-        windows: [],
-      });
-      continue;
-    }
+    const successAt = Date.parse(b.success_at || '');
     out.push({
       provider,
-      available: true,
+      available,
       stale: b.stale,
+      ...(b.stale_at ? { staleAt: Date.parse(b.stale_at) } : {}),
       reason: b.reason,
       windows: orderWindows(windows),
-      override: b.override,
-      spend: b.spend,
+      ...(Number.isFinite(successAt) ? { last: { at: successAt, windows } } : {}),
+      ...(b.next_attempt_at ? { nextAttemptAt: b.next_attempt_at } : {}),
+      ...(b.override ? { override: b.override } : {}),
+      ...(b.spend ? { spend: b.spend } : {}),
     });
   }
   out.sort((a, b) => (PROVIDER_RANK[a.provider] ?? 50) - (PROVIDER_RANK[b.provider] ?? 50));

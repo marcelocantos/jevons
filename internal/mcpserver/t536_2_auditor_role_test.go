@@ -73,8 +73,9 @@ func TestT5362SpawnAuditorRecordsRoleAndAssemblesDoctrine(t *testing.T) {
 	}
 
 	hdr := s.identityHeaderFor(def.Name)
-	if !strings.Contains(hdr, "auditor") || !strings.Contains(hdr, "silent-decision ledger") {
-		t.Fatalf("auditor identity header:\n%s", hdr)
+	if !strings.Contains(hdr, "ROLE: auditor") ||
+		!strings.Contains(hdr, "ROLE DOCTRINE: internal/roles/builtin/auditor.md") {
+		t.Fatalf("auditor identity header must point at role file (🎯T511):\n%s", hdr)
 	}
 
 	if err := (roles.Catalog{}).Delete(roles.Auditor, 0, false); err == nil {

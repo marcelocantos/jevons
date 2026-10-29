@@ -15,7 +15,8 @@ import (
 // Store persists usage events and tail offsets in SQLite. It is safe for
 // concurrent use by the collector (writes) and monitor/API (reads).
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 const schema = `
@@ -74,7 +75,11 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("create usage replay schema: %w", err)
 	}
-	return &Store{db: db}, nil
+	if _, err := db.Exec(replicaCatchupSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create replica catch-up schema: %w", err)
+	}
+	return &Store{db: db, path: path}, nil
 }
 
 // Close closes the database.

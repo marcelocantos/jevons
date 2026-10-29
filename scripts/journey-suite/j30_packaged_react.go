@@ -227,12 +227,13 @@ func (s *suite) registryProvider(name string) (claudia.Provider, error) {
 // registry names now. Earlier launches on another backend are that seat's
 // history, not this journey's evidence. /api/agents may name the sidecar
 // runtime id (xai-oauth) where the launch log names the plan (grok), so
-// both sides compare as plans (🎯T866.5).
+// both sides compare as plans (🎯T866.5). An in-place switch moves the seat
+// without a launch, so its "agent switched" line counts too (🎯T1301).
 func latestLaunchProvider(logs []byte, name string, current claudia.Provider) error {
 	latest := ""
 	for _, line := range strings.Split(string(logs), "\n") {
 		event, err := queueJourneyLogFields(line)
-		if err != nil || event["msg"] != "agent started" || event["name"] != name {
+		if err != nil || (event["msg"] != "agent started" && event["msg"] != "agent switched") || event["name"] != name {
 			continue
 		}
 		latest = event["provider"]

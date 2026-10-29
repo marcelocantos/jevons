@@ -120,11 +120,20 @@ func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "review not found")
 		return
 	}
+	includeClosed := strings.EqualFold(r.URL.Query().Get("include_closed"), "true")
 	out := make([]reviewItem, 0, len(rows))
 	for _, q := range rows {
-		if q.State == ownerquestionview.Open || strings.EqualFold(r.URL.Query().Get("include_closed"), "true") {
-			out = append(out, s.reviewDetail(q))
+		if q.State != ownerquestionview.Open && !includeClosed {
+			continue
 		}
+		item := s.reviewDetail(q)
+		// A question about a target the ledger already closed is no longer a
+		// decision the owner must make (🎯T1122). It stays readable by id and
+		// under include_closed.
+		if !includeClosed && item.TargetLookup == "verified" && isDoneStatus(item.TargetStatus) {
+			continue
+		}
+		out = append(out, item)
 	}
 	_ = json.NewEncoder(w).Encode(out)
 }
@@ -135,5 +144,72 @@ func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
 // answer mutations rather than laundering an unauthenticated verdict into
 // owner_gate or a PO thread. The read API remains useful to mobile deep links.
 func (s *Server) answerReview(w http.ResponseWriter, r *http.Request) {
-	writeJSONError(w, http.StatusForbidden, "owner-authenticated review answers are not configured")
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := s.authorizeOwnerSurfaceHTTP(r, "owner", ""); err != nil {
+		writeJSONError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	s.mu.RLock()
+	hook := s.ownerQuestionAnswerHook
+	s.mu.RUnlock()
+	if hook == nil {
+		writeJSONError(w, http.StatusForbidden, "owner-authenticated review answers are not configured")
+		return
+	}
+	reviewIDParam := strings.TrimSpace(r.PathValue("id"))
+	if reviewIDParam == "" {
+		writeJSONError(w, http.StatusBadRequest, "review id required")
+		return
+	}
+	var body struct {
+		Answer string `json:"answer"`
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	answer := strings.TrimSpace(body.Answer)
+	if answer == "" {
+		answer = strings.TrimSpace(body.Action)
+	}
+	if answer == "" {
+		writeJSONError(w, http.StatusBadRequest, "answer is required")
+		return
+	}
+	rows, err := ownerquestionview.New(s.stateDir).List(false)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "review index unavailable")
+		return
+	}
+	var identity ownerquestionview.Identity
+	for _, q := range rows {
+		if reviewID(q.Identity) == reviewIDParam {
+			identity = q.Identity
+			break
+		}
+	}
+	if identity.Repo == "" {
+		writeJSONError(w, http.StatusNotFound, "review not found")
+		return
+	}
+	routed, err := hook(identity, answer)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "answered", "routed": routed})
+}
+
+// SetOwnerQuestionAnswerHook wires cockpit POST /api/reviews/{id}/answer to the
+// daemon's durable answer + route-back path (🎯T404.1). Nil keeps fail-closed.
+func (s *Server) SetOwnerQuestionAnswerHook(fn func(id ownerquestionview.Identity, answer string) (routed string, err error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ownerQuestionAnswerHook = fn
 }

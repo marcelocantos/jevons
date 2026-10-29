@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/proclist"
 )
 
 // HeavyLeaseOwner is the acquisition record, not proof that its PID holds a lock.
@@ -91,6 +93,15 @@ func WriteHeavyLeaseStatus(w io.Writer, root string) error {
 	} else if !os.IsNotExist(readErr) {
 		return readErr
 	}
+	waiters := listHeavyWaiters(root)
+	fmt.Fprintf(w, "waiters: %d\n", len(waiters))
+	for _, waiter := range waiters {
+		fmt.Fprintf(w, "  waiter pid=%d narrow=%t command=%q cwd=%q waited=%s\n",
+			waiter.PID, waiter.Narrow, waiter.Command, waiter.CWD, time.Since(waiter.Started).Round(time.Second))
+	}
+	if notice, err := os.ReadFile(heavyStaleNoticePath(root)); err == nil && len(notice) > 0 {
+		fmt.Fprintf(w, "stale notice: %s", notice)
+	}
 	out, inspectErr := exec.Command("lsof", "-n", "-P", "-Fpcf", path).CombinedOutput()
 	fmt.Fprintf(w, "open descriptors (not proof of exclusive ownership):\n%s", out)
 	if inspectErr != nil {
@@ -105,11 +116,47 @@ func WriteHeavyLeaseStatus(w io.Writer, root string) error {
 			continue
 		}
 		cwd, cwdErr := exec.Command("lsof", "-a", "-p", pid, "-d", "cwd", "-Fn").CombinedOutput()
-		process, procErr := exec.Command("ps", "-p", pid, "-o", "pid=,ppid=,etime=,command=").CombinedOutput()
+		process, procErr := describePID(pid)
 		fmt.Fprintf(w, "descriptor process %s: cwd=%sprocess=%s", pid, cwd, process)
 		if cwdErr != nil || procErr != nil {
 			fmt.Fprintf(w, "inspection incomplete: cwd=%v process=%v\n", cwdErr, procErr)
 		}
 	}
 	return nil
+}
+
+func describePID(pid string) ([]byte, error) {
+	id, err := strconv.Atoi(pid)
+	if err != nil {
+		return nil, err
+	}
+	p, ok, err := proclist.Lookup(id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("pid %s is not running", pid)
+	}
+	line := fmt.Sprintf("%d %d %s %s\n", p.PID, p.PPID, formatElapsed(p.Elapsed), p.Command)
+	return []byte(line), nil
+}
+
+func formatElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	sec := int(d.Seconds())
+	days := sec / 86400
+	sec %= 86400
+	h := sec / 3600
+	sec %= 3600
+	m := sec / 60
+	s := sec % 60
+	if days > 0 {
+		return fmt.Sprintf("%d-%02d:%02d:%02d", days, h, m, s)
+	}
+	if h > 0 {
+		return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%02d:%02d", m, s)
 }

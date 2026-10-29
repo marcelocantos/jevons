@@ -15,7 +15,7 @@ import { MuxClient, muxUrl } from './mux/client';
 import { degradedBannerText } from './conversation/degraded';
 import type { ConversationMeta } from './conversation/reduce';
 import { AgentInteraction } from './components/AgentInteraction';
-import { AgentTree, type AgentRow } from './components/AgentTree';
+import { AgentTree, agentRowsFromAPI, type AgentRow } from './components/AgentTree';
 import { SidebarPanel, type SidebarTab } from './components/SidebarPanel';
 import { FrontierTable } from './components/FrontierTable';
 import { FrontierRowsContext } from './frontier/rows';
@@ -54,6 +54,8 @@ import { useCockpitKeys } from './keys/useCockpitKeys';
 import { focusMainComposer } from './keys/composerFocus';
 import { ImageLightbox } from './components/ImageLightbox';
 import { CockpitSettings } from './components/CockpitSettings';
+import { FleetPauseButton } from './components/FleetPauseButton';
+import { useFleetPaused } from './hooks/useFleetPaused';
 
 
 const queryClient = new QueryClient();
@@ -73,7 +75,7 @@ function parseSearch(raw: Record<string, unknown>): Search {
   const agent =
     typeof raw.agent === 'string' ? raw.agent.trim() : '';
   const tab: SidebarTab =
-    raw.tab === 'transcript' || raw.tab === 'coach' ? raw.tab : 'frontier';
+    raw.tab === 'transcript' || raw.tab === 'coach' || raw.tab === 'review' ? raw.tab : 'frontier';
   return { agent, tab };
 }
 
@@ -150,8 +152,21 @@ function Cockpit() {
     setDegraded(degradedBannerText(meta));
   }, []);
   const queryClient = useQueryClient();
+  const fleetPaused = useFleetPaused();
   // 🎯T269: × on an aside row → DELETE /api/asides/<name>. 404 = already gone
   // (idempotent); refreshing the agents query is the owner-visible truth (T164).
+  const toggleSeatPause = useCallback(
+    async (name: string, pause: boolean) => {
+      if (!name) return;
+      const path = pause ? 'pause' : 'unpause';
+      const r = await fetch('/api/agents/' + encodeURIComponent(name) + '/' + path, { method: 'POST' });
+      if (!r.ok) {
+        throw new Error((await r.text()) || 'seat ' + path + ' HTTP ' + r.status);
+      }
+      await queryClient.invalidateQueries({ queryKey: ['agents'] });
+    },
+    [queryClient],
+  );
   const dismissFleetAside = useCallback(
     async (name: string) => {
       if (!name) return;
@@ -170,53 +185,7 @@ function Cockpit() {
     queryFn: async () => {
       const r = await fetch('/api/agents');
       if (!r.ok) return lastAgentsRef.current;
-      const data = await r.json();
-      const list = Array.isArray(data) ? data : [];
-      const rows = list
-        .map((a: {
-          name?: string;
-          purpose?: string;
-          parent?: string;
-          status?: string;
-          running?: boolean;
-          phase?: string;
-          step?: string;
-          progress?: string;
-          provider?: string;
-          model?: string;
-          workdir?: string;
-          target_id?: string;
-          ledger?: string;
-          stop_reason?: string;
-          starting?: boolean;
-          stopped_at?: string;
-          mass_stop?: string;
-          rehydrate?: string;
-          reauth_available?: boolean;
-          plan_wall?: string;
-        }) => ({
-          name: a.name || '',
-          purpose: a.purpose,
-          parent: a.parent,
-          status: a.status,
-          running: a.running,
-          phase: a.phase,
-          step: a.step,
-          progress: a.progress,
-          provider: a.provider,
-          model: a.model,
-          workdir: a.workdir,
-          target_id: a.target_id,
-          ledger: a.ledger,
-          stop_reason: a.stop_reason,
-          starting: a.starting,
-          stopped_at: a.stopped_at,
-          mass_stop: a.mass_stop,
-          rehydrate: a.rehydrate,
-          reauth_available: a.reauth_available,
-          plan_wall: a.plan_wall,
-        }))
-        .filter((a: AgentRow) => a.name);
+      const rows = agentRowsFromAPI(await r.json());
       const merged = mergeAgentChrome(lastAgentsRef.current, rows);
       lastAgentsRef.current = merged;
       return merged;
@@ -227,16 +196,16 @@ function Cockpit() {
   });
   const agents = agentsQ.data && agentsQ.data.length
     ? agentsQ.data
-    : [{ name: 'jevons' }, { name: 'jevons-po' }];
+    : PLACEHOLDER_AGENTS;
   const frontierCwd = agents.find((a) => a.name === agent)?.workdir?.trim() || '';
   const frontierQ = useSeatFrontier(frontierCwd);
-  const frontierNote = !frontierCwd || frontierQ.data
-    ? undefined
-    : frontierQ.isError
-      ? 'frontier unavailable'
-      : 'loading…';
-  const frontierRows = frontierCwd ? frontierQ.data?.rows || [] : [];
-  const frontierLedger = frontierCwd ? frontierQ.data?.ledgerKey || '' : '';
+  const frontierNote = frontierQ.isError
+    ? 'frontier unavailable'
+    : frontierQ.isFetching && !frontierQ.data
+      ? 'loading…'
+      : undefined;
+  const frontierRows = frontierQ.data?.rows || [];
+  const frontierLedger = frontierQ.data?.ledgerKey || '';
   // 🎯T267: live target-ask → select owning PO (T253 rebinds Frontier) + highlight row.
   const [frontierHighlightId, setFrontierHighlightId] = useState('');
   const askHost = useMemo<TargetAskHost>(
@@ -322,6 +291,7 @@ function Cockpit() {
           aria-controls="activity-pane" aria-expanded={narrow && agentsOpen}
           onClick={() => agentsOpen ? closeAgents() : setAgentsOpen(true)}>Agents</button>
         <span className={connected ? 'dot on' : 'dot off'} id="dot" />
+        <FleetPauseButton paused={fleetPaused.paused} onToggle={fleetPaused.toggle} />
         <span id="voice-status">
           <span className="voice-dot" />
           <span id="voice-status-text">listening</span>
@@ -356,7 +326,10 @@ function Cockpit() {
       </div>
       <div id="idle-storm-banner" role="status" aria-live="polite" />
       <div id="main" ref={mainRef}>
-        <AgentInteraction mux={mux} name="jevons" title="Root" density="comfortable" connected={connected} onMeta={onJevonsMeta} />
+        <AgentInteraction mux={mux} name="jevons" title="Root" density="comfortable" ownerChat connected={connected} fleetPaused={fleetPaused.paused} onMeta={onJevonsMeta} onOpenAside={(id) => {
+            navigate({ search: { agent: id, tab: 'transcript' } });
+            void queryClient.invalidateQueries({ queryKey: ['agents'] });
+          }} />
         {narrow && agentsOpen && <button id="agents-backdrop" type="button" aria-label="Close Agents" onClick={closeAgents} />}
         <div id="activity-pane" ref={activityRef} data-drawer-open={narrow && agentsOpen}
           inert={narrow && !agentsOpen} style={{ width: layoutStyles.sidebarWidthPx, flexShrink: 0 }}>
@@ -400,6 +373,15 @@ function Cockpit() {
                 selected={agent}
                 onSelect={(name) => navigate({ search: { agent: name === agent ? '' : name, tab } })}
                 onDismiss={(name) => void dismissFleetAside(name)}
+                onPause={(name, pause) => void toggleSeatPause(name, pause)}
+                onReauth={async (name) => {
+                  const r = await fetch('/api/agents/' + encodeURIComponent(name) + '/auth/recover', { method: 'POST' });
+                  if (!r.ok) {
+                    const body = await r.json().catch(() => ({})) as { error?: string };
+                    throw new Error(body.error || 'Authentication recovery failed (HTTP ' + r.status + ')');
+                  }
+                  await queryClient.invalidateQueries({ queryKey: ['agents'] });
+                }}
               />
             </div>
             <div
@@ -416,7 +398,7 @@ function Cockpit() {
             />
             <SidebarPanel
               tab={tab}
-              readyCount={!frontierCwd || frontierQ.data ? frontierRows.length : undefined}
+              readyCount={frontierQ.data ? frontierRows.length : undefined}
               readyNote={frontierNote}
               onTab={(next) => {
                 navigate({ search: { agent, tab: next } });
@@ -425,7 +407,19 @@ function Cockpit() {
               onGraph={openGraph}
               onRefresh={() => void queryClient.invalidateQueries({ queryKey: ['frontier'] })}
               transcript={
-                agent === 'jevons' ? (
+                !agent ? (
+                  <div
+                    id="agent-inspect"
+                    className={'rhs-tab-pane conversation-widget density-compact' + (tab === 'transcript' ? ' active' : '')}
+                    data-density="compact"
+                  >
+                    <div id="agent-inspect-header">
+                      <span className="ai-label">Transcript</span>
+                    </div>
+                    {/* 🎯T1123: an empty pane with a composer for nobody read as broken. */}
+                    <p className="ai-empty">Select an agent in the fleet tree to read its transcript and message it.</p>
+                  </div>
+                ) : agent === 'jevons' ? (
                   <div
                     id="agent-inspect"
                     className={
@@ -476,6 +470,14 @@ function Cockpit() {
     </FrontierRowsContext.Provider>
   );
 }
+
+
+// 🎯T1304: the tree's rows before /api/agents first answers. They carry no
+// liveness, so the overseer does not read "stopped" on every cold load.
+const PLACEHOLDER_AGENTS: AgentRow[] = [
+  { name: 'jevons', placeholder: true },
+  { name: 'jevons-po', placeholder: true },
+];
 
 export default function App() {
   return (

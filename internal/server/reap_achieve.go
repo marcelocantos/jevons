@@ -112,10 +112,16 @@ func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, acct *fleetlog.Account
 	return removed, nil
 }
 
-const ledgerStatusAchieved = "achieved"
+const (
+	ledgerStatusAchieved = "achieved"
+	ledgerStatusSetAside = "set_aside"
+)
 
-// listAchievedTargetIDs reads a bullseye ledger and returns target IDs with
-// status=achieved (normalized). set_aside is not treated as achieve-reap.
+// listAchievedTargetIDs reads a bullseye ledger and returns the closed target
+// IDs (normalized): achieved, or set aside. A set-aside target will not be
+// worked, so its worker has nothing left either (🎯T985). Excluding it left
+// jv-t1138-auto registered after T1138 was set aside; when its process later
+// died the cockpit flagged it "should be running; seat is down" (2026-10-23).
 func listAchievedTargetIDs(ledgerPath string) (map[string]bool, error) {
 	out := make(map[string]bool)
 	if ledgerPath == "" {
@@ -130,7 +136,7 @@ func listAchievedTargetIDs(ledgerPath string) (map[string]bool, error) {
 		return nil, fmt.Errorf("parse ledger: %w", err)
 	}
 	for id, t := range doc.Targets {
-		if strings.ToLower(strings.TrimSpace(t.Status)) == ledgerStatusAchieved {
+		if st := strings.ToLower(strings.TrimSpace(t.Status)); st == ledgerStatusAchieved || st == ledgerStatusSetAside {
 			nid := NormalizeTargetID(id)
 			if nid != "" {
 				out[nid] = true
@@ -161,13 +167,17 @@ func (s *Server) seedAchievedFromLedger(ledgerPath string) {
 	if s == nil || ledgerPath == "" {
 		return
 	}
+	ledgerPath = filepath.Clean(ledgerPath)
 	curr, err := listAchievedTargetIDs(ledgerPath)
 	if err != nil {
 		slog.Debug("T195 seed achieved set failed", "ledger", ledgerPath, "err", err)
 		return
 	}
 	s.mu.Lock()
-	s.achievedTargetsSeen = curr
+	if s.achievedTargetsSeen == nil {
+		s.achievedTargetsSeen = make(map[string]map[string]bool)
+	}
+	s.achievedTargetsSeen[ledgerPath] = curr
 	s.mu.Unlock()
 }
 
@@ -177,6 +187,7 @@ func (s *Server) maybeReapOnLedgerAchieve(ledgerPath string) {
 	if s == nil || ledgerPath == "" {
 		return
 	}
+	ledgerPath = filepath.Clean(ledgerPath)
 	curr, err := listAchievedTargetIDs(ledgerPath)
 	if err != nil {
 		slog.Debug("T195 list achieved failed", "ledger", ledgerPath, "err", err)
@@ -184,15 +195,18 @@ func (s *Server) maybeReapOnLedgerAchieve(ledgerPath string) {
 	}
 
 	s.mu.Lock()
-	prev := s.achievedTargetsSeen
+	if s.achievedTargetsSeen == nil {
+		s.achievedTargetsSeen = make(map[string]map[string]bool)
+	}
+	prev := s.achievedTargetsSeen[ledgerPath]
 	if prev == nil {
 		// First observation: seed only (no reap on cold start).
-		s.achievedTargetsSeen = curr
+		s.achievedTargetsSeen[ledgerPath] = curr
 		s.mu.Unlock()
 		return
 	}
 	newly := newlyAchievedTargetIDs(prev, curr)
-	s.achievedTargetsSeen = curr
+	s.achievedTargetsSeen[ledgerPath] = curr
 	reg := s.registry
 	overseer := s.overseerName
 	if overseer == "" {

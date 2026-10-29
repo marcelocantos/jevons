@@ -71,6 +71,34 @@ func TestBuildFailureIsFailure(t *testing.T) {
 	}
 }
 
+// 🎯T1308: the compiler's message arrives as build-output events (the shape
+// go1.27 writes). It must reach the transcript and the reported build
+// errors, not just the bare "[build failed]" line.
+func TestBuildOutputCarriesTheCompilerMessage(t *testing.T) {
+	r := feed(t,
+		`{"ImportPath":"bf [bf.test]","Action":"build-output","Output":"# bf [bf.test]\n"}`,
+		`{"ImportPath":"bf [bf.test]","Action":"build-output","Output":"./bf.go:3:23: undefined: undefinedThing\n"}`,
+		`{"ImportPath":"bf [bf.test]","Action":"build-fail"}`,
+		`{"Action":"output","Package":"bf","Output":"FAIL\tbf [build failed]\n"}`,
+	)
+	var withReason bool
+	for _, e := range r.BuildErrors {
+		if strings.Contains(e, "undefined: undefinedThing") {
+			withReason = true
+		}
+	}
+	if !withReason {
+		t.Fatalf("build errors %q do not carry the compiler's message", r.BuildErrors)
+	}
+	body, err := os.ReadFile(r.transcript.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "undefined: undefinedThing") {
+		t.Fatalf("transcript lacks the compiler's message:\n%s", body)
+	}
+}
+
 // The failure that actually happened on 2026-08-10: `go test` exits
 // non-zero — a panic, a timeout, a package-level failure — while no
 // individual test is marked failed. That must never read as green.

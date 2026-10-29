@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -19,7 +18,8 @@ type CommitArgs struct {
 	// Dir is the repository work tree. Empty means the current directory.
 	Dir string
 	// IndexFile is the worker-owned GIT_INDEX_FILE. Empty creates one under
-	// Dir/.git/ and removes it after a successful commit.
+	// Git's worktree-specific git directory and removes it after a successful
+	// commit.
 	IndexFile string
 	// Message is the commit message. Required.
 	Message string
@@ -86,7 +86,11 @@ func Commit(args *CommitArgs) (*Result, error) {
 	index := args.IndexFile
 	tempIndex := false
 	if index == "" {
-		index = filepath.Join(dir, ".git", "index-commitbase-"+fmt.Sprintf("%d", os.Getpid()))
+		path, err := runGit(dir, nil, "rev-parse", "--path-format=absolute", "--git-path", "index-commitbase-"+fmt.Sprintf("%d", os.Getpid()))
+		if err != nil {
+			return nil, fmt.Errorf("commitbase: resolve private index: %w", err)
+		}
+		index = strings.TrimSpace(path)
 		tempIndex = true
 	}
 
@@ -228,7 +232,11 @@ func StaleCommit(args *CommitArgs) (*Result, error) {
 	dir := args.Dir
 	index := args.IndexFile
 	if index == "" {
-		index = filepath.Join(dir, ".git", "index-stale-"+fmt.Sprintf("%d", os.Getpid()))
+		path, err := runGit(dir, nil, "rev-parse", "--path-format=absolute", "--git-path", "index-stale-"+fmt.Sprintf("%d", os.Getpid()))
+		if err != nil {
+			return nil, fmt.Errorf("commitbase: resolve stale-control index: %w", err)
+		}
+		index = strings.TrimSpace(path)
 	}
 	git := func(extraEnv []string, argv ...string) (string, error) {
 		return runGit(dir, append([]string{"GIT_INDEX_FILE=" + index}, extraEnv...), argv...)

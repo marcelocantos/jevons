@@ -64,3 +64,23 @@ func TestT778BootOverseerThenConvergeThenFleet(t *testing.T) {
 		t.Fatal("boot reattaches the whole fleet in one serial-blocking call")
 	}
 }
+
+// 🎯T796: after bounce reattach the overseer's broker grant must be reclaimed
+// before AttachOverseer wires chat delivery, so the owner's first post-bounce
+// message is not refused not_owner.
+func TestT796BootConfirmsOverseerGrantBeforeAttach(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	reattach := strings.Index(body, "upgrade.ReattachSeatsContext(ctx, registry, isOverseerSeat, 1)")
+	confirm := strings.Index(body, "upgrade.ConfirmBrokerGrant(ctx, cfg.OverseerName, jevonProc)")
+	attach := strings.Index(body, "srv.AttachOverseer(jevonProc)")
+	if reattach < 0 || confirm < 0 || attach < 0 {
+		t.Fatalf("boot lost T796 markers: reattach=%d confirm=%d attach=%d", reattach, confirm, attach)
+	}
+	if !(reattach < confirm && confirm < attach) {
+		t.Fatalf("boot order wrong: reattach=%d confirm=%d attach=%d", reattach, confirm, attach)
+	}
+}

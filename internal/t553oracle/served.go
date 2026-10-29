@@ -10,6 +10,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/server"
 )
 
 // 🎯T505: the T553.1 end-to-end oracle proves the buildsnap path builds from
@@ -60,7 +62,11 @@ func ServedAssetPaths(indexHTML string) []string {
 // through get, and requires each to be byte-identical to the same member of
 // bundleZip. It returns the paths it compared. A served page that references
 // no script cannot have been compared, so it is an error rather than a pass.
-func ServedMatchesBundle(bundleZip []byte, get func(path string) ([]byte, error)) ([]string, error) {
+//
+// indexBuildID: when non-empty, GET / is compared to the committed index.html
+// after server.StampBuildMeta (🎯T993) — the development daemon stamps the
+// document but serves assets from the bundle verbatim.
+func ServedMatchesBundle(bundleZip []byte, get func(path string) ([]byte, error), indexBuildID string) ([]string, error) {
 	zr, err := zip.NewReader(bytes.NewReader(bundleZip), int64(len(bundleZip)))
 	if err != nil {
 		return nil, fmt.Errorf("committed bundle: %w", err)
@@ -81,6 +87,9 @@ func ServedMatchesBundle(bundleZip []byte, get func(path string) ([]byte, error)
 	want, err := member("index.html")
 	if err != nil {
 		return nil, fmt.Errorf("committed bundle has no index.html: %w", err)
+	}
+	if indexBuildID != "" {
+		want = server.StampBuildMeta(want, indexBuildID)
 	}
 	if !bytes.Equal(index, want) {
 		return nil, fmt.Errorf("GET / (%d bytes) differs from the committed index.html (%d bytes)", len(index), len(want))

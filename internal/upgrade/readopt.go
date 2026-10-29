@@ -216,6 +216,40 @@ func (r *Readopter) Readopt(ctx context.Context, name string, stale *claudia.Age
 // not retried.
 var DefaultReadopter *Readopter
 
+// grantProbeID names a request that will never exist. Receipt still
+// round-trips the broker and surfaces not_owner when this connection
+// does not own the seat's grant.
+const grantProbeID = "jevons:broker-grant-probe"
+
+// grantProbe is a test seam over the broker round-trip ConfirmBrokerGrant uses.
+var grantProbe = func(ctx context.Context, a *claudia.Agent) error {
+	_, err := a.Receipt(ctx, grantProbeID)
+	return agenterr.NoteBrokerGrant(err)
+}
+
+// ConfirmBrokerGrant runs after a daemon bounce reattached a seat. The
+// replacement connection may hold a stale handle while the grant still
+// names the prior jevonsd's connection; reclaim before the owner's first
+// delivery (🎯T796).
+func ConfirmBrokerGrant(ctx context.Context, name string, proc *claudia.Agent) (*claudia.Agent, error) {
+	if proc == nil {
+		return nil, nil
+	}
+	// A wedged broker must not hold boot (🎯T883). Only probe when the broker
+	// answers; a silent socket still gets readopt on the first delivery refusal.
+	if !brokerAvailable() {
+		return proc, nil
+	}
+	err := grantProbe(ctx, proc)
+	if err != nil && IsNotOwner(err) {
+		if DefaultReadopter == nil {
+			return proc, err
+		}
+		return DefaultReadopter.Readopt(ctx, name, proc)
+	}
+	return proc, nil
+}
+
 // WithReadopt runs op on proc and, when the broker answers not_owner, re-adopts
 // the seat once and runs op on the fresh handle. Every other outcome, and every
 // call while no Readopter is installed, is op's own.

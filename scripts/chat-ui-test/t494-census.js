@@ -17,7 +17,7 @@
 const path = require('path');
 const playwrightRoot = path.join(__dirname, '..', 'browser-loop-test', 'node_modules', 'playwright');
 const { chromium } = require(playwrightRoot);
-const VC = require(path.join(__dirname, '..', '..', 'web', 'scripts', 'viewport_census.js'));
+const VC = require(path.join(__dirname, 'viewport_census.js'));
 
 const argv = process.argv.slice(2);
 function opt(name, def) {
@@ -44,26 +44,25 @@ function die(code, msg) {
     deviceScaleFactor: VC.ORACLE_DPR,
   });
   const page = await context.newPage();
-  const censusPath = path.join(__dirname, '..', '..', 'web', 'scripts', 'viewport_census.js');
+  const censusPath = path.join(__dirname, 'viewport_census.js');
   await page.addInitScript({ path: censusPath });
 
   const url = 'http://' + HOST + '/?t494census=' + Date.now();
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.waitForFunction(() => {
-      return !!(document.getElementById('messages-canvas') &&
-        (typeof window.__transcriptRows !== 'undefined') &&
+      return !!(document.getElementById('root') &&
+        document.getElementById('messages') &&
+        document.getElementById('messages-canvas') &&
         window.ViewportCensus);
     }, null, { timeout: 30000 });
 
     await page.waitForFunction(() => {
       const st = document.getElementById('status-text');
       const txt = st ? String(st.textContent || '') : '';
-      const replay = !!window.historyReplayActive;
-      const awaiting = !!window.awaitingHistoryMeta;
-      const rows = (window.__transcriptRows || []).length;
-      const attached = document.querySelectorAll('#messages-canvas > .msg').length;
-      return !replay && !awaiting && (txt === 'connected' || rows > 0 || attached > 0);
+      const users = document.querySelectorAll('#messages-canvas > .msg.user').length;
+      const bubbles = document.querySelectorAll('#messages-canvas > .msg').length;
+      return txt === 'connected' || users > 0 || bubbles >= 2;
     }, null, { timeout: 45000 }).catch(() => {});
 
     await page.evaluate((ms) => new Promise((resolve) => setTimeout(resolve, ms)), SETTLE_MS);
@@ -74,14 +73,15 @@ function die(code, msg) {
     // Census the product's connect pin — do not force scrollHeight.
     const census = await page.evaluate(() => {
       const base = window.ViewportCensus.collect({ prefix: '' });
-      const rows = Array.isArray(window.__transcriptRows) ? window.__transcriptRows : [];
-      const attached = [...document.querySelectorAll('#messages-canvas > .msg')];
+      const attached = [...document.querySelectorAll('#messages-canvas > .msg, #messages-canvas > .turn-marker')];
       const status = document.getElementById('status-text');
+      const modelRows = Math.max(
+        attached.length,
+        document.querySelectorAll('#messages-canvas > .msg').length,
+      );
       return Object.assign({}, base, {
         status: status ? String(status.textContent || '') : '',
-        historyReplayActive: !!window.historyReplayActive,
-        awaitingHistoryMeta: !!window.awaitingHistoryMeta,
-        transcriptRows: rows.length,
+        transcriptRows: modelRows,
         attachedDom: attached.length,
       });
     });

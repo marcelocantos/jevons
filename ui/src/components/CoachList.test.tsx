@@ -38,6 +38,23 @@ describe('coach list', () => {
     expect(screen.queryByText(/port next/)).toBeNull();
   });
 
+  it('says the coach is off instead of counting stale judgments as pending', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        judgments: [{ fingerprint: 'old', name: 'an old judgment', delivered_at: '2026-09-29T23:55:13Z', disposition: 'pending' }],
+        total: 1,
+        pending: 1,
+        coach_enabled: false,
+        coach_updated_at: '2026-10-02T23:15:03Z',
+      }),
+    }));
+    render(createElement(CoachList, { active: true }));
+    expect(await screen.findByText('coach off · 1 judged')).toBeTruthy();
+    expect(screen.getByText(/The coach is off since/)).toBeTruthy();
+    expect(document.querySelector('.coach-pending')).toBeNull();
+  });
+
   it('says when the list is empty', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,

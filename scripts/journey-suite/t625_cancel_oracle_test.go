@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
 // Adversarial peers for the 🎯T625 cancel-ordering and provider-observation
@@ -163,10 +165,10 @@ func TestT625AssertLaunchedOnObservesTheNamedBackend(t *testing.T) {
 			"", line("jevons", "grok"), []string{"jv-a"}, false},
 		{"a message quoting a launch line is not a launch",
 			"", fmt.Sprintf("msg=%q\n", `agent started name=jv-a provider=grok`), []string{"jv-a"}, false},
-		{"unsteerable pin accepts the steerable plan that started",
-			"cursor", line("jv-a", "codex"), []string{"jv-a"}, true},
-		{"unsteerable pin rejects a launch on itself",
-			"cursor", line("jv-a", "cursor"), []string{"jv-a"}, false},
+		{"steerable cursor accepts launch on requested backend",
+			"cursor", line("jv-a", "cursor"), []string{"jv-a"}, true},
+		{"steerable cursor rejects fallback to another backend",
+			"cursor", line("jv-a", "codex"), []string{"jv-a"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -185,6 +187,35 @@ func TestT625AssertLaunchedOnObservesTheNamedBackend(t *testing.T) {
 			if err != nil && !strings.Contains(err.Error(), tc.names[len(tc.names)-1]) &&
 				!strings.Contains(err.Error(), tc.names[0]) {
 				t.Fatalf("error does not name the agent it judged: %v", err)
+			}
+		})
+	}
+}
+
+func TestT625UnsteerablePinObservesSteerableLanding(t *testing.T) {
+	t.Cleanup(planusage.SetUnsteerableForTest(map[string]string{"grok": "synthetic exclusion"}))
+	line := func(name, provider string) string {
+		return fmt.Sprintf("msg=%q name=%s provider=%s\n", "agent started", name, provider)
+	}
+	for _, tc := range []struct {
+		name   string
+		log    string
+		wantOK bool
+	}{
+		{"unsteerable pin accepts the steerable plan that started",
+			line("jv-a", "codex"), true},
+		{"unsteerable pin rejects a launch on itself",
+			line("jv-a", "grok"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := &suite{stateDir: dir, logPath: dir + "/jevonsd.log", provider: claudia.ProviderGrok}
+			if err := os.WriteFile(s.logPath, []byte(tc.log), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := s.assertLaunchedOn("jv-a")
+			if tc.wantOK != (err == nil) {
+				t.Fatalf("err=%v, wantOK=%v", err, tc.wantOK)
 			}
 		})
 	}

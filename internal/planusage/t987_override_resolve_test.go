@@ -34,7 +34,7 @@ func TestT987ResolveMintSkipsOwnerOverriddenExhaustedPlan(t *testing.T) {
 	}
 	cands := []DestCand{{Provider: "grok", Backend: grok}, {Provider: "claude", Backend: claude}}
 
-	pick, err := ResolveMint(context.Background(), cands, now, th)
+	pick, err := ResolveMint(context.Background(), cands, now, th, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,20 +42,20 @@ func TestT987ResolveMintSkipsOwnerOverriddenExhaustedPlan(t *testing.T) {
 		t.Fatalf("ResolveMint = %q, want claude (grok is owner-overridden exhausted)", pick.Provider)
 	}
 	// Migrate / park destinations run through the same seam.
-	dest, err := ResolveDest(context.Background(), cands, "", now, th)
+	dest, err := ResolveDest(context.Background(), cands, "", now, th, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dest.Provider != claudia.ProviderClaude {
 		t.Fatalf("ResolveDest = %q, want claude", dest.Provider)
 	}
-	if got, ok := PickPlanDest(cands, now, th); !ok || got != "claude" {
+	if got, ok := PickPlanDest(cands, now, th, nil); !ok || got != "claude" {
 		t.Fatalf("PickPlanDest = %q %v, want claude", got, ok)
 	}
 
 	// Without the override the same readings pick grok: the test bites.
 	open := []DestCand{{Provider: "grok", Backend: t495Backend("grok", t495pf(40), t495pf(60), t495Week(0.5), now)}}
-	if p, err := ResolveMint(context.Background(), open, now, th); err != nil || p.Provider != claudia.ProviderGrok {
+	if p, err := ResolveMint(context.Background(), open, now, th, nil); err != nil || p.Provider != claudia.ProviderGrok {
 		t.Fatalf("control: grok alone without override = %q %v, want grok", p.Provider, err)
 	}
 }
@@ -71,7 +71,7 @@ func TestT987ResolveMintRefusalNamesTheOwnerOverride(t *testing.T) {
 	grok.Override = &Override{Band: BandExhausted, Reason: reason, SetBy: "owner", SetAt: now}
 	cands := []DestCand{{Provider: "grok", Backend: grok}}
 
-	_, err := ResolveMint(context.Background(), cands, now, th)
+	_, err := ResolveMint(context.Background(), cands, now, th, nil)
 	if err == nil {
 		t.Fatal("ResolveMint picked a plan the owner keeps seats off")
 	}
@@ -102,7 +102,7 @@ func TestT987DestBandOverrideIsNotAnExclusion(t *testing.T) {
 	cands := []DestCand{{Provider: "grok", Backend: grok}, {Provider: "claude", Backend: claude}}
 	// The adapter does not exclude claude; claudia still ranks from the
 	// readings and may pass it over, but nothing here refuses it.
-	if _, err := ResolveMint(context.Background(), cands, now, th); err != nil {
+	if _, err := ResolveMint(context.Background(), cands, now, th, nil); err != nil {
 		t.Fatalf("a dest-band override broke the resolve: %v", err)
 	}
 	if !IsDestBandOverride(BandOK) || !IsDestBandOverride(BandUnder) || !IsDestBandOverride(BandLocked) {

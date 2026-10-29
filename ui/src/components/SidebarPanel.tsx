@@ -3,13 +3,15 @@
 
 import type { ReactNode } from 'react';
 import { CoachList } from './CoachList';
+import { ReviewPanel, type ReviewItem } from './ReviewPanel';
 
-export type SidebarTab = 'frontier' | 'transcript' | 'coach';
+export type SidebarTab = 'frontier' | 'transcript' | 'coach' | 'review';
 
 const TABS: { id: SidebarTab; label: string }[] = [
   { id: 'frontier', label: 'Frontier' },
   { id: 'transcript', label: 'Transcript' },
   { id: 'coach', label: 'Coach' },
+  { id: 'review', label: 'Questions' },
 ];
 
 export function SidebarPanel(props: {
@@ -22,6 +24,7 @@ export function SidebarPanel(props: {
   readyNote?: string;
   transcript?: ReactNode;
   children: ReactNode;
+  onAnswerInChat?: (item: ReviewItem) => void;
 }) {
   return (
     <div id="rhs-bottom" aria-label="Frontier and agent transcript">
@@ -38,11 +41,16 @@ export function SidebarPanel(props: {
             onClick={() => props.onTab(t.id)}
           >
             {t.label}
+            {/* The ready count belongs to the Frontier tab, so it sits inside that
+                tab. At the far end of the bar it read as the Questions count
+                ("176 ready" next to Questions). Loading/error notes show in the pane. */}
+            {t.id === 'frontier' && typeof props.readyCount === 'number' ? (
+              <span className="rhs-tab-count" id="rhs-tab-meta" title={props.readyCount + ' ready leaves'}>
+                {props.readyCount}
+              </span>
+            ) : null}
           </button>
         ))}
-        <span className="rhs-tab-meta" id="rhs-tab-meta">
-          {props.readyNote || (typeof props.readyCount === 'number' ? props.readyCount + ' ready' : '')}
-        </span>
       </div>
       <div
         id="frontier-pane"
@@ -65,6 +73,14 @@ export function SidebarPanel(props: {
         role="tabpanel"
       >
         <CoachList active={props.tab === 'coach'} />
+      </div>
+      <div
+        id="review-pane"
+        className={'rhs-tab-pane' + (props.tab === 'review' ? ' active' : '')}
+        role="tabpanel"
+        aria-label="Open owner questions"
+      >
+        <ReviewPanel active={props.tab === 'review'} onAnswerInChat={props.onAnswerInChat} />
       </div>
       {props.transcript}
     </div>

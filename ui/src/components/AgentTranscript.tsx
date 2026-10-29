@@ -19,8 +19,10 @@ import {
   shouldClip,
   type ClipUIState,
 } from '../conversation/clip';
-import { shouldRequestPage } from '../conversation/page';
+import { shouldAutoFillPane, shouldOfferShowEarlier, shouldRequestPage } from '../conversation/page';
+import { shouldBackfillOwnerConversation } from '../conversation/ownerPaint';
 import { displayRows, type DisplayKind, type StepItem } from '../conversation/display';
+import { inspectDisplayRows } from '../conversation/inspectTail';
 import { parseAssistantMarkdown } from '../conversation/markdown';
 import { preloadMermaid, renderMermaidIn } from '../conversation/mermaidPaint';
 import { paintUserHTML, userBubbleClass, type TurnOrigin } from '../conversation/paint';
@@ -35,7 +37,9 @@ import {
   distanceFromEnd,
   followAfterScroll,
   pinWriteScrollTop,
+  settlePinGapPx,
   shouldAbortPinForMidList,
+  shouldSkipFollowRepinWhenAtLiveEnd,
 } from '../transcript/followPin';
 import {
   HYDRATE_OVERSCAN_MAX,
@@ -43,6 +47,10 @@ import {
   nextHydrateOverscan,
 } from '../transcript/hydrateOverscan';
 
+
+// SHOW_EARLIER_MAX_PAGES bounds how many pages one "Show earlier" click may
+// fetch while looking for a visible row.
+const SHOW_EARLIER_MAX_PAGES = 8;
 export function AgentTranscript(props: {
   name: string;
   density?: Density;
@@ -59,6 +67,12 @@ export function AgentTranscript(props: {
   recalledId?: string;
   /** 🎯T811: retry a queued, undelivered owner message by its id. */
   onResend?: (msgId: string) => void;
+  /** 🎯T1130: Steer / Cut-in on a daemon-held message row. */
+  onSteerHeld?: (msgId: string) => void;
+  onInterruptHeld?: (msgId: string) => void;
+  /** 🎯T1122: the owner's main chat; machine-started turns fold. */
+  ownerChat?: boolean;
+  provisionalByStream?: Record<string, string>;
 }) {
   const density = normalizeDensity(props.density);
   const parentRef = useRef<HTMLDivElement>(null);
@@ -100,9 +114,21 @@ export function AgentTranscript(props: {
     props.onFollowChange?.(next);
   };
   const clipPersist = useRef(new Map<string, ClipUIState>());
-  const rows = useMemo(() => displayRows(props.frames, { inspect: density === 'compact' }), [props.frames, density]);
-  const count = rows.length;
-  const latestMsg = useMemo(() => lastMessageRowIndex(rows.map((r) => r.kind)), [rows]);
+  // 🎯T609: inspect paints a named tail, not every turn.
+  const rows = useMemo(
+    () =>
+      density === 'compact'
+        ? inspectDisplayRows(props.frames)
+        : displayRows(props.frames, {
+            ownerChat: props.ownerChat,
+            provisionalByStream: props.provisionalByStream,
+          }),
+    [props.frames, density, props.ownerChat, props.provisionalByStream],
+  );
+  // Held owner turns belong to the single queue strip, not a second transcript row.
+  const visibleRows = rows.filter((row) => row.delivery?.state !== 'held' && row.delivery?.state !== 'removed');
+  const count = visibleRows.length;
+  const latestMsg = useMemo(() => lastMessageRowIndex(visibleRows.map((r) => r.kind)), [rows]);
   const estimate = density === 'compact' ? 48 : 72;
   const virtualizer = useVirtualizer({
     count,
@@ -163,6 +189,16 @@ export function AgentTranscript(props: {
     const el = parentRef.current;
     if (!el || !props.ready || count === 0) return;
     if (!followRef.current) return;
+    if (
+      shouldSkipFollowRepinWhenAtLiveEnd({
+        hydrateSettled: hydrateSettled.current,
+        scrollTop: el.scrollTop,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      })
+    ) {
+      return;
+    }
     // Expand/collapse after hydrate must not yank mid-list (🎯T556).
     // First paint is scrollTop=0 on a tall canvas — that is not a leave (🎯T558).
     if (
@@ -267,9 +303,16 @@ export function AgentTranscript(props: {
       }
       if (!followRef.current || pagingRef.current) return;
       const gap = distanceFromEnd(el.scrollTop, el.scrollHeight, el.clientHeight);
-      if (gap <= 0) return;
+      // 🎯T532: fractional pin slack is not a gap that needs closing — rewriting
+      // scrollTop on every canvas RO observation was ~100+ forced layouts/s idle.
+      if (settlePinGapPx(gap)) return;
       pinningRef.current = true;
       el.scrollTop = pinWriteScrollTop(el.scrollHeight);
+      if (typeof window !== 'undefined') {
+        const w = window as Window & { __jevonsT532PinCensus?: { repins: number } };
+        if (!w.__jevonsT532PinCensus) w.__jevonsT532PinCensus = { repins: 0 };
+        w.__jevonsT532PinCensus.repins++;
+      }
       lastHeightRef.current = el.scrollHeight;
       pinningRef.current = false;
     });
@@ -322,16 +365,110 @@ export function AgentTranscript(props: {
     pagingRef.current = false;
   }, [props.meta?.start, props.meta?.older, props.meta?.total, props.meta?.n, count]);
 
+  const requestOlderPage = () => {
+    const el = parentRef.current;
+    if (!el || !props.onPageOlder) return;
+    if (props.olderPage?.loading || props.olderPage?.error) return;
+    if (pageAnchor.current?.applied) return;
+    pagingRef.current = true;
+    clearPageAnchor();
+    pageAnchor.current = {
+      height: el.scrollHeight,
+      start: props.meta?.start,
+      count,
+      applied: false,
+    };
+    props.onPageOlder();
+  };
+
+  // A "Show earlier" click asks for more visible history, not for one page of
+  // events. Machine-turn notices fold into the steps marker, so a 250-event
+  // page often adds no visible row and the button looked dead (2026-10-23).
+  // Keep paging until a new row appears, history runs out, or the bound hits.
+  const showEarlierRef = useRef<{ rows: number; pages: number } | null>(null);
+  // A steps marker growing is not new history the owner can read.
+  const messageRows = useMemo(() => rows.filter((r) => r.kind !== 'steps').length, [rows]);
+  const showEarlier = () => {
+    showEarlierRef.current = { rows: messageRows, pages: 1 };
+    requestOlderPage();
+  };
+  useEffect(() => {
+    const want = showEarlierRef.current;
+    if (!want || props.olderPage?.loading) return;
+    if (props.olderPage?.error || messageRows > want.rows || !props.meta?.older || want.pages >= SHOW_EARLIER_MAX_PAGES) {
+      showEarlierRef.current = null;
+      return;
+    }
+    want.pages++;
+    // The previous page of this same click was anchored; that anchor must not
+    // block the click's next page (requestOlderPage refuses while one is
+    // applied, which is right for a new gesture, not for this continuation).
+    pagingRef.current = false;
+    clearPageAnchor();
+    requestOlderPage();
+  }, [messageRows, props.olderPage?.loading, props.olderPage?.error, props.meta?.older]);
+
+  // 🎯T1159: MaxConnectEvents tail can be machine noise past the owner's
+  // last turn. Page older while still following until owner+reply paint.
+  // Trust mux meta.following only: prepend anchoring can briefly detach UI
+  // follow without leaving the live window (🎯T1060 keeps meta.following false).
+  useEffect(() => {
+    if (!props.onPageOlder || !props.ready) return;
+    if (props.olderPage?.loading || props.olderPage?.error) return;
+    if (props.meta?.following === false) return;
+    if (!shouldBackfillOwnerConversation(props.name, rows, props.meta?.older, props.frames)) return;
+    requestOlderPage();
+  }, [
+    props.name,
+    props.ready,
+    rows,
+    props.meta?.older,
+    props.meta?.start,
+    props.onPageOlder,
+    props.olderPage?.loading,
+    props.olderPage?.error,
+    props.meta?.following,
+    count,
+  ]);
+
+  // Fill the pane on open: a short tail pages older history by itself rather
+  // than leaving an empty pane behind a "Show earlier" button (🎯T1248,
+  // 2026-10-28). Counted per agent; the bound keeps folded machine turns
+  // from pulling the whole history.
+  const autoFillRef = useRef({ name: props.name, pages: 0 });
+  if (autoFillRef.current.name !== props.name) autoFillRef.current = { name: props.name, pages: 0 };
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el || !props.onPageOlder || !props.ready) return;
+    if (props.olderPage?.error) return;
+    const fill = autoFillRef.current;
+    if (
+      !shouldAutoFillPane({
+        older: props.meta?.older,
+        inFlight: pagingRef.current || !!props.olderPage?.loading,
+        scrollHeight: Math.max(el.scrollHeight, totalSize),
+        clientHeight: el.clientHeight,
+        pages: fill.pages,
+      })
+    ) {
+      return;
+    }
+    // Like a Show earlier continuation: the previous fill page's applied
+    // anchor must not block this one (requestOlderPage refuses while one is
+    // applied, which is right for a new gesture, not for a fill). Without
+    // this, fill stopped after its first page on the live cockpit.
+    if (fill.pages > 0) {
+      pagingRef.current = false;
+      clearPageAnchor();
+    }
+    fill.pages++;
+    requestOlderPage();
+  }, [props.name, props.ready, count, totalSize, props.meta?.older, props.olderPage?.loading, props.olderPage?.error]);
+
   useEffect(() => {
     const el = parentRef.current;
     if (!el || !props.onPageOlder) return;
     const requestOlder = () => {
-      // A failed page waits for explicit Retry; a pending retry cannot be
-      // duplicated by scroll events caused by adding the status strip.
-      if (props.olderPage?.loading || props.olderPage?.error) return;
-      // A programmatic scroll caused by anchoring a tiny page is not a new
-      // request, even if its total height shift leaves us within 48px.
-      if (pageAnchor.current?.applied) return;
       if (
         shouldRequestPage({
           scrollTop: el.scrollTop,
@@ -343,15 +480,7 @@ export function AgentTranscript(props: {
           clientHeight: el.clientHeight,
         })
       ) {
-        pagingRef.current = true;
-        clearPageAnchor();
-        pageAnchor.current = {
-          height: el.scrollHeight,
-          start: props.meta?.start,
-          count,
-          applied: false,
-        };
-        props.onPageOlder?.();
+        requestOlderPage();
       }
     };
     const onScroll = () => {
@@ -372,7 +501,16 @@ export function AgentTranscript(props: {
     // Once the owner starts another gesture, late row measurements belong to
     // that new viewport, not the previous page's anchor.
     const onGesture = () => { if (pageAnchor.current && (pageAnchor.current.applied || !pagingRef.current)) clearPageAnchor(); };
-    el.addEventListener('wheel', onGesture);
+    // 🎯T1248: wheeling up at scrollTop 0 fires no scroll event, so it must
+    // ask for the next page itself. A landed page of folded machine turns
+    // adds no height and leaves the owner at the top; each further wheel up
+    // is a new gesture (T1060 keeps an anchor's synthetic scroll from paging
+    // on its own), so history keeps coming while the owner keeps scrolling.
+    const onWheel = (e: WheelEvent) => {
+      onGesture();
+      if (e.deltaY < 0) requestOlder();
+    };
+    el.addEventListener('wheel', onWheel);
     el.addEventListener('pointerdown', onGesture);
     el.addEventListener('touchstart', onGesture);
     el.addEventListener('keydown', onGesture);
@@ -387,7 +525,7 @@ export function AgentTranscript(props: {
     el.addEventListener('jevons-page-older', onPageKey);
     return () => {
       el.removeEventListener('scroll', onScroll);
-      el.removeEventListener('wheel', onGesture);
+      el.removeEventListener('wheel', onWheel);
       el.removeEventListener('pointerdown', onGesture);
       el.removeEventListener('touchstart', onGesture);
       el.removeEventListener('keydown', onGesture);
@@ -413,27 +551,45 @@ export function AgentTranscript(props: {
   const scrollTop = scroller?.scrollTop ?? 0;
   const clientHeight = scroller?.clientHeight ?? 0;
   const scrollHeight = scroller?.scrollHeight ?? totalSize;
+  const paneContentHeight = Math.max(scrollHeight, totalSize);
+  const offerShowEarlier = shouldOfferShowEarlier({
+    older: props.meta?.older,
+    truncated: props.meta?.truncated,
+    // Render reads the prop, not pagingRef: the ref clears in an effect after
+    // the landing render, so reading it here hid the button until some
+    // unrelated re-render.
+    inFlight: !!props.olderPage?.loading,
+    scrollHeight: paneContentHeight,
+    clientHeight,
+  });
   const nearEnd = isNearTranscriptEnd(scrollTop, scrollHeight, clientHeight);
   const historyReplayActive = !props.ready || !hydrateSettled.current;
   const bodyId = density === 'compact' ? 'agent-inspect-body' : 'messages';
   useEffect(() => {
     preloadMermaid();
     let cancelled = false;
+    let paintRaf = 0;
     const paint = () => {
       if (!cancelled) void renderMermaidIn(parentRef.current);
     };
-    paint();
-    const raf = requestAnimationFrame(paint);
+    const schedulePaint = () => {
+      if (paintRaf) return;
+      paintRaf = requestAnimationFrame(() => {
+        paintRaf = 0;
+        paint();
+      });
+    };
+    schedulePaint();
     const el = parentRef.current;
     const obs =
       el &&
       new MutationObserver(() => {
-        if (el.querySelector('code.language-mermaid')) paint();
+        if (el.querySelector('code.language-mermaid:not([data-mermaid-pending])')) schedulePaint();
       });
     if (el) obs?.observe(el, { subtree: true, childList: true });
     return () => {
       cancelled = true;
-      cancelAnimationFrame(raf);
+      if (paintRaf) cancelAnimationFrame(paintRaf);
       obs?.disconnect();
     };
   }, [rows, totalSize]);
@@ -445,6 +601,10 @@ export function AgentTranscript(props: {
         </div>
       ) : props.olderPage?.loading ? (
         <div className="history-page-status" role="status">Loading earlier history…</div>
+      ) : offerShowEarlier && props.onPageOlder ? (
+        <div className="history-page-status" role="status">
+          <button type="button" onClick={showEarlier}>Show earlier</button>
+        </div>
       ) : props.meta?.older === 0 && !props.meta?.truncated && (props.following ?? props.meta?.following) === false && props.frames.length > 0 ? (
         <div className="history-page-status" role="status">Start of history</div>
       ) : null}
@@ -459,7 +619,7 @@ export function AgentTranscript(props: {
         }}
       >
         {virtualizer.getVirtualItems().map((item) => {
-          const row = rows[item.index];
+          const row = visibleRows[item.index];
           return (
             <ClippedBubble
               key={item.key}
@@ -474,6 +634,8 @@ export function AgentTranscript(props: {
               msgId={row.msgId}
               delivery={row.delivery}
               onResend={props.onResend}
+              onSteerHeld={props.onSteerHeld}
+              onInterruptHeld={props.onInterruptHeld}
               recalled={!!row.id && row.id === props.recalledId}
               sealed={row.sealed === true}
               start={item.start}
@@ -520,8 +682,12 @@ export function ClippedBubble(props: {
   origin?: TurnOrigin;
   eventId?: string;
   msgId?: string;
-  delivery?: { state: 'undelivered' | 'delivered'; reason?: string };
+  delivery?: { state: 'undelivered' | 'delivered' | 'held' | 'removed'; reason?: string };
   onResend?: (msgId: string) => void;
+  /** 🎯T1130: fold a daemon-held message into the running turn. */
+  onSteerHeld?: (msgId: string) => void;
+  /** 🎯T1130: cancel the running turn and send a daemon-held message now. */
+  onInterruptHeld?: (msgId: string) => void;
   recalled?: boolean;
   start: number;
   measureRef?: (el: Element | null) => void;
@@ -718,6 +884,20 @@ export function ClippedBubble(props: {
               {props.msgId && props.onResend ? (
                 <button type="button" className="msg-resend" onClick={() => props.onResend?.(props.msgId as string)}>
                   Resend
+                </button>
+              ) : null}
+            </>
+          ) : props.delivery.state === 'held' ? (
+            <>
+              <span className="msg-delivery-text">queued behind the running turn</span>
+              {props.msgId && props.onSteerHeld ? (
+                <button type="button" className="sq-send-now msg-steer" title="Fold into the running turn (⌘Enter)" onClick={() => props.onSteerHeld?.(props.msgId as string)}>
+                  Steer
+                </button>
+              ) : null}
+              {props.msgId && props.onInterruptHeld ? (
+                <button type="button" className="sq-interrupt msg-interrupt" title="Interrupt the turn and send this (⌘⇧Enter)" onClick={() => props.onInterruptHeld?.(props.msgId as string)}>
+                  Cut in
                 </button>
               ) : null}
             </>

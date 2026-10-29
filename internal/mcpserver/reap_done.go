@@ -14,6 +14,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/reapverify"
 	"github.com/marcelocantos/jevons/internal/roles"
 )
@@ -111,9 +112,27 @@ func (s *Server) durableSeat(name string) bool {
 	if s.registry != nil {
 		if d := s.registry.Def(name); d != nil {
 			purpose = d.Purpose
+			// A product owner's auditor is its standing gate seat (🎯T1182):
+			// the PO queues verification there instead of running gates
+			// itself, so a finish-report closes one review, not the seat.
+			// On 2026-10-22 jv-auditor-po was reaped on its own gate report
+			// and the PO's pipeline had nowhere to send work. An auditor a
+			// worker or boss spawns for one mission stays reapable.
+			if roles.OfSeat(s.agentRole(name, purpose), "") == roles.Auditor && s.parentIsProductOwner(d.Parent) {
+				return true
+			}
 		}
 	}
 	return DurableFleetAgent(name, s.agentRole(name, purpose), nil)
+}
+
+func (s *Server) parentIsProductOwner(parent string) bool {
+	parent = strings.TrimSpace(parent)
+	if parent == "" || s.registry == nil {
+		return false
+	}
+	d := s.registry.Def(parent)
+	return d != nil && roles.OfSeat(s.seatRoleOf(*d), "") == roles.ProductOwner
 }
 
 // ShouldAutoReapDoneWorkAgent decides whether a declared finish-report
@@ -197,6 +216,24 @@ func reapDoneRemoval(reason string) fleetlog.Removal {
 	}
 }
 
+// maybeReapStoredDoneWorkAgent re-reads the durable report store and runs the
+// 🎯T165 path when the seat's latest *declared* envelope classifies Done
+// (🎯T1186 / 🎯T1190 design B). A later prose re-verification after restart
+// does not hide an earlier finish-report. A stale turn_in_flight latch on a
+// sidecar seat does not block reap once a done finish-report is stored.
+func (s *Server) maybeReapStoredDoneWorkAgent(name string) bool {
+	if s == nil || s.registry == nil || strings.TrimSpace(name) == "" {
+		return false
+	}
+	report := strings.TrimSpace(s.latestDeclaredStoredReport(name))
+	if report == "" || envelope.ClassifyDone(report) != envelope.DoneYes {
+		return false
+	}
+	had := s.registry.Def(name) != nil
+	s.maybeReapDoneWorkAgent(name, report)
+	return had && s.registry.Def(name) == nil
+}
+
 // maybeReapDoneWorkAgent runs after a terminal worker turn is notified to the
 // overseer: if the reply is a finished-work report (including imperfect bare
 // done — 🎯T195), leave the fleet (🎯T165).
@@ -214,6 +251,14 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 	}
 	ok, reason := ShouldAutoReapDoneWorkAgent(s.registry, name, report, s.durableSeat)
 	if !ok {
+		if reason == "unknown_report" {
+			if s.tryDeliverPlacementCorrection(name, report) {
+				return
+			}
+			if s.maybeReapStoredDoneWorkAgent(name) {
+				return
+			}
+		}
 		// Skip logs repeat the reason ShouldAutoReapDoneWorkAgent already
 		// returned. They match that string to the typed producer. They do
 		// not scan the report for a completion word, an ask, or a prefix
@@ -229,6 +274,14 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
 			slog.Info("T470 kept agent whose finish report was false-green flagged",
 				"agent", name, "reason", reason)
+			// 🎯T1122 clause 3: the owner-impact flag gets its own typed
+			// notice naming the missing slot, distinct from the generic
+			// false-green skip log above — the parent needs to know
+			// specifically to ask the worker to fill the slot, not just
+			// that something was flagged.
+			if flags[0].Kind == gate.FlagOwnerImpactMissingKind {
+				s.notifyParentOwnerImpactMissing(parent, name, targetID, flags[0])
+			}
 		}
 		if scope := outstandingScopeReasonsForWorker(report, workDir); len(scope) > 0 &&
 			reason == outstandingScopeReapReason(scope) {
@@ -243,6 +296,21 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 				"agent", name, "reason", reason, "outstanding_scope", kinds)
 			s.notifyParentOutstandingScope(parent, name, targetID, scope)
 		}
+		return
+	}
+	// 🎯T1257: the auto-reap path reaches killSubtree exactly like
+	// handleAgentStop — a finish-report-classified-done seat holding an
+	// undelivered owner-origin sendq entry must not be silently reaped out
+	// from under those messages, the same way a manual stop is refused.
+	// There is no caller-supplied override here (this sweep has no args to
+	// carry one): a pending owner message always holds the seat.
+	if pending := s.undeliveredOwnerMessages(name); len(pending) > 0 {
+		fields := reapDecisionFields(name, "owner_messages_pending", report)
+		fields["pending_owner_messages"] = len(pending)
+		s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
+		slog.Info("T1257 kept finished agent with undelivered owner message(s), not reaped",
+			"agent", name, "reason", reason, "pending_owner_messages", len(pending))
+		s.notifyParentPendingOwnerMessages(parent, name, targetID, pending)
 		return
 	}
 	// 🎯T753: a target whose implementation already landed is held out of
@@ -279,7 +347,7 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		if _, err := s.deliverByName(pending.Owes, msg, OriginAgent, false); err != nil {
 			slog.Warn("T753 owed-decision notice undelivered; escalating to overseer",
 				"owes", pending.Owes, "worker", name, "target", pending.TargetID, "err", err)
-			s.notifyFleetHealth(name, fmt.Sprintf("%s unreachable (%v) for: %s", pending.Owes, err, msg))
+			s.notifyFleetHealth(noticeAct, name, fmt.Sprintf("%s unreachable (%v) for: %s", pending.Owes, err, msg))
 		}
 	}
 
@@ -315,7 +383,49 @@ func (s *Server) notifyPORespawnAfterCheckpointReap(parent, worker, targetID str
 	if _, err := s.deliverByName(po, msg, OriginAgent, false); err != nil {
 		slog.Warn("T577 checkpoint-reap respawn notice undelivered to PO; escalating to overseer",
 			"po", po, "worker", worker, "target", targetID, "err", err)
-		s.notifyFleetHealth(worker, fmt.Sprintf("PO %s unreachable (%v) for: %s", po, err, msg))
+		s.notifyFleetHealth(noticeAct, worker, fmt.Sprintf("PO %s unreachable (%v) for: %s", po, err, msg))
+	}
+}
+
+// FormatOwnerImpactMissingNotice is the 🎯T1122 clause-3 parent-facing
+// notice: a finish-report touching owner-visible surface was kept, not
+// reaped, because it carried no owner-impact slot (or an explicit "none").
+// Names the missing slot and the three accepted values so the parent can
+// ask for exactly what is missing.
+func FormatOwnerImpactMissingNotice(targetID, worker string, flag gate.Flag) string {
+	tid := FormatTargetID(targetID)
+	if tid == "" {
+		tid = "its target"
+	}
+	w := strings.TrimSpace(worker)
+	if w == "" {
+		w = "worker"
+	}
+	return fmt.Sprintf(
+		"[owner-impact-missing 🎯T1122] %s worker %s reported finished work touching owner-visible "+
+			"surface but was kept, not reaped: %s. Ask it to resend with `jevons: owner-impact "+
+			"decision|fault|plan-change|none` naming what the owner does differently.",
+		tid, w, flag.Detail,
+	)
+}
+
+// notifyParentOwnerImpactMissing tells the seat's parent its finish-report
+// was kept for a missing owner-impact slot, naming the flag. Mirrors
+// notifyParentOutstandingScope's escalate-to-fleet-health-on-failure shape
+// (🎯T972).
+func (s *Server) notifyParentOwnerImpactMissing(parent, worker, targetID string, flag gate.Flag) {
+	if s == nil || strings.TrimSpace(worker) == "" {
+		return
+	}
+	p := strings.TrimSpace(parent)
+	if p == "" {
+		p = "jevons-po"
+	}
+	msg := FormatOwnerImpactMissingNotice(targetID, worker, flag)
+	if _, err := s.deliverByName(p, msg, OriginAgent, false); err != nil {
+		slog.Warn("T1122 owner-impact-missing notice undelivered to parent; escalating to overseer",
+			"parent", p, "worker", worker, "target", targetID, "err", err)
+		s.notifyFleetHealth(noticeAct, worker, fmt.Sprintf("parent %s unreachable (%v) for: %s", p, err, msg))
 	}
 }
 

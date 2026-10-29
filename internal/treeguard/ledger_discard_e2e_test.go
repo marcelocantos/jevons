@@ -120,6 +120,22 @@ func TestGitCleanForceRefusedWhileLedgerDirty(t *testing.T) {
 	}
 }
 
+func TestGitRestoreBullseyeRefusedWhileLedgerDirty(t *testing.T) {
+	dir := ledgerRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "bullseye.yaml"),
+		[]byte("schema_version: 5\ntargets: {T1147: {status: achieved}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := &Env{Store: &Store{Root: t.TempDir()}, RepoRoot: dir, Now: time.Now}
+	got, err := env.Pre(bashPayload(dir, "git restore --source=HEAD --worktree -- bullseye.yaml"))
+	if err != nil {
+		t.Fatalf("Pre: %v", err)
+	}
+	if got.Verdict != Deny {
+		t.Fatalf("Pre(git restore bullseye.yaml) = %+v, want Deny (🎯T1147)", got)
+	}
+}
+
 func TestGitCheckoutPathOfOtherFileStillAllowedWithDirtyLedger(t *testing.T) {
 	// Negative control (🎯T391's own direction pin, applied here): a path
 	// restore that does NOT name the ledger, and is not a whole-tree discard,

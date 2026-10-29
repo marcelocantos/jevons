@@ -25,7 +25,10 @@ var t742DoctrineFiles = []string{
 
 // flagKindConstRe pulls FlagX FlagKind = "word" out of internal/gate/*.go.
 // Source parse, not a helper: adding a constant the helper forgot must still go RED.
-var flagKindConstRe = regexp.MustCompile(`(?m)^\s+(Flag\w+)\s+FlagKind\s*=\s*"([a-z_]+)"`)
+// A constant may sit in a const block or stand alone on one line: 🎯T703
+// declared `const FlagAchieveProductPathUnrun FlagKind = …`, the block-only
+// pattern missed it, and the ratchet went red on trunk for every landing.
+var flagKindConstRe = regexp.MustCompile(`(?m)^\s*(?:const\s+)?(Flag\w+)\s+FlagKind\s*=\s*"([a-z_]+)"`)
 
 // hazardRuleRe pulls {kind: FlagX, region: RegionY from the closed table.
 var hazardRuleRe = regexp.MustCompile(`\{kind:\s*(Flag\w+),\s*region:\s*(Region\w+)`)

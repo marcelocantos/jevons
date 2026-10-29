@@ -26,20 +26,27 @@ func (s *Server) PlanAuthFailed(name string) bool {
 // showing would read as still broken. A seat that is refused again latches
 // it again on that turn.
 func (s *Server) ClearPlanAuthFailures(names []string) {
+	if s == nil || len(names) == 0 {
+		return
+	}
+	recovered := append([]string(nil), names...)
 	s.mu.Lock()
 	tracker := s.idleActivity
 	s.mu.Unlock()
-	if tracker == nil {
-		return
-	}
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	for _, name := range names {
-		act, ok := tracker.by[name]
-		if !ok || act.FailureClass != agenterr.ClassAuth {
-			continue
+	var authCleared []string
+	if tracker != nil {
+		tracker.mu.Lock()
+		defer tracker.mu.Unlock()
+		for _, name := range names {
+			act, ok := tracker.by[name]
+			if !ok || act.FailureClass != agenterr.ClassAuth {
+				continue
+			}
+			act.FailureClass = agenterr.ClassNone
+			tracker.by[name] = act
+			authCleared = append(authCleared, name)
 		}
-		act.FailureClass = agenterr.ClassNone
-		tracker.by[name] = act
 	}
+	s.onPlanLoginRecoveredForAuthHardBlock(recovered)
+	s.onPlanLoginRecoveredRedrive(authCleared) // 🎯T959
 }

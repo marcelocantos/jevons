@@ -69,5 +69,5 @@ func (s *Server) noticeBrokerLost(parent, occurrence, text string) {
 			slog.Warn("broker-lost notice to parent undelivered", "parent", parent, "occurrence", occurrence, "err", err)
 		}
 	}
-	s.notifyFleetHealth(occurrence, text)
+	s.notifyFleetHealth(noticeAct, occurrence, text)
 }

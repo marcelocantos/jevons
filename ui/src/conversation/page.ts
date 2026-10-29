@@ -23,3 +23,46 @@ export function shouldRequestPage(o: {
   if (sh > 0 && ch > 0 && sh <= ch) return false;
   return o.scrollTop < PAGE_TOP_PX;
 }
+
+/** Explicit control when the live tail is shorter than the pane (🎯T1159). */
+export function shouldOfferShowEarlier(o: {
+  older?: number;
+  truncated?: boolean;
+  inFlight?: boolean;
+  scrollHeight?: number;
+  clientHeight?: number;
+}): boolean {
+  if (o.inFlight) return false;
+  if (!o.older && !o.truncated) return false;
+  const sh = Number(o.scrollHeight) || 0;
+  const ch = Number(o.clientHeight) || 0;
+  if (!(sh > 0 && ch > 0 && sh <= ch)) return false;
+  return true;
+}
+
+/**
+ * Auto-fill (🎯T1248): an opened transcript whose tail is shorter
+ * than the pane pages older history by itself until the pane holds more than
+ * a screen, instead of leaving an empty pane and a "Show earlier" button.
+ * Prepending a `before` page does not leave the live window (🎯T1159 already
+ * backfills while following). The page bound stops a run of folded
+ * machine-only turns, which add no height, from pulling the whole history.
+ */
+export const AUTO_FILL_MAX_PAGES = 8;
+export const AUTO_FILL_SCREENS = 1.5;
+
+export function shouldAutoFillPane(o: {
+  older?: number;
+  inFlight?: boolean;
+  scrollHeight?: number;
+  clientHeight?: number;
+  pages: number;
+}): boolean {
+  if (o.inFlight) return false;
+  if (!o.older || o.older <= 0) return false;
+  if (o.pages >= AUTO_FILL_MAX_PAGES) return false;
+  const sh = Number(o.scrollHeight) || 0;
+  const ch = Number(o.clientHeight) || 0;
+  if (ch <= 0) return false;
+  return sh < ch * AUTO_FILL_SCREENS;
+}

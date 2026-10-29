@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -53,7 +54,16 @@ type DeadAgentReport struct {
 // gets launched by StartAll — so before intent existed the sweep read a
 // deliberately stopped AutoStart worker as a silent death every single pass.
 // That is one of the three resurrection paths of 2026-08-10.
-func deadRecoveryPlan(hasProc, alive, autoStart, intentAllows bool, purpose string) (detect, tryRecover, clearHandle, remove bool) {
+//
+// wasDeliberatelyStopped is 🎯T1112: a row a supervisor stop/kill left down
+// (seatstop.SourceSupervisor) looks identical to a silent crash here — a
+// known process handle that is no longer alive — so intentAllows flipping
+// true on its own (a mass jevons_fleet_intent write, no send/spawn/revive
+// aimed at this name) must not relaunch it. The sweep still detects and
+// reports it; it only recovers an AutoStart seat intent allows AND nothing
+// recorded as a deliberate stop/kill, i.e. a seat someone actually asked
+// for comes back some other way (adopt, revive, a fresh send/spawn).
+func deadRecoveryPlan(hasProc, alive, autoStart, intentAllows, wasDeliberatelyStopped bool, purpose string) (detect, tryRecover, clearHandle, remove bool) {
 	if !hasProc || alive {
 		return false, false, false, false
 	}
@@ -62,6 +72,13 @@ func deadRecoveryPlan(hasProc, alive, autoStart, intentAllows bool, purpose stri
 		// the handle is how a stopped row loses the evidence that its
 		// process died, and the owner asked for this one to be down.
 		return true, false, false, false
+	}
+	if autoStart && wasDeliberatelyStopped {
+		// Intent says this name may run again, but nothing addressed it —
+		// no send, no spawn, no explicit revive — so the ambient sweep
+		// leaves it exactly as stopped. Fall through to the same
+		// clear-handle path a non-AutoStart seat takes.
+		return true, false, true, false
 	}
 	if autoStart {
 		return true, true, false, false // clear only if recover fails (caller)
@@ -88,9 +105,14 @@ type fleetSweepReg interface {
 
 // claudiaSweep adapts *claudia.Registry to fleetSweepReg. account may be
 // nil: fleetlog's nil receiver still removes, just without the event.
+//
+// admit is 🎯T1112's spawn-governor hook: a relaunch of a dead AutoStart
+// handle is a mint for admission purposes, same as jevons_agent_start —
+// nil admits unconditionally (tests, and a server with no governor wired).
 type claudiaSweep struct {
 	reg     *claudia.Registry
 	account *fleetlog.Account
+	admit   func(purpose, name string) error
 }
 
 func (c claudiaSweep) List() []claudia.AgentDef {
@@ -120,7 +142,16 @@ func (c claudiaSweep) ExitCause(name string) string {
 }
 
 func (c claudiaSweep) Launch(name string) error {
-	_, err := fleet.LaunchRecovering(c.reg, name)
+	if c.admit != nil {
+		purpose := ""
+		if d := c.reg.Def(name); d != nil {
+			purpose = d.Purpose
+		}
+		if err := c.admit(purpose, name); err != nil {
+			return err
+		}
+	}
+	_, err := fleet.LaunchAutoRecovering(c.reg, name)
 	return err
 }
 
@@ -148,11 +179,73 @@ func (c claudiaSweep) RemoveDeadSeat(name string) error {
 //
 // overseerName is never recovered here (owner chat overseer has its own path).
 // Returns every detected dead name; Recovered true when Launch succeeded.
-func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot, hold func(name string) string) []DeadAgentReport {
+func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot, hold func(name string) string, deliberateStop func(name string) bool, admit func(purpose, name string) error) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}
-	return sweepDeadAgents(claudiaSweep{reg: reg, account: account}, overseerName, intent, hold)
+	return sweepDeadAgents(claudiaSweep{reg: reg, account: account, admit: admit}, overseerName, intent, hold, deliberateStop)
+}
+
+// recoverResumeRefusedStopped retries stopped AutoStart seats that boot or a
+// prior relaunch left in resume-refusal escalation (🎯T1135). Dead-handle
+// recovery already calls LaunchAutoRecovering; this path covers rows with no
+// process handle so the owner is not stuck until the next daemon bounce.
+func recoverResumeRefusedStopped(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot, hold func(name string) string, deliberateStop func(name string) bool, admit func(purpose, name string) error) []DeadAgentReport {
+	if reg == nil {
+		return nil
+	}
+	sweep := claudiaSweep{reg: reg, account: account, admit: admit}
+	var out []DeadAgentReport
+	for _, d := range reg.List() {
+		if d.Name == "" || d.Name == overseerName || !d.AutoStart {
+			continue
+		}
+		if fleet.ResumeRefusalAttempts(d.Name) == 0 {
+			continue
+		}
+		hasProc, alive := sweep.ProcState(d.Name)
+		if hasProc {
+			continue // dead-handle sweep owns non-alive handles
+		}
+		if alive {
+			continue
+		}
+		dec := intent.Allow(d.Name, fleetintent.ControlRevive)
+		allow := dec.Allow
+		declineReason := dec.Reason
+		if allow && hold != nil {
+			if why := hold(d.Name); why != "" {
+				allow = false
+				declineReason = why
+			}
+		}
+		rep := DeadAgentReport{Name: d.Name, Detail: "resume refusal retry (🎯T1135)"}
+		if !allow {
+			rep.Declined = declineReason
+			out = append(out, rep)
+			continue
+		}
+		if deliberateStop != nil && deliberateStop(d.Name) {
+			rep.Declined = "deliberate supervisor stop (T1112)"
+			out = append(out, rep)
+			continue
+		}
+		if launchErr := sweep.Launch(d.Name); errors.Is(launchErr, fleet.ErrSeatReapedForResumeRefusal) {
+			rep.Removed = true
+			rep.Detail = "resume refusal escalated to reap (🎯T1135)"
+			slog.Info("fleet health: removed stopped AutoStart seat after resume refusal escalation", "name", d.Name)
+		} else if launchErr != nil {
+			rep.Error = launchErr.Error()
+			slog.Warn("fleet health: stopped AutoStart resume-refusal retry failed",
+				"name", d.Name, "err", launchErr)
+		} else {
+			rep.Recovered = true
+			rep.Detail = "resume refusal retry succeeded (🎯T1135)"
+			slog.Info("fleet health: re-launched stopped AutoStart seat after resume refusal", "name", d.Name)
+		}
+		out = append(out, rep)
+	}
+	return out
 }
 
 // sweepDeadAgents is the testable implementation (real path + hermetic fakes).
@@ -162,7 +255,14 @@ func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overse
 // achieved. hold names only frontier-consume's own seats (by name, not by
 // AutoStart, which named workers and POs carry too), so a named worker's or
 // PO's crash-recovery relaunch is never held here. Nil holds nothing.
-func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.Snapshot, hold func(name string) string) []DeadAgentReport {
+//
+// deliberateStop is 🎯T1112: reports that name's last recorded stop was a
+// supervisor stop/kill, not a crash the harness merely discovered. A dead
+// AutoStart handle in that state is left stopped however intent reads —
+// reviving it is the explicit revive/send/spawn paths' job, not this
+// ambient sweep's. Nil treats every dead handle as a possible silent death
+// (pre-🎯T1112 behaviour).
+func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.Snapshot, hold func(name string) string, deliberateStop func(name string) bool) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}
@@ -183,7 +283,8 @@ func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.
 				declineBlocking = "auto_seat_hold"
 			}
 		}
-		detect, tryRecover, clearHandle, remove := deadRecoveryPlan(hasProc, alive, d.AutoStart, allow, d.Purpose)
+		wasDeliberatelyStopped := deliberateStop != nil && deliberateStop(d.Name)
+		detect, tryRecover, clearHandle, remove := deadRecoveryPlan(hasProc, alive, d.AutoStart, allow, wasDeliberatelyStopped, d.Purpose)
 		if !detect {
 			continue
 		}
@@ -197,11 +298,15 @@ func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.
 			continue
 		}
 		if tryRecover {
-			if err := reg.Launch(d.Name); err != nil {
-				rep.Error = err.Error()
+			if launchErr := reg.Launch(d.Name); errors.Is(launchErr, fleet.ErrSeatReapedForResumeRefusal) {
+				rep.Removed = true
+				rep.Detail = "resume refusal escalated to reap (🎯T1135)"
+				slog.Info("fleet health: removed AutoStart seat after resume refusal escalation", "name", d.Name)
+			} else if launchErr != nil {
+				rep.Error = launchErr.Error()
 				reg.Stop(d.Name)
 				slog.Warn("fleet health: dead AutoStart agent re-launch failed",
-					"name", d.Name, "err", err)
+					"name", d.Name, "err", launchErr)
 			} else {
 				rep.Recovered = true
 				slog.Info("fleet health: re-launched dead AutoStart agent", "name", d.Name)
@@ -238,7 +343,7 @@ func (s *Server) notifyDeadAgents(reps []DeadAgentReport) {
 	}
 	line := FormatDeadAgentReport(reps)
 	slog.Info(line)
-	s.notifyFleetHealth(s.deadAgentOccurrence(reps), line)
+	s.notifyFleetHealth(noticeAct, s.deadAgentOccurrence(reps), line)
 }
 
 func (s *Server) forgetDeadAgentStreaks() {

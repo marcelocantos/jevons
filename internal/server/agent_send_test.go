@@ -68,7 +68,7 @@ func TestHandleAgentSendOverseerDownNacks(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.overseerName = "jevons"
 	req := httptest.NewRequest(http.MethodPost, "/api/agents/jevons/send",
-		strings.NewReader(`{"text":"should nack"}`))
+		strings.NewReader(`{"text":"should nack","origin":"owner"}`))
 	req.SetPathValue("name", "jevons")
 	rr := httptest.NewRecorder()
 	s.handleAgentSend(rr, req)

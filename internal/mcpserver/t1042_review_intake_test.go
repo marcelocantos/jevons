@@ -37,10 +37,7 @@ func TestT1042ActualReportProducerReplayAndLifecycle(t *testing.T) {
 	if err != nil || len(rows) != 1 || rows[0].Identity.ID != "hardware-visual-review" || rows[0].Review == nil || rows[0].Review.Readiness != ownerquestion.PrerequisiteBlocked || !strings.Contains(rows[0].Text, "Reconnect the Fold") || !strings.Contains(rows[0].Text, "accept/reject") {
 		t.Fatalf("view %+v %v", rows, err)
 	}
-	entries, _, err := ownerquestions.New(state).Snapshot()
-	if err != nil || len(entries) != 1 || entries[0].Delivered || entries[0].Status != "spooled" {
-		t.Fatalf("outbox %+v %v", entries, err)
-	}
+	assertT1042OutboxHonestAudit(t, state, 1)
 	// A changed artifact revises the ask once; a stale replay cannot re-page it.
 	revised := strings.ReplaceAll(string(raw), "artifacts/t1041-development-800.png", "artifacts/t1041-development-800-revised.png")
 	s.storeAgentReport("reviewer", revised)
@@ -61,7 +58,11 @@ func TestT1042ActualReportProducerReplayAndLifecycle(t *testing.T) {
 	if err := ownerquestionview.New(state).Resolve(rows[0].Identity, ownerquestionview.Answered, "owner accepted after hardware review"); err != nil {
 		t.Fatal(err)
 	}
-	if err := ownerquestions.New(state).Resolve(entries[0].Question.Key); err != nil {
+	notify, _, err := ownerquestions.New(state).Snapshot()
+	if err != nil || len(notify) != 1 {
+		t.Fatalf("outbox before resolve %+v %v", notify, err)
+	}
+	if err := ownerquestions.New(state).Resolve(notify[0].Question.Key); err != nil {
 		t.Fatal(err)
 	}
 	s.storeAgentReport("reviewer", string(raw))
@@ -70,6 +71,33 @@ func TestT1042ActualReportProducerReplayAndLifecycle(t *testing.T) {
 	}
 	if entries, _, _ := ownerquestions.New(state).Snapshot(); len(entries) != 0 {
 		t.Fatalf("answered outbox %+v", entries)
+	}
+}
+
+// assertT1042OutboxHonestAudit checks the durable owner-questions notification
+// file written by production Store.Observe (🎯T1042 acceptance: spooled blurter
+// ack is not owner delivery). Snapshot reloads from disk; blurter may be a PATH
+// shim but the outbox is not mocked.
+func assertT1042OutboxHonestAudit(t *testing.T, stateDir string, want int) {
+	t.Helper()
+	entries, _, err := ownerquestions.New(stateDir).Snapshot()
+	if err != nil || len(entries) != want {
+		t.Fatalf("snapshot %+v err=%v want %d", entries, err, want)
+	}
+	if want == 0 {
+		return
+	}
+	e := entries[0]
+	if e.Delivered || e.Status != "spooled" || e.SpoolPath == "" {
+		t.Fatalf("honest audit entry %+v", e)
+	}
+	raw, err := os.ReadFile(filepath.Join(stateDir, "owner-questions-notifications.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, `"delivered": false`) || !strings.Contains(body, `"status": "spooled"`) {
+		t.Fatalf("on-disk outbox missing spooled-vs-delivered audit: %s", body)
 	}
 }
 

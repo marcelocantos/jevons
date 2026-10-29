@@ -40,16 +40,16 @@ describe('AgentTree seat stops (🎯T662)', () => {
     expect(alerts[0].textContent).toContain('MASS STOP');
     expect(alerts[0].textContent).toContain('unknown: 3 seats, no reason recorded');
 
-    const reasons = [...container.querySelectorAll('.agent-stop-reason')].map((n) => n.textContent);
+    const reasons = [...container.querySelectorAll('.agent-stop-icon')].map((n) => n.textContent);
     expect(reasons).toEqual([
-      '⛔ unknown: process exited and no reason was recorded',
-      '⛔ jevons_agent_stop by jevons: parked for the night',
+      '⛔',
+      '⛔',
     ]);
     // The running PO carries the line for the alert but no reason of its own.
     const po = [...container.querySelectorAll('.agent-node')].find((n) =>
       n.querySelector('.agent-name')?.textContent === 'jevons-po',
     );
-    expect(po?.querySelector('.agent-stop-reason')).toBeNull();
+    expect(po?.querySelector('.agent-stop-icon')).toBeNull();
   });
 
   it('paints a broken rehydrate on a stopped row and skips a resumable one', () => {
@@ -102,7 +102,7 @@ describe('AgentTree seat stops (🎯T662)', () => {
         n.querySelector('.agent-name')?.textContent === name,
       );
       return {
-        stop: row?.querySelector('.agent-stop-reason')?.textContent ?? '',
+        stop: row?.querySelector('.agent-stop-icon')?.textContent ?? '',
         rehydrate: row?.querySelector('.agent-rehydrate')?.textContent ?? '',
       };
     };
@@ -110,8 +110,8 @@ describe('AgentTree seat stops (🎯T662)', () => {
       stop: '',
       rehydrate: 'broken: acp authenticate cursor_login: connection closed',
     });
-    expect(text('mm2-t65-keys-doors').stop).toBe('⛔ unknown: process exited and no reason was recorded');
-    expect(text('claudia-po').stop).toBe('⛔ jevons_agent_stop by jevons: parked');
+    expect(text('mm2-t65-keys-doors').stop).toBe('⛔');
+    expect(text('claudia-po').stop).toBe('⛔');
     expect(text('claudia-po').rehydrate).toBe('broken: provider refused');
   });
 
@@ -131,7 +131,7 @@ describe('AgentTree seat stops (🎯T662)', () => {
     const po = [...container.querySelectorAll('.agent-node')].find((n) =>
       n.querySelector('.agent-name')?.textContent === 'jevons-po',
     );
-    expect(po?.querySelector('.agent-stop-reason')).toBeNull();
+    expect(po?.querySelector('.agent-stop-icon')).toBeNull();
   });
 
   it('shows nothing extra when the fleet is healthy', () => {
@@ -143,7 +143,7 @@ describe('AgentTree seat stops (🎯T662)', () => {
       />,
     );
     expect(container.querySelector('.fleet-mass-stop')).toBeNull();
-    expect(container.querySelector('.agent-stop-reason')).toBeNull();
+    expect(container.querySelector('.agent-stop-icon')).toBeNull();
     expect(massStopLine([{ name: 'a' }, { name: 'b', mass_stop: ' ' }])).toBe('');
   });
 });

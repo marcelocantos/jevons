@@ -4,17 +4,26 @@
 import { describe, expect, it } from 'vitest';
 import {
   distanceFromEnd,
+  settlePinGapPx,
   explainedByGrowth,
   followAfterScroll,
   pinWriteScrollTop,
   shouldAbortPinForMidList,
   shouldHoldFollow,
+  shouldSkipFollowRepinWhenAtLiveEnd,
 } from './followPin';
 
 describe('followPin', () => {
   it('over-assigns scrollHeight, not sh − ch (🎯T351)', () => {
     expect(pinWriteScrollTop(1200)).toBe(1200);
     expect(pinWriteScrollTop(0)).toBe(0);
+  });
+
+  it('treats sub-pixel pin slack as settled (T532)', () => {
+    expect(settlePinGapPx(0)).toBe(true);
+    expect(settlePinGapPx(4)).toBe(true);
+    expect(settlePinGapPx(8)).toBe(true);
+    expect(settlePinGapPx(9)).toBe(false);
   });
 
   it('keeps follow during a pin even when measure growth looks like a leave', () => {
@@ -205,6 +214,50 @@ describe('growth is not a leave (🎯T587)', () => {
     ).toBe(true);
     expect(
       explainedByGrowth({ fromBottom: 400, scrollHeight: 5000, prevHeight: 5000 }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldSkipFollowRepinWhenAtLiveEnd (🎯T494.1)', () => {
+  it('never skips on scrollTop=0 — hard reload is not "at live end" (🎯T1164)', () => {
+    expect(
+      shouldSkipFollowRepinWhenAtLiveEnd({
+        hydrateSettled: true,
+        scrollTop: 0,
+        scrollHeight: 900,
+        clientHeight: 900,
+      }),
+    ).toBe(false);
+  });
+
+  it('skips repin after hydrate when already at the canvas live end', () => {
+    expect(
+      shouldSkipFollowRepinWhenAtLiveEnd({
+        hydrateSettled: true,
+        scrollTop: 3200,
+        scrollHeight: 3500,
+        clientHeight: 300,
+      }),
+    ).toBe(true);
+  });
+  it('does not skip before hydrate settles', () => {
+    expect(
+      shouldSkipFollowRepinWhenAtLiveEnd({
+        hydrateSettled: false,
+        scrollTop: 3200,
+        scrollHeight: 3500,
+        clientHeight: 300,
+      }),
+    ).toBe(false);
+  });
+  it('does not skip when a two-bottom tail remains', () => {
+    expect(
+      shouldSkipFollowRepinWhenAtLiveEnd({
+        hydrateSettled: true,
+        scrollTop: 2980,
+        scrollHeight: 3500,
+        clientHeight: 300,
+      }),
     ).toBe(false);
   });
 });

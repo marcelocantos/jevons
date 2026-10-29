@@ -4,6 +4,10 @@
 package fleet
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -113,5 +117,78 @@ func TestRefusalTextIsActionable(t *testing.T) {
 	}
 	if !strings.Contains(why, "gate") {
 		t.Fatalf("refusal does not name the missing access: %q", why)
+	}
+}
+
+// 🎯T1232: a Codex work seat must be able to compile and test, not only edit.
+// jv-t1228-controlplane-retry could not open the Go build cache or create the
+// testhome root under workspace-write (2026-10-27).
+func TestCodexWorkSeatCanReachBuildAndTestCaches(t *testing.T) {
+	t.Setenv("GOCACHE", "")
+	t.Setenv("GOMODCACHE", "")
+	t.Setenv("GOPATH", "")
+	t.Setenv("PLAYWRIGHT_BROWSERS_PATH", "")
+	roots, _ := CodexWorkSandboxTuning(claudia.ProviderCodex, claudia.PurposeWork, "")
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		t.Skip("no user cache dir on this host")
+	}
+	home, _ := os.UserHomeDir()
+	for _, want := range []string{
+		filepath.Join(cache, "go-build"),
+		filepath.Join(home, "go", "pkg", "mod"),
+		filepath.Join(cache, "jevons-testhome"),
+		filepath.Join(cache, "ms-playwright"),
+	} {
+		if !slices.Contains(roots, want) {
+			t.Errorf("Codex work grant lacks %q; roots=%v", want, roots)
+		}
+	}
+	t.Setenv("GOCACHE", "/custom/gocache")
+	roots, _ = CodexWorkSandboxTuning(claudia.ProviderCodex, claudia.PurposeWork, "")
+	if !slices.Contains(roots, "/custom/gocache") {
+		t.Errorf("GOCACHE override not granted; roots=%v", roots)
+	}
+}
+
+// 🎯T1232: integrate, the only landing path for a worktree seat, runs as the
+// seat's child and writes the shared clone. A Codex work seat's grant names
+// that clone, so jv-t1228-retry-2's GREEN work could land from its own seat.
+func TestCodexWorktreeSeatGrantIncludesItsSharedClone(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "proj")
+	seat := filepath.Join(root, ".jevons-worktrees-proj", "jv-seat")
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "core.hooksPath=/dev/null", "-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(repo, "init", "-q")
+	git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+	//worktreereap:exempt the repo and its worktree both live in t.TempDir; no shared clone or host tree is touched
+	git(repo, "worktree", "add", "-q", seat)
+
+	def := &claudia.AgentDef{Name: "jv-seat", Provider: claudia.ProviderCodex, Purpose: claudia.PurposeWork, WorkDir: seat}
+	ApplyWorkSeatSandbox(def, "")
+	want, _ := filepath.EvalSymlinks(repo)
+	found := false
+	for _, r := range def.SandboxWritableRoots {
+		if got, _ := filepath.EvalSymlinks(r); got == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("shared clone %q missing from Codex grant %v", want, def.SandboxWritableRoots)
+	}
+
+	plain := &claudia.AgentDef{Name: "jv-plain", Provider: claudia.ProviderCodex, Purpose: claudia.PurposeWork, WorkDir: repo}
+	ApplyWorkSeatSandbox(plain, "")
+	if len(plain.SandboxWritableRoots) != len(def.SandboxWritableRoots)-1 {
+		t.Fatalf("a seat that is not a worktree gained an extra root: %v", plain.SandboxWritableRoots)
 	}
 }

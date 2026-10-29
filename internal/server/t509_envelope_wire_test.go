@@ -13,14 +13,14 @@ import (
 )
 
 func TestT509ChatWireAttachesValidEnvelope(t *testing.T) {
-	text := envelope.Format(&envelope.Message{
+	text := wireOwnerReplyDecision(envelope.Format(&envelope.Message{
 		Kind:         envelope.KindFinishReport,
 		Target:       "T509",
 		SHA:          "abcdef0123456",
 		Verdict:      envelope.VerdictGreen,
 		SilentLedger: envelope.SilentLedgerEmpty,
 		Payload:      "Landed.",
-	})
+	}))
 	line, ok := chatWireLine(claudia.Event{Type: "assistant", Text: text})
 	if !ok {
 		t.Fatal("wire dropped the envelope message")
@@ -42,7 +42,7 @@ func TestT509ChatWireAttachesValidEnvelope(t *testing.T) {
 }
 
 func TestT509ChatWireFlagsMalformedLoadBearing(t *testing.T) {
-	text := "```jevons\njevons: kind finish-report\njevons: target T509\n```\n\nDone."
+	text := wireOwnerReplyDecision("```jevons\njevons: kind finish-report\njevons: target T509\n```\n\nDone.")
 	line, ok := chatWireLine(claudia.Event{Type: "assistant", Text: text})
 	if !ok {
 		t.Fatal("malformed envelope must still be delivered")
@@ -66,12 +66,9 @@ func TestT509ChatWireFlagsMalformedLoadBearing(t *testing.T) {
 	}
 }
 
-func TestT509ChatWireUnenvelopedUnchanged(t *testing.T) {
-	line, ok := chatWireLine(claudia.Event{Type: "assistant", Text: "hello"})
-	if !ok {
-		t.Fatal("dropped")
-	}
-	if strings.Contains(line, `"envelope"`) {
-		t.Fatalf("unenveloped message must not grow an envelope field: %s", line)
+func TestT1140UnenvelopedOverseerProseSuppressed(t *testing.T) {
+	_, ok := chatWireLine(claudia.Event{Type: "assistant", Text: "hello"})
+	if ok {
+		t.Fatal("undeclared overseer prose must not reach owner wire (🎯T1140)")
 	}
 }

@@ -5,9 +5,6 @@ import { createElement, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { setNow, reset as resetClock } from '../clock';
 import { PlanUsageBar } from './PlanUsageBar';
 import { companyOfProvider } from '../plan/companyMark';
@@ -15,9 +12,8 @@ import { WEEKLY_LIMIT_SECONDS } from '../plan/windowGeom';
 import type { MuxClient } from '../mux/client';
 import { PLAN_USAGE_CHANNEL } from '../mux/protocol';
 
-const here = dirname(fileURLToPath(import.meta.url));
 
-describe('PlanUsageBar mux wiring', () => {
+describe.sequential('PlanUsageBar mux wiring', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
   });
@@ -25,28 +21,87 @@ describe('PlanUsageBar mux wiring', () => {
     vi.unstubAllGlobals();
   });
 
-  it('reloads kick GET /api/plan-usage?refresh=1', async () => {
+  it('opening and revisiting the tab never collect usage', () => {
     const mux = {
       subscribe() { return () => {}; },
+      openChannel: vi.fn(), closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    render(createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux })));
+    fireEvent(document, new Event('visibilitychange'));
+    fireEvent(window, new Event('focus'));
+    expect(mux.openChannel).toHaveBeenCalledWith(PLAN_USAGE_CHANNEL);
+    expect(vi.mocked(globalThis.fetch).mock.calls.filter(([url]) => String(url).startsWith('/api/plan-usage?'))).toEqual([]);
+  });
+
+  it('shows usage unavailable when mux reports explicit unreadable (no stale green)', async () => {
+    const handlers = new Map<string, (env: { t: string; ch: string; body?: unknown }) => void>();
+    const mux = {
+      subscribe(ch: string, handler: (env: { t: string; ch: string; body?: unknown }) => void) {
+        handlers.set(ch, handler);
+        return () => handlers.delete(ch);
+      },
       openChannel: vi.fn(),
       closeChannel: vi.fn(),
     } as unknown as MuxClient;
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
-    render(createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux })));
-    await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/plan-usage?refresh=1', expect.anything());
+    const { container } = render(createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux })));
+    const send = handlers.get(PLAN_USAGE_CHANNEL)!;
+    send({
+      t: 'frame',
+      ch: PLAN_USAGE_CHANNEL,
+      body: {
+        backends: [
+          { provider: 'claude', status: 'available', windows: [{ name: 'weekly', remaining_percent: 40 }] },
+          { provider: 'grok', status: 'available', windows: [{ name: 'weekly', remaining_percent: 8 }] },
+        ],
+      },
     });
+    await waitFor(() => expect(container.querySelector('[data-provider="grok"] .plan-bar-fill')).toBeTruthy());
+    send({
+      t: 'frame',
+      ch: PLAN_USAGE_CHANNEL,
+      body: {
+        backends: [
+          { provider: 'claude', status: 'unavailable', reason: 'HTTP 429', windows: [] },
+          { provider: 'grok', status: 'unavailable', reason: 'HTTP 429', windows: [] },
+        ],
+      },
+    });
+    await waitFor(() => expect(container.querySelector('[data-provider="claude"] .plan-nodata')).toBeTruthy());
+    expect(container.textContent).toContain('usage unavailable');
+    expect(container.querySelector('[data-provider="claude"] .plan-bar-fill')).toBeNull();
   });
 
-  it('subscribes to plan-usage mux and does not 60s-poll when mux is connected', () => {
-    const src = readFileSync(join(here, 'PlanUsageBar.tsx'), 'utf8');
-    expect(src).toContain('PLAN_USAGE_CHANNEL');
-    expect(src).toContain('openChannel');
-    expect(src).toContain('enabled: !props.mux');
-    expect(src).toContain('if (props.mux) return false');
-    expect(src).toContain("fetch('/api/plan-usage', { signal })");
-    expect(src).toContain("fetch('/api/plan-usage?refresh=1'");
-    expect(src).toContain('CompanyMark');
+  it('re-hydrates from GET /api/plan-usage on mux reconnect reset', async () => {
+    const handlers = new Map<string, (env: { t: string; ch: string; body?: unknown }) => void>();
+    const mux = {
+      subscribe(ch: string, handler: (env: { t: string; ch: string; body?: unknown }) => void) {
+        handlers.set(ch, handler);
+        return () => handlers.delete(ch);
+      },
+      openChannel: vi.fn(),
+      closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      if (input === '/api/plan-usage') {
+        return {
+          ok: true,
+          json: async () => ({
+            backends: [{ provider: 'grok', status: 'available', windows: [{ name: 'weekly', remaining_percent: 21 }] }],
+          }),
+        };
+      }
+      if (input === '/api/plan-usage?refresh=1') {
+        return { ok: true, json: async () => ({ backends: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    const { container } = render(createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux })));
+    handlers.get(PLAN_USAGE_CHANNEL)!({ t: 'reset', ch: PLAN_USAGE_CHANNEL });
+    await waitFor(() => expect(container.querySelector('[data-provider="grok"] .plan-bar-fill')).toBeTruthy());
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/plan-usage', expect.anything());
   });
 
   it('maps cursor through the shared company mark', () => {
@@ -355,6 +410,42 @@ describe('PlanUsageBar mux wiring', () => {
     });
     await waitFor(() => expect(container.querySelector('[data-provider="claude"]')).toBeTruthy());
     expect(container.querySelector('.plan-spend')).toBeFalsy();
+  });
+
+  // 🎯T967.4: Cursor never paints a dollar figure. Live DashboardService
+  // carries unitless spend counters without currency or on-demand
+  // enablement; the served payload therefore has no spend, and the bar
+  // must stay silent even when the monthly window is full.
+  it('shows no Cursor dollar figure at a full monthly window (T967.4 silence)', async () => {
+    const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
+    const mux = {
+      subscribe(ch: string, handler: (env: { t: string; ch: string; body: unknown }) => void) {
+        handlers.set(ch, handler);
+        return () => handlers.delete(ch);
+      },
+      openChannel: vi.fn(),
+      closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    const tree: ReactNode = createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux }));
+    const { container } = render(tree);
+    handlers.get(PLAN_USAGE_CHANNEL)!({
+      t: 'frame',
+      ch: PLAN_USAGE_CHANNEL,
+      body: {
+        backends: [
+          {
+            provider: 'cursor',
+            status: 'available',
+            windows: [{ name: 'monthly', remaining_percent: 0, used_percent: 100, band: 'exhausted' }],
+            // no spend — T967.4 residue: unit/enablement not established
+          },
+        ],
+      },
+    });
+    await waitFor(() => expect(container.querySelector('[data-provider="cursor"]')).toBeTruthy());
+    expect(container.querySelector('.plan-spend')).toBeFalsy();
+    expect(container.textContent || '').not.toMatch(/A\$/);
   });
 
   it('spend figure survives an override that paints the bar ok (override-proof)', async () => {

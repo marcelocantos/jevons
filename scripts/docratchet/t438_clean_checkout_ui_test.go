@@ -16,10 +16,12 @@
 package docratchet_test
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/jevons/internal/worktreereap"
 )
@@ -53,7 +55,7 @@ func TestT438CleanCheckoutUISuiteInvocable(t *testing.T) {
 	// hand-copied node_modules or a symlink into the shared clone.
 	install := exec.Command("make", "playwright-deps")
 	install.Dir = wt
-	if out, err := install.CombinedOutput(); err != nil {
+	if out, err := runWithTimeout(t, install, 3*time.Minute); err != nil {
 		t.Fatalf("`make playwright-deps` failed in a clean checkout of HEAD (%v).\n"+
 			"A pristine worktree must install playwright without caller memory.\n%s",
 			err, out)
@@ -62,7 +64,7 @@ func TestT438CleanCheckoutUISuiteInvocable(t *testing.T) {
 	playwrightMod := filepath.Join(wt, "scripts", "browser-loop-test", "node_modules", "playwright")
 	requireCmd := exec.Command("node", "-e", "require("+jsString(playwrightMod)+")")
 	requireCmd.Dir = wt
-	if out, err := requireCmd.CombinedOutput(); err != nil {
+	if out, err := runWithTimeout(t, requireCmd, 30*time.Second); err != nil {
 		msg := string(out)
 		if strings.Contains(msg, "MODULE_NOT_FOUND") || strings.Contains(err.Error(), "MODULE_NOT_FOUND") {
 			t.Fatalf("playwright still MODULE_NOT_FOUND after make playwright-deps (%v).\n"+
@@ -94,7 +96,11 @@ func TestT438CleanCheckoutUISuiteInvocable(t *testing.T) {
 	} {
 		ui := exec.Command(step[0], step[1:]...)
 		ui.Dir = wt
-		out, err := ui.CombinedOutput()
+		limit := 5 * time.Minute
+		if step[0] == "node" {
+			limit = 3 * time.Minute
+		}
+		out, err := runWithTimeout(t, ui, limit)
 		if err == nil {
 			continue
 		}
@@ -106,6 +112,21 @@ func TestT438CleanCheckoutUISuiteInvocable(t *testing.T) {
 		}
 		t.Fatalf("`%s` RED on clean HEAD (%v).\n%s", strings.Join(step, " "), err, out)
 	}
+}
+
+func runWithTimeout(t *testing.T, cmd *exec.Cmd, limit time.Duration) ([]byte, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	wrapped := exec.CommandContext(ctx, cmd.Args[0], cmd.Args[1:]...)
+	wrapped.Dir = cmd.Dir
+	wrapped.Env = cmd.Env
+	out, err := wrapped.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("%s timed out after %v (subprocess still running or blocked on I/O).\n%s",
+			strings.Join(wrapped.Args, " "), limit, out)
+	}
+	return out, err
 }
 
 func jsString(s string) string {

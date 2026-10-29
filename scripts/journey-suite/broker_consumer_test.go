@@ -22,8 +22,9 @@ func TestIsolatedBrokerCommandCarriesConsumerConfiguration(t *testing.T) {
 		"CLAUDIA_OMP_SPOOL_DIR=", "XDG_STATE_HOME=/owner/state",
 	}, bin, root, state, sidecar)
 	wantArgs := []string{bin, "broker", "serve", "-state-dir", filepath.Join(root, "state"),
-		"-socket", filepath.Join(root, "broker.sock"), "-no-resume", "-restart-nudge", "-",
-		"-mcp-seed-dir", state, "-mcp-consumer-prefix", "jevonsmcp"}
+		"-socket", filepath.Join(root, "state", "broker.sock"), "-no-resume", "-restart-nudge", "-",
+		"-mcp-seed-dir", filepath.Join(root, "state", "mcp-seed"), "-mcp-consumer-prefix", "jevonsmcp",
+		usageOverrideFlag}
 	if !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("broker invocation=%v, want %v", cmd.Args, wantArgs)
 	}

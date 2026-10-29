@@ -97,6 +97,13 @@ type Entry struct {
 	// Members are the comma-joined ids of the original entries folded into this digest
 	// (🎯T774). The originals live in the digest archive, readable by id.
 	Members string `json:"members,omitempty"`
+	// OwnerOrigin marks a message the owner spoke (origin=owner at the
+	// deliver-by-name layer), as opposed to an agent/system notification
+	// (🎯T1257). A seat is never parked or reaped while it holds an
+	// undelivered OwnerOrigin entry: jevons_agent_stop reads this flag
+	// before it proceeds. Agent-origin traffic (idle nudges, worker
+	// reports, repo-watch, sentinel) leaves it false.
+	OwnerOrigin bool `json:"owner_origin,omitempty"`
 }
 
 type DeliveryState string
@@ -427,6 +434,18 @@ func (s *Store) Append(agent, text string, at time.Time) (Entry, int, error) {
 // AppendWithRequestID holds an admitted question with the ID issued at host
 // intake. Empty means a legacy/non-owner message; the queue never mints one.
 func (s *Store) AppendWithRequestID(agent, text, requestID string, at time.Time) (Entry, int, error) {
+	return s.appendOriginWithRequestID(agent, text, requestID, false, at)
+}
+
+// AppendOwnerOriginWithRequestID is AppendWithRequestID for a message the
+// owner spoke (🎯T1257). The resulting entry is OwnerOrigin, so
+// jevons_agent_stop refuses to park or reap the seat while it is still in
+// the queue.
+func (s *Store) AppendOwnerOriginWithRequestID(agent, text, requestID string, at time.Time) (Entry, int, error) {
+	return s.appendOriginWithRequestID(agent, text, requestID, true, at)
+}
+
+func (s *Store) appendOriginWithRequestID(agent, text, requestID string, ownerOrigin bool, at time.Time) (Entry, int, error) {
 	if s == nil {
 		return Entry{}, 0, fmt.Errorf("sendq: no store")
 	}
@@ -439,7 +458,7 @@ func (s *Store) AppendWithRequestID(agent, text, requestID string, at time.Time)
 	if err := duplicateRequestID(f.Entries, text, requestID); err != nil {
 		return Entry{}, 0, err
 	}
-	e := Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC()}
+	e := Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC(), OwnerOrigin: ownerOrigin}
 	f.Entries = append(f.Entries, e)
 	if err := s.save(f); err != nil {
 		return Entry{}, 0, err
@@ -463,6 +482,17 @@ func (s *Store) AppendSuperseding(agent, text string, at time.Time, supersedes f
 // would otherwise match it). A previously receipt-bound entry also keeps its
 // identity when returned to Pending.
 func (s *Store) AppendSupersedingWithRequestID(agent, text, requestID string, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
+	return s.appendSupersedingOriginWithRequestID(agent, text, requestID, false, at, supersedes)
+}
+
+// AppendSupersedingOwnerOriginWithRequestID is AppendSupersedingWithRequestID
+// for a message the owner spoke (🎯T1257): the surviving entry is marked
+// OwnerOrigin so jevons_agent_stop sees it.
+func (s *Store) AppendSupersedingOwnerOriginWithRequestID(agent, text, requestID string, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
+	return s.appendSupersedingOriginWithRequestID(agent, text, requestID, true, at, supersedes)
+}
+
+func (s *Store) appendSupersedingOriginWithRequestID(agent, text, requestID string, ownerOrigin bool, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
 	if s == nil {
 		return Entry{}, 0, 0, fmt.Errorf("sendq: no store")
 	}
@@ -484,7 +514,7 @@ func (s *Store) AppendSupersedingWithRequestID(agent, text, requestID string, at
 		}
 		kept = append(kept, old)
 	}
-	e := Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC()}
+	e := Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC(), OwnerOrigin: ownerOrigin}
 	if len(removed) > 0 {
 		if err := s.archiveSupersession(Supersession{
 			Agent:   strings.TrimSpace(agent),
@@ -904,6 +934,24 @@ func (s *Store) Resolve(agent string, attempt Entry, outcome AttemptOutcome, det
 		f.Entries[at] = e
 	}
 	return s.save(f)
+}
+
+// UndeliveredOwnerOrigin returns the OwnerOrigin entries still held for
+// agent, in order (🎯T1257). Every entry on disk for an agent is, by
+// definition, not yet confirmed delivered — Resolve/DischargePending remove
+// a settled entry from the file — so no further phase filter is needed.
+func (s *Store) UndeliveredOwnerOrigin(agent string) ([]Entry, error) {
+	entries, err := s.Snapshot(agent)
+	if err != nil {
+		return nil, err
+	}
+	var out []Entry
+	for _, e := range entries {
+		if e.OwnerOrigin {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 // Snapshot returns an agent's queue in order, without mutating it.

@@ -48,15 +48,21 @@ func TestT1048IsolatedReportChecker(t *testing.T) {
 		s, po, inbox, _ := t690Server(t) // hermetic fake sender + private report store; no network/push sink
 		sink := s.agentEventSink(t690Worker)
 		sink(claudia.Event{Type: "assistant", Text: report, StopReason: "end_turn"})
-		if len(inbox.texts) != 1 || len(po.sent) != 1 {
-			t.Fatalf("missing actual report routes: overseer=%d parent=%d", len(inbox.texts), len(po.sent))
+		// The parent PO always gets the report; the overseer only when it is
+		// false-green flagged (a running PO parent handles routine reports).
+		wantOverseer := 0
+		if want != "" {
+			wantOverseer = 1
+		}
+		if len(inbox.texts) != wantOverseer || len(po.sent) != 1 {
+			t.Fatalf("report routes: overseer=%d (want %d) parent=%d", len(inbox.texts), wantOverseer, len(po.sent))
 		}
 		// Status-ping chatter can dedupe the overseer copy globally across subtests;
 		// the daemon parent-report route is not chatter-deduped.
 		banner := string(want)
 		if want == "" {
 			if strings.Contains(po.sent[0], gate.BannerHeading) {
-				t.Fatalf("honest control bannered: %q", inbox.texts[0])
+				t.Fatalf("honest control bannered: %q", po.sent[0])
 			}
 		} else if !strings.Contains(po.sent[0], banner) {
 			t.Fatalf("want %s in actual parent route: overseer=%q parent=%q", want, inbox.texts[0], po.sent[0])

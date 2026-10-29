@@ -42,6 +42,22 @@ T540.3/T540.7 retain fidelity work independently of runtime retirement.
 
 ## Test
 
+**Development versus final regression:** use focused behavioral and contract
+tests while implementing. Mutation testing belongs in the final regression pass
+on the assembled candidate, not in the development cycle or after each slice.
+Keep the standing final mutation gate enforced; do not weaken it or repeat an
+unchanged passing live journey without a new relevant change.
+
+**Claudia development releases:** while this Jevons development cycle is in
+progress, the owner permits Claudia releases with abbreviated verification:
+focused tests for the changed contracts and a clean build. Full regression and
+mutation testing remain the final integrated acceptance pass. Record exactly
+which checks ran; an abbreviated pass is not a full-suite attestation. This
+testing exception does not itself authorize a push or release. Fleet releases check
+`jevons_release_authorization` for the exact repo and release action after gates;
+an active minor-release grant authorizes tag/push/publish without another GO.
+Otherwise file an owner question; only explicit owner instruction can create/revoke a grant.
+
 Two surfaces for live owner-chat work — keep them distinct (🎯T572):
 
 - **Development:** `:13705` / `~/.jevons` / `jevonsmcp` — this machine's
@@ -77,7 +93,8 @@ Attaching to a running development daemon (`make test-live-suite`, chat-smoke*)
 is intentional-only, not routine.
 
 ```bash
-make test         # All: Go + web hermetic + Playwright UI + isolate journeys (🎯T492)
+make test         # All: Go + web hermetic + Playwright UI + isolate journeys, layers in parallel (🎯T492, 🎯T1299)
+make test-fast    # make test without the live-fleet journeys (SLOW_JOURNEYS), journeys in JOURNEY_SHARDS isolates (🎯T1302); what make gate runs
 make test-go      # go test ./... (-timeout 45m; docratchet alone runs ~11 min under load, 🎯T808)
 make test-web     # React unit tests (historical command alias)
 make test-ui      # Playwright perceptual chat UI (mocked WS)
@@ -173,6 +190,12 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   workers/bosses execute. Instructional doctrine (not a hard spawn-gate)
   unless a later target enforces it. Full text: `internal/config/persona.md`,
   `agents-guide.md`, fleet standing brief.
+- **PO verification in an auditor seat (🎯T1182):** before achieve, spawn an
+  **auditor** under the PO (`role=auditor`); the auditor runs `bin/gate -clean`
+  through the heavy lease and returns a typed report; the PO achieves or bounces
+  from that report and never runs gates, `go test`, `sleep` polling, or process
+  kills in its own turns. Sentinel surfaces `po_queue_backlog` when directs wait
+  longer than five minutes (🎯T713). Persona + agents-guide + fleet brief.
 - **Overseer never parents product workers (🎯T129):** for jevons-repo
   Build work, overseer (`jevons`) routes owner intent to **`jevons-po`**
   and does **not** `jevons_agent_start` product workers with
@@ -439,6 +462,25 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   alone and reported as leaving the clone unguarded. Do **not** redirect
   `core.hooksPath` — that would disable git-lfs's own hooks. Sibling:
   🎯T376 (same root cause, working tree rather than index).
+- **Never stash or reset the shared checkout (🎯T1134):** workers never run `git stash`,
+  `git checkout -- <path>`, `git restore`, or `git reset` on the
+  shared clone to “clean up” before landing. The only landing path is
+  `go run ./cmd/integrate` — it refuses when dirty paths overlap the merge and
+  never stashes. `bin/fleetgit` on PATH (ahead of real git) and the treeguard
+  Bash hook refuse `git stash push` from a fleet seat and name the dirty paths
+  stash would take. Pre-commit refuses a commit that drops more than a few
+  bullseye target rows at once (ef5fdf35 incident). Sibling: 🎯T254.2 integrate.
+- **Never hand-resolve ledger merge conflicts (🎯T1145):** do not edit or rewrite
+  `bullseye.yaml` to fix a merge conflict (including OMP sidecar edit/write from a
+  truncated read). Land through `go run ./cmd/integrate`; when `bullseye.yaml` is the
+  only conflict it unions the ledger mechanically. File targets via jevons_target_file /
+  bullseye tools (🎯T546).
+- **Sibling repos and go.mod replaces (🎯T1151.6):** work that needs an unpublished
+  change in a sibling repository sends a `needs-release` request to that repo's product
+  owner via `jevons_agent_send` and parks with an `active-wait`. It does not edit that
+  sibling's shared clone, bump its version, or add/change a `go.mod replace` for
+  `github.com/marcelocantos/…` modules (🎯T448 publish-then-pin). `fleetgit` and
+  treeguard refuse mutating git in another repository's shared checkout from a work seat.
 - **Private-index commits re-check HEAD (🎯T432):** when `git commit --only`
   cannot — a shared hot file (Makefile, AGENTS.md) still holds another
   worker's uncommitted hunks, so the work tree is not a safe stage source —
@@ -451,6 +493,16 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   re-checks HEAD before `commit-tree`, and refuses when it moved — naming
   the paths that would be overwritten. Escape: `JEVONS_COMMIT_BASE=off`.
   Sibling of 🎯T376 / 🎯T377.
+- **Guard tests reach production call sites (🎯T419):** a green unit test of a
+  silent-failure guard alone is not proof it runs in production. At least one
+  test must drive it through its real caller under the gating predicate
+  (call-site reachability). Pinning instance: `MarkDelivered` was unit-tested
+  green and unreachable under a reply-completion predicate (retired with
+  handover). Living pin: `delivery.RecordPayload` via `recordDeliveryEvidence`
+  under `OutcomeBegun` (`TestT419DeliveryEvidenceReachedThroughBegunSend`).
+  Catalogue: `internal/guardreach`. Audit:
+  `docs/audits/guard-call-site-reachability-2026-10.md`.
+
 - **Run gates so the status survives (🎯T386 / 🎯T396):** a pipeline's exit
   status is the **last** command's, so `go test ./... | tail -20` reports
   tail's success — which is unconditional. That is how a suite that died on a
@@ -494,6 +546,24 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   citation). Ratcheted by `scripts/docratchet`. Residual: the banner marks a
   report, it does not block delivery; a record with no tree provenance is
   unknown, never foreign.
+- **Owner-visible means owner-relevant (🎯T1122):** anything the cockpit
+  shows the owner — a fleet-tree row, a chat bubble, a badge, a notice, a
+  status line — earns its place by being a **decision** the owner must
+  make, a **fault** they must know about, or a **change in
+  what they would do next**. Before adding or keeping something owner-visible, name which of
+  the three it is; if you cannot, it does not ship. The system showing what
+  it knows is not the owner seeing what they need. This holds at build time
+  (which surfaces exist: a reaped row has no owner-facing form, a parked row
+  shows one line naming what it waits on) and at runtime (which instances
+  reach the owner now: a routine worker report is not narrated into the
+  owner's chat, one question gets one answer). First applications:
+  🎯T1121 (reaped rows hidden), 🎯T1053 (no routine narration), 🎯T1119
+  (the Frontier tab shows the ready set), 🎯T1120 (one question, one answer;
+  the status line settles), 🎯T1059 (park as one line). Persona +
+  agents-guide + fleet standing brief.
+
+- **Only the owner speaks in the owner's chat (🎯T1129):** workers may observe the development cockpit (read, screenshot, hard reload) for a 🎯T493.1 verdict; they never type into or submit its composer or click acting controls. Interactive verification runs on an isolate (`make test-ui-live`, `UI_HOST`, 🎯T572), never the real :13705 instance. Owner-origin browser sends require the owner cockpit session cookie; fleet Playwright / browser MCP sessions are stamped `JevonsFleetBrowser` / `X-Jevons-Fleet-Browser` and are refused.
+
 - **Status language in progress vs live (🎯T176):** always say **in progress**
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /
@@ -519,6 +589,9 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   cockpit. Do not mint a third environment.
   Speech for a bounce is "restart the development daemon"
   (`scripts/restart-jevonsd.sh`). `daily_token_budget` is a 24-hour spend key.
+  Legacy code identifiers (`HasDailyPathEvidence`, `DailyPort`,
+  `IsDailyStateDir`, `restart-daily-jevonsd.sh` as a historical script name)
+  may remain; speech for the environment is **development**, not daily.
   Informal talk about preferring this orchestrator over other harnesses
   is not a product name and is not used in code.
 - **Commit when done (🎯T638):** implementation that is ready to land is
@@ -546,68 +619,40 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   the template). The restart script signals that owner with SIGHUP.
   Script path: `scripts/restart-jevonsd.sh`. React changes require
   rebuilding and activating the embedded bundle before reloading.
-- **The process is supervised (🎯T405 / 🎯T553.3):** on 2026-08-10 a
-  worker's restart killed the daemon, the script died with its invoker
-  (own session was still a convention), and the fleet stayed down. The
-  historical fix was launchd KeepAlive **`com.marcelocantos.jevonsd`**
-  (`make jevonsd-install`). Current development uses supervisord program
-  `jevonsd`; it relaunches the daemon without calling the fat script. An upgrade bounce still
-  re-execs through `bin/detach` into its own session. The interval job
-  **`com.marcelocantos.jevons-watchdog`** (`make watchdog-install`,
-  `make watchdog-status`) is **not** the product path — it must not
-  invoke restart-jevonsd when KeepAlive owns the process. Residual:
-  Cellar `brew services jevons` must stay stopped so it cannot reclaim
-  `:13705`.
-- **Nothing was responsible for the supervisor (🎯T405, second half):** the
-  watchdog was installed on 2026-08-10 at 20:48 and launchd stopped holding
-  the job fourteen minutes later. The plist stayed on disk looking perfectly
-  healthy, the machine never rebooted, and for five days and four daemon
-  bounces not one line of code noticed — the owner did, by asking. A
-  supervisor whose absence has no alarm supervises nothing the moment it is
-  the thing that broke, which is clause 1 of this target failing one level
-  up. So **the daemon supervises the watchdog** while the watchdog
-  supervises the daemon (`internal/supervise/agent.go`, wired in
-  `cmd/jevonsd/main.go`): it checks that launchd still holds the job and
-  that the job still probes, reinstates it when either is false, and tells
-  the owner once per gap. The two live in different process trees precisely
-  so that whatever takes one down cannot take the other with it. Four
-  things the naive version gets wrong, each with an oracle
-  (`internal/supervise/agent_test.go`): *loaded* is not *running* — a job
-  whose binary dies on start is held by launchd forever and probes never, so
-  the heartbeat is the evidence, not the registration; a **late** probe is
-  not a gap — launchd defers a `StartInterval` job under load, and an alarm
-  that fires for lateness stops being read; a supervisor **older than the
-  heartbeat** is still alive, so the log launchd captures counts as a
-  heartbeat of last resort (the deployed watchdog predates the field, and
-  judged on the field alone it would be declared absent while probing every
-  30s); and a reinstatement **must not leave things worse**, so it carries
-  the installed plist's PATH (T434) over rather than recomputing it from
-  the environment a detached daemon happens to have. `install` also
-  bootstraps **before** it boots out, so a failed install can no longer
-  leave the machine with no job at all — a plausible reading of how the job
-  went missing. The supervisor is part of the deployment now too:
-  `restart-jevonsd` rebuilds `bin/jevons-watchdog` from committed HEAD
-  alongside the daemon, because the one process responsible for the daemon
-  being up had been the one process that never received a fix.
-- **The supervisor carries its own PATH (🎯T434):** a LaunchAgent whose
-  plist declares no environment runs on `/usr/bin:/bin:/usr/sbin:/sbin` —
-  no Homebrew, so no `go` to build the `bin/detach` and `bin/runlock` the
-  restart script re-execs itself through, and no `blurter` to say that it
-  therefore refused. The supervisor and its own alarm shared one failure,
-  latent only because both helpers happened to be on disk; `make clean` or
-  a fresh clone would have made it real, which is exactly the cold start
-  T405 exists for. **The guarantee: `make watchdog-install` computes the
-  PATH from where the tools actually are (`supervise.AgentPATH`) and writes
-  it into the plist's `EnvironmentVariables`, and refuses to install at all
-  when it cannot find `go`.** **The failure it accepts:** that PATH is a
-  snapshot, true when written — move the toolchain afterwards and it is
-  wrong, the same shape as T376/T377/T432. Kept audible rather than
-  silent: `supervise.RestartBlocker` sees at run time that the helpers are
-  absent with no `go` to build them, and the out-of-band notice names what
-  is missing, where, and the fix. Oracles run the shipped script out of a
-  cold repo on launchd's own PATH (fails closed, owner told why) and on the
-  PATH the installer writes (restarts a throwaway daemon) — each is the
-  other's control: `cmd/jevons-watchdog/t434_toolchain_test.go`.
+
+**Control-plane scheduling (🎯T779).** supervisord and everything it starts — jevonsd, the Claudia broker, bullseye, mnemo, and their children — must run at least at the scheduling priority of fleet work. Homebrew's stock homebrew.mxcl.supervisor LaunchAgent omits ProcessType; launchd then runs supervisord as a background daemon and its children fall below interactive shells. The owner path is ProcessType=Interactive on that LaunchAgent: tracked supervisor/homebrew.mxcl.supervisor.plist plus supervisor/install-launchagent.sh, invoked from make supervisor-install. Lowering fleet work CPU priority is an optional alternative (see 🎯T781); do not starve the control plane either way.
+- **The process is supervised by supervisord (🎯T405 / 🎯T1111):** on
+  2026-08-10 a worker's restart killed the daemon, the script died with its
+  invoker (own session was still a convention), and the fleet stayed down.
+  The standing owner of the development process is supervisord program
+  `jevonsd` (`supervisor/jevonsd.ini`, `autorestart=true`; `make
+  supervisor-install` renders it): when the process exits, supervisord
+  relaunches the same binary without calling the fat script. An upgrade
+  bounce still re-execs through `bin/detach` into its own session.
+  **launchd is not a way of supervising Jevons** (🎯T1111 retired the
+  KeepAlive job `com.marcelocantos.jevonsd`, the interval watchdog plist,
+  the UI-probe LaunchAgent, the daemon's watchdog-reinstatement loop and
+  the launchd test fake; the only `launchctl` left in the module is the
+  read-only `supervise.Launchctl` seam that `internal/provider`'s liveness
+  probe uses to read *other* owners' jobs). `bin/jevons-watchdog` remains
+  as the interval probe that calls `restart-jevonsd` when a bounce did not
+  take and tells the owner through blurter; run it from supervisord or
+  cron if you want that net, `make watchdog-status` reads its state.
+  Residual: Cellar `brew services jevons` must stay stopped so it cannot
+  reclaim `:13705`.
+- **A restart does not depend on a toolchain the supervisor cannot reach
+  (🎯T434):** a program started with a bare system PATH
+  (`/usr/bin:/bin:/usr/sbin:/sbin`) has no Homebrew, so no `go` to build
+  the `bin/detach` and `bin/runlock` the restart script re-execs itself
+  through, and no `blurter` to say that it therefore refused. The
+  supervisor and its own alarm share one failure, latent only while both
+  helpers happen to be on disk; `make clean` or a fresh clone makes it
+  real. `supervisor/jevonsd.ini` declares the program's PATH explicitly
+  (`environment=`), which is where the toolchain is made reachable. Kept
+  audible rather than silent: `supervise.RestartBlocker` sees at run time
+  that the helpers are absent with no `go` to build them, and the watchdog
+  puts that in the out-of-band notice — what is missing, where, and the
+  fix (`internal/supervise/toolchain_test.go`).
 - **Owner-visible claims are observed (🎯T552 / 🎯T553.2; was 🎯T194):**
   a target whose product path is served by development jevonsd is **not
   achieved on hermetics alone**. Hermetic unit green is **necessary not sufficient**
@@ -686,7 +731,29 @@ After a release's assets have uploaded (`.github/workflows/release.yml`), run
 the tap token is read from the macOS keychain, so no Actions secret is needed.
 Docker must be running.
 
+## Gates
+
+override:
+  - pr-workflow: skip
+
+Owner work reaches `master` by gated push, not by PR (🎯T1279). The oracle is
+`make gate`: it runs `make test-fast` on a commit in a clean checkout under
+`bin/gate` and, only on a GREEN verdict, writes `.git/gate-attestation`
+naming that commit's tree (`scripts/gate-attest.sh`). `test-fast` is every
+layer — Go, React unit, Playwright UI, isolate journeys — run at once by
+`scripts/testpar`, with the live-fleet journeys (`SLOW_JOURNEYS`: J50, J51,
+which run real coding workers end to end) left out. `make gate-full` runs
+`make test`, which adds them in a second suite beside the first; run it
+before a release and after changes to fleet spawning, integrate or the
+ledger path (🎯T1299). The pre-push hook (`scripts/hooks/pre-push`,
+installed by `make` through commitscope) does not run the gate; it refuses a
+push whose tip tree the attestation does not name, exempts `refs/backup/*`,
+and chains `git lfs pre-push`. The working branch lands as one squash commit
+on `master`, measured by `make gate` before the push. Agents never pass
+`--no-verify`; that bypass is the owner's.
+
 ## Delivery
 
-Merged to `master` via squash-only PRs; releases via the `/release`
-flow (Homebrew tap `marcelocantos/tap/jevons`, brew-services daemon).
+Gated push to `master` (one squash commit per landing, `make gate`
+attested); releases via the `/release` flow (Homebrew tap
+`marcelocantos/tap/jevons`, brew-services daemon).

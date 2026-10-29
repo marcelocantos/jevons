@@ -283,13 +283,25 @@ func (s *Server) handleRSICoachStatus(_ context.Context, _ mcp.CallToolRequest) 
 		preview = preview[:240] + "…"
 	}
 	dispLine := "  dispositions: unavailable\n"
+	useLine := ""
 	if store := coach.Dispositions(); store != nil {
-		if m, err := store.Metrics(time.Now().UTC(), 14*24*time.Hour); err == nil {
+		now := time.Now().UTC()
+		window := 14 * 24 * time.Hour
+		if m, err := store.Metrics(now, window); err == nil {
 			dispLine = fmt.Sprintf(
 				"  dispositions(14d, 🎯T333): total=%d pending=%d filed=%d parked=%d ignored=%d act_other=%d achieved=%d set_aside=%d\n",
 				m.Total, m.Pending, m.Filed, m.Parked, m.Ignored, m.ActOther, m.Achieved, m.SetAside)
 		} else {
 			dispLine = fmt.Sprintf("  dispositions: error: %v\n", err)
+		}
+		if cm, err := store.CompressionMetrics(now, window); err == nil {
+			usefulPct := ""
+			if cm.Scored > 0 {
+				usefulPct = fmt.Sprintf(" useful_rate=%.0f%%", cm.UsefulRate*100)
+			}
+			useLine = fmt.Sprintf(
+				"  usefulness(14d, 🎯T333.1): acted=%d scored=%d useful=%d escalation_down=%d no_effect=%d unevaluated=%d%s\n",
+				cm.Acted, cm.Scored, cm.Useful, cm.EscalationDown, cm.NoEffect, cm.Unevaluated, usefulPct)
 		}
 	}
 	retroLine := "  retro(🎯T353): state unavailable\n"
@@ -304,12 +316,13 @@ func (s *Server) handleRSICoachStatus(_ context.Context, _ mcp.CallToolRequest) 
 		)
 	}
 	text := fmt.Sprintf(
-		"RSI coach status (🎯T243)\n  name=%s overseer=%s enabled=%v\n  interval_sec=%d rate_cap=%d min_count=%d\n  focus_filters=%v\n  updated_at=%s updated_by=%s\n  cursor: chat_byte=%d event_byte=%d sessions=%d\n%s%s  system_prompt_preview:\n%s\n",
+		"RSI coach status (🎯T243)\n  name=%s overseer=%s enabled=%v\n  interval_sec=%d rate_cap=%d min_count=%d\n  focus_filters=%v\n  updated_at=%s updated_by=%s\n  cursor: chat_byte=%d event_byte=%d sessions=%d\n%s%s%s  system_prompt_preview:\n%s\n",
 		cfg.EffectiveCoachName(), cfg.EffectiveOverseer(), cfg.Enabled,
 		cfg.IntervalSec, cfg.EffectiveRateCap(), cfg.EffectiveMinCount(),
 		cfg.FocusFilters, cfg.UpdatedAt, cfg.UpdatedBy,
 		cur.ChatLogByte, cur.EventLogByte, len(cur.SessionOffsets),
 		dispLine,
+		useLine,
 		retroLine,
 		preview,
 	)

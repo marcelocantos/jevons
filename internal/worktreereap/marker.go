@@ -9,9 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/proclist"
 )
 
 // markerName is the file, inside git's own administrative directory for a
@@ -177,9 +178,9 @@ func readMarkers(commonGitDir string) markerIndex {
 // alone, which is weaker but never wrong in the unsafe direction: it can only
 // keep a worktree that could have been reaped.
 func commandLine(pid int) string {
-	out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
+	p, ok, err := proclist.Lookup(pid)
+	if err != nil || !ok {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return p.Command
 }

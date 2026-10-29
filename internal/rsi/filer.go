@@ -4,12 +4,12 @@
 package rsi
 
 import (
-	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/bullseyerun"
 )
 
 // BullseyeFiler shells out to the bullseye CLI (same path as jevons_target_file).
@@ -57,12 +57,11 @@ func (f BullseyeFiler) File(args FileArgs) (string, error) {
 	if ctx := strings.TrimSpace(args.Context); ctx != "" {
 		cmdArgs = append(cmdArgs, "--context", ctx)
 	}
-	// Tag origin for ledger archaeology.
 	cmdArgs = append(cmdArgs, "--origin", "ambient-rsi")
 
 	run := f.Run
 	if run == nil {
-		run = runBullseye
+		run = bullseyerun.RunMutation
 	}
 	out, err := run(cmdArgs...)
 	if err != nil {
@@ -75,16 +74,6 @@ func (f BullseyeFiler) File(args FileArgs) (string, error) {
 	return id, nil
 }
 
-func runBullseye(args ...string) (string, error) {
-	cmd := exec.Command("bullseye", args...)
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err := cmd.Run()
-	return buf.String(), err
-}
-
-// parseBullseyeTrackID extracts the allocated id from bullseye commit output.
 func parseBullseyeTrackID(out string) string {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)

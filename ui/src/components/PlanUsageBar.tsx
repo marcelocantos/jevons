@@ -2,19 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useRef, useState } from 'react';
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { now } from '../clock';
 import type { MuxClient } from '../mux/client';
 import { PLAN_USAGE_CHANNEL } from '../mux/protocol';
 import { CompanyMark, companyOfProvider, windowAbbrev } from '../plan/companyMark';
-import { holdLastPlanSnapshot } from '../plan/holdSnapshot';
 import { formatWindow } from '../plan/pace';
 import { InstantTip } from './InstantTip';
 import {
   gaugeFillPercent,
-  holdGroupReadings,
   tickerGroups,
-  type LastReading,
   type PlanSnapshot,
   type TickerGroup,
 } from '../plan/tickerGroups';
@@ -22,9 +19,8 @@ import { PlanTipTable } from '../plan/tipTable';
 import { OverrideBlockIcon } from '../plan/OverrideBlockIcon';
 import { overrideMark, overrideTipHeading } from '../plan/overrideMark';
 
-/** HTTP fallback only when mux is not connected (tests / non-cockpit). */
-export const PLAN_POLL_MS = 60_000;
-export const PLAN_POLL_PENDING_MS = 5_000;
+/** Presentation clock only; never requests usage data. */
+const AGE_TICK_MS = 60_000;
 const PLAN_DECISIONS_POLL_MS = 15_000;
 const PLAN_AUTH_POLL_MS = 30_000;
 
@@ -73,10 +69,6 @@ type PlanDecision = {
   ReauthAvailable: boolean;
 };
 
-function hasNumericRemaining(snap: PlanSnapshot | undefined): boolean {
-  return tickerGroups(snap).some((g) => g.windows.some((w) => typeof w.remaining_percent === 'number'));
-}
-
 function migrationFailureSummary(failure: string): string {
   if (/invalid_grant/i.test(failure)) return 'Destination refresh token was rejected (invalid_grant).';
   return failure.split('\n').find((line) => line.trim())?.trim() || 'Authentication failed.';
@@ -98,6 +90,11 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
   const [reauthBusy, setReauthBusy] = useState('');
   const [reauthMessage, setReauthMessage] = useState('');
   const [overrideTip, setOverrideTip] = useState('');
+  const [clock, setClock] = useState(now);
+  useEffect(() => {
+    const timer = setInterval(() => setClock(now()), AGE_TICK_MS);
+    return () => clearInterval(timer);
+  }, []);
   const decisions = useQuery({
     queryKey: ['plan-usage-decisions'],
     queryFn: async ({ signal }) => {
@@ -169,24 +166,37 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
     }
   };
   const [muxSnap, setMuxSnap] = useState<PlanSnapshot | undefined>(undefined);
+  const snapRevision = useRef(0);
+  const applyPlanSnap = (next: PlanSnapshot | undefined) => {
+    snapRevision.current++;
+    setMuxSnap(next);
+  };
+  const hydratePlanUsage = async (signal?: AbortSignal) => {
+    const revision = snapRevision.current;
+    const r = await fetch('/api/plan-usage', { signal });
+    if (!r.ok) throw new Error(String(r.status));
+    const body = (await r.json()) as PlanSnapshot;
+    if (!signal?.aborted && revision === snapRevision.current) applyPlanSnap(body);
+  };
   useEffect(() => {
     const mux = props.mux;
     if (!mux) return;
+    const hydration = new AbortController();
     const unsub = mux.subscribe(PLAN_USAGE_CHANNEL, (env) => {
+      if (env.t === 'reset') {
+        void hydratePlanUsage(hydration.signal).catch(() => {});
+        return;
+      }
       if (env.t !== 'frame' || env.body == null || typeof env.body !== 'object') return;
-      setMuxSnap(env.body as PlanSnapshot);
+      applyPlanSnap(env.body as PlanSnapshot);
     });
     mux.openChannel(PLAN_USAGE_CHANNEL);
     return () => {
+      hydration.abort();
       unsub();
       mux.closeChannel(PLAN_USAGE_CHANNEL);
     };
   }, [props.mux]);
-  useEffect(() => {
-    const ac = new AbortController();
-    fetch('/api/plan-usage?refresh=1', { signal: ac.signal }).catch(() => {});
-    return () => ac.abort();
-  }, []);
   const q = useQuery({
     queryKey: ['plan-usage'],
     queryFn: async ({ signal }) => {
@@ -195,24 +205,13 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
       return (await r.json()) as PlanSnapshot;
     },
     enabled: !props.mux,
-    placeholderData: keepPreviousData,
-    staleTime: 30_000,
-    refetchInterval: (query) => {
-      if (props.mux) return false;
-      if (query.state.fetchStatus === 'fetching') return false;
-      return hasNumericRemaining(query.state.data) ? PLAN_POLL_MS : PLAN_POLL_PENDING_MS;
-    },
+    refetchOnWindowFocus: false,
   });
-  const last = useRef<PlanSnapshot | undefined>(undefined);
-  const incoming = muxSnap ?? q.data;
-  const snap = holdLastPlanSnapshot(last.current, incoming);
-  last.current = snap;
-  // 🎯T681: carry each provider's last real reading forward, so a
-  // provider that has gone unreadable can say what it last knew and when.
-  const heldReadings = useRef<Map<string, LastReading>>(new Map());
-  const held = holdGroupReadings(heldReadings.current, tickerGroups(snap), now());
-  heldReadings.current = held.last;
-  const groups = held.groups;
+  const snap = props.mux ? muxSnap : q.data;
+  const groups = tickerGroups(snap).map((g) =>
+    g.staleAt != null && clock >= g.staleAt ? { ...g, stale: true } : g,
+  );
+  const unreadable = groups.filter((g) => !g.available);
   // 🎯T588.1: a grid, so comparing two providers is a glance along a row.
   const overridden = groups.find((g) => g.provider === overrideTip && g.override)?.override;
   const tip = <>
@@ -223,7 +222,7 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
       <div className="plan-override-note">The bars still show real usage.</div>
     </div>
   ) : <>
-    <PlanTipTable groups={groups} nowMs={now()} />
+    <PlanTipTable groups={groups} nowMs={clock} />
     {failedMigrations.length ? (
       <div className="plan-migration-failures">
         <strong>Claudia could not switch these running agents:</strong>
@@ -243,6 +242,17 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
       </div>
     ) : null}
   </>}
+    {unreadable.length ? (
+      <div className="plan-usage-faults">
+        <strong>Usage readings need attention:</strong>
+        {unreadable.map((g) => {
+          const login = (planAuth.data || []).find((p) => planOfProvider(p.provider) === g.provider);
+          return <div key={g.provider}>
+            {g.provider}: {login?.state === 'ok' ? 'The agent login is healthy; this is a usage-reader failure.' : 'Claudia will retry automatically.'}
+          </div>;
+        })}
+      </div>
+    ) : null}
     {groups.some((g) => g.spend) ? (
       // 🎯T967.1: the hover card's dollar-and-cents line, same bold red
       // treatment as the bar — "A$72.84 of A$100 this month".
@@ -277,7 +287,7 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
             <CompanyMark provider={g.provider} />
           </span>
         ) : null}
-        {!g.available ? (
+        {!g.windows.length ? (
           // 🎯T681: an unreadable provider keeps its place in the row and
           // says so. Painting nothing here was indistinguishable from a
           // provider that is simply idle, and painting an empty bar was
@@ -290,7 +300,7 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
               <span className="plan-track">
                 <span className="plan-bar" aria-hidden="true" />
               </span>
-              <span className="plan-win-label">?</span>
+              <span className="plan-win-label">usage unavailable</span>
             </span>
           </span>
         ) : g.windows.length ? (
@@ -299,7 +309,7 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
               <CompanyMark provider={g.provider} />
             </span>
             {g.windows.map((w) => {
-              const painted = formatWindow(w, now());
+              const painted = formatWindow(w, clock);
               // 🎯T670: the gauge fills with what has been spent, like every
               // harness reports it, so bar and chevron both travel rightward.
               // A spent window stays the empty red-bordered bar.
@@ -334,6 +344,7 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
                 </span>
               );
             })}
+            {g.stale || !g.available ? <span className="plan-win-label" aria-label="Last known usage">last known</span> : null}
             {g.spend ? (
               // 🎯T967.1: bold red, override-proof — this figure's
               // presence/absence and styling never depend on g.override

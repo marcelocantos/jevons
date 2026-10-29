@@ -198,6 +198,92 @@ func TestT5362ListIncludesAuditorBuiltin(t *testing.T) {
 	}
 }
 
+// 🎯T511 lifecycle guards — every built-in, repo overlay, owner-wins, and
+// validation errors that name the file.
+func TestT511AllBuiltinsCannotBeDeleted(t *testing.T) {
+	c := roles.Catalog{OwnerDir: t.TempDir()}
+	for _, name := range roles.BuiltinNames() {
+		err := c.Delete(name, 0, false)
+		if err == nil || !strings.Contains(err.Error(), "cannot be deleted") {
+			t.Fatalf("builtin %q: want delete refusal, got %v", name, err)
+		}
+	}
+}
+
+func TestT511RepoOverlayWinsOverBuiltin(t *testing.T) {
+	repo := t.TempDir()
+	body := "---\nrole: worker\npurpose: work\nsummary: repo\n---\n\n# Repo worker\n"
+	if err := os.WriteFile(filepath.Join(repo, "worker.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := (roles.Catalog{RepoDir: repo}).Resolve("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Source != roles.SourceRepo || !strings.Contains(r.Body, "Repo worker") {
+		t.Fatalf("repo overlay lost: %+v", r)
+	}
+}
+
+func TestT511OwnerWinsOverRepo(t *testing.T) {
+	repo := t.TempDir()
+	owner := t.TempDir()
+	repoBody := "---\nrole: worker\npurpose: work\n---\n\n# Repo\n"
+	ownerBody := "---\nrole: worker\npurpose: work\n---\n\n# Owner\n"
+	if err := os.WriteFile(filepath.Join(repo, "worker.md"), []byte(repoBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(owner, "worker.md"), []byte(ownerBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := (roles.Catalog{RepoDir: repo, OwnerDir: owner}).Resolve("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Source != roles.SourceOwner || !strings.Contains(r.Body, "# Owner") {
+		t.Fatalf("owner must win over repo: %+v", r)
+	}
+}
+
+func TestT511ListMergedSources(t *testing.T) {
+	owner := t.TempDir()
+	body := "---\nrole: scout\npurpose: work\n---\n\n# Scout\n"
+	if err := os.WriteFile(filepath.Join(owner, "scout.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list, err := (roles.Catalog{OwnerDir: owner}).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]string{}
+	for _, d := range list {
+		byName[d.Name] = d.Source
+	}
+	for _, builtin := range roles.BuiltinNames() {
+		if byName[builtin] != roles.SourceBuiltin {
+			t.Fatalf("builtin %q source=%q", builtin, byName[builtin])
+		}
+	}
+	if byName["scout"] != roles.SourceOwner {
+		t.Fatalf("owner scout source=%q", byName["scout"])
+	}
+}
+
+func TestT511MalformedFrontmatterNamesFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "broken.md")
+	if err := os.WriteFile(path, []byte("---\nrole: [\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := (roles.Catalog{OwnerDir: dir}).Resolve("broken")
+	if err == nil {
+		t.Fatal("expected hard error")
+	}
+	if !strings.Contains(err.Error(), "broken.md") {
+		t.Fatalf("error should name file, got %v", err)
+	}
+}
+
 // 🎯T658: StripDoctrine is Assemble's inverse for the doctrine section, so
 // the relay can find the sender's mission behind a first-send wrap. An
 // unbounded doctrine (unknown or different body) is refused rather than

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatliveness"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -29,6 +30,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/fleetpanel"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/seatprovider"
@@ -60,7 +62,9 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.addTool(
 		mcp.NewTool("jevons_agent_list",
-			mcp.WithDescription("List all registered agents and their status (running/stopped). Also lists finished-and-reaped names as recoverable addresses (🎯T401) so a never-existed name is distinguishable from one the product auto-deregistered — learn the address is closed BEFORE composing gate feedback into a void."),
+			mcp.WithDescription("List all registered agents and their status (running/stopped). Default omits reaped/finished/killed history rows (🎯T1121); pass history or all to include them. Also lists finished-and-reaped names as recoverable addresses (🎯T401) so a never-existed name is distinguishable from one the product auto-deregistered — learn the address is closed BEFORE composing gate feedback into a void."),
+			mcp.WithBoolean("history", mcp.Description("Include reaped/finished/killed registry rows hidden from the default fleet panel (🎯T1121).")),
+			mcp.WithBoolean("all", mcp.Description("Alias for history=true — full registry including preserved history rows.")),
 		),
 		s.handleAgentList,
 	)
@@ -125,6 +129,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("reason", mcp.Description("Why it is being stood down — shown to whoever later wonders why nothing is restarting it. Its wording does not decide park vs reap (🎯T766.4.1) — pass disposition. A reason that is itself a jevons envelope is read by its slots; silent, the seat's latest stored report is; anything else parks.")),
 			mcp.WithString("disposition", mcp.Description("park | reap — the declared outcome (🎯T985 / 🎯T766.4.1): reap when the seat has nothing left, park when it is blocked on something external that may resume. Durable roles and seats with descendants park regardless (use jevons_agent_kill).")),
 			mcp.WithBoolean("force", mcp.Description("🎯T664: stop even while a turn is in flight or a delivery is still delivered_unconfirmed. Without it the stop is refused and the check that decides it is named. Pass only with a reason you can state.")),
+			mcp.WithBoolean("override_owner_messages", mcp.Description("🎯T1257: proceed even while the seat's sendq still holds an owner-origin message it has not received. Without it the stop is refused and each message is named. The override is logged and surfaced to the overseer — never silent. Pass only with a reason you can state.")),
 		),
 		s.handleAgentStop,
 	)
@@ -136,8 +141,22 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("state", mcp.Description("working | parked | blocked_provider | blocked_owner | reaped. Omit to read.")),
 			mcp.WithString("actor", mcp.Description("Who is deciding: your agent name, or owner when the owner instructed it (🎯T969). Recorded with the intent. Omitted, the change is recorded as the identifiable caller (client:<program>) or 'unattributed' — never as the overseer. Before reversing an intent, or naming who set it in a stop reason or report, read its recorded actor and reason (call with no state); an intent recorded by the owner is not reversed without an owner instruction.")),
 			mcp.WithString("reason", mcp.Description("Why — recorded so the cockpit can say what is holding an agent down, not merely that something is.")),
+			mcp.WithBoolean("all", mcp.Description("Read only: list every stood-down agent instead of the 25 most recent.")),
 		),
 		s.handleFleetIntent,
+	)
+
+	s.addTool(
+		mcp.NewTool("jevons_land_hold",
+			mcp.WithDescription("Set or clear the 🎯T1040 no-merge/no-activation land hold. Workers under an active hold are refused cmd/integrate and scripts/restart-jevonsd.sh unless overridden. Per-mission holds are also recorded from spawn-brief jevons: hold slots on delivery."),
+			mcp.WithString("scope", mcp.Required(), mcp.Description("fleet | agent")),
+			mcp.WithBoolean("active", mcp.Description("true to set the hold, false to clear; omit to read the hold in effect")),
+			mcp.WithString("hold", mcp.Description("Comma-separated: no-merge, no-activation (default both)")),
+			mcp.WithString("name", mcp.Description("Agent name when scope=agent")),
+			mcp.WithString("actor", mcp.Description("Who decided (🎯T969)")),
+			mcp.WithString("reason", mcp.Description("Why — recorded in the ledger")),
+		),
+		s.handleLandHold,
 	)
 
 	s.addTool(
@@ -169,7 +188,7 @@ func (s *Server) SetAgentEventHook(fn func(name string, ev claudia.Event)) {
 	s.agentEventHook = fn
 }
 
-func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleAgentList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// 🎯T804: where a slow call spends its time, logged when it is slow.
 	tm := newPhaseTimer()
 	defer tm.logIfSlow("🎯T804 jevons_agent_list slow", agentListSlow)
@@ -180,15 +199,17 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	// 🎯T679.2: the same birth check the periodic health hook runs, so a
 	// list call is sufficient to mark and notify but is not required.
 	s.sweepBornStuck()
+	s.sweepInert()
 	tm.mark("sweep_born_stuck")
 	s.sweepSeatMCPOnRequest() // 🎯T797, cache only on the request path (🎯T804)
 	tm.mark("sweep_seat_mcp")
 	s.notifyDeadAgents(reps)
+	showHistory := agentListShowHistory(req.GetArguments())
 	defs := s.registry.List()
 	notices := s.RemovalAccount().Recent(0)
 	if len(defs) == 0 {
 		body := "No agents registered."
-		if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
+		if reaped := FormatReapedListSection(s.fleetIntent(), reapedLimit(showHistory)); reaped != "" {
 			body += "\n" + reaped
 		}
 		return mcp.NewToolResultText(fleetlog.PrependNotices(
@@ -199,6 +220,11 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	defer tm.mark("rows")
 	for _, d := range defs {
 		alive := s.seatAlive(d.Name)
+		starting := !alive && s.AgentStarting(d.Name)
+		panel := s.panelClassForDef(d, alive, starting)
+		if !showHistory && !panel.Visible {
+			continue
+		}
 		// 🎯T766.2: the walk already holds what claudia says about
 		// every seat, so it feeds the authority. The event stream reports
 		// motion but is silent for a seat that is merely sitting there, and
@@ -207,6 +233,14 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		// 🎯T444: and the seat's own session records break the tie, because
 		// both of the other inputs go stale across a backend re-mint.
 		status := s.agentPhase(d, alive)
+		if _, faulted := s.EmptyTurnFault(d.Name); faulted && alive {
+			status = AgentStatusFaulted
+		}
+		if alive {
+			if _, inert := s.InertSeat(d.Name); inert && status != AgentStatusBornStuck && status != AgentStatusFaulted {
+				status = AgentStatusInert
+			}
+		}
 		// 🎯T599: a seat whose held sendq cannot be delivered is PINNED, not
 		// ordinary running/idle — nothing else tells a caller the seat cannot
 		// be moved by its parent. 🎯T679.2: born-stuck stays in the status
@@ -214,6 +248,52 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		pin, pinned := s.sendqPinFor(d.Name)
 		if pinned && status != AgentStatusBornStuck {
 			status = "PINNED"
+		}
+		// 🎯T404.4: an owner-decision block citing a still-open question is
+		// legible in the status column, distinct from idle/stopped and from
+		// an ordinary external block — named with the annotation below.
+		ownerBlockID, ownerBlockSilence, ownerBlocked := s.ownerDecisionBlockFor(d.Name)
+		if ownerBlocked && status != AgentStatusBornStuck && !pinned {
+			status = AgentStatusBlockedOnOwner
+		}
+		awaitingParentLine, awaitingParent := s.AwaitingParentDirection(d.Name)
+		if awaitingParent && status != AgentStatusBornStuck && !pinned && status != AgentStatusBlockedOnOwner {
+			status = AgentStatusAwaitingParentDirection
+		}
+		poAuditorFault := ""
+		if line, ok := s.POAuditorMutualWaitFaultLine(d.Name); ok {
+			poAuditorFault = line
+			if status != AgentStatusBornStuck && !pinned && status != AgentStatusBlockedOnOwner {
+				status = AgentStatusPOAuditorMutualWait
+			}
+		}
+		poUnactedFault := ""
+		if line, ok := s.POUnactedChildReportsFaultLine(d.Name); ok {
+			poUnactedFault = line
+			if status != AgentStatusBornStuck && !pinned && status != AgentStatusBlockedOnOwner && status != AgentStatusPOAuditorMutualWait {
+				status = AgentStatusPOUnactedChildReports
+			}
+		}
+		poOwnerMissionFault := ""
+		if line, ok := s.POOwnerMissionFaultLine(d.Name); ok {
+			poOwnerMissionFault = line
+			if status != AgentStatusBornStuck && !pinned && status != AgentStatusBlockedOnOwner &&
+				status != AgentStatusPOAuditorMutualWait && status != AgentStatusPOUnactedChildReports {
+				status = AgentStatusPOOwnerMission
+			}
+		}
+		poQueueBacklogFault := ""
+		if line, ok := s.POQueueBacklogFaultLine(d.Name); ok {
+			poQueueBacklogFault = line
+			if status != AgentStatusBornStuck && !pinned && status != AgentStatusBlockedOnOwner &&
+				status != AgentStatusPOAuditorMutualWait && status != AgentStatusPOUnactedChildReports &&
+				status != AgentStatusPOOwnerMission && status != AgentStatusPOQueueBacklog {
+				status = AgentStatusPOQueueBacklog
+			}
+		}
+		// 🎯T1127: a live seat running against its intent is a fault, not plain running.
+		if status != AgentStatusBornStuck && status != "PINNED" && status != AgentStatusBlockedOnOwner && status != AgentStatusAwaitingParentDirection && status != AgentStatusPOAuditorMutualWait && status != AgentStatusPOUnactedChildReports && status != AgentStatusPOOwnerMission {
+			status = fleetpanel.ServedListStatus(s.seatProcessUp(d.Name, alive, starting), starting, s.fleetIntent().AgentState(d.Name), status)
 		}
 		parent := d.Parent
 		if parent == "" {
@@ -227,11 +307,22 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if model == "" {
 			model = "default"
 		}
-		fmt.Fprintf(&b, "%-20s %-14s purpose=%-8s role=%-14s parent=%-12s provider=%s model=%s %s (session: %s)\n",
-			d.Name, status, purpose, s.roleDisplay(d), parent, d.Provider, model, d.WorkDir, sessionDisplay(d.SessionID))
+		fmt.Fprintf(&b, "%-20s %-14s purpose=%-8s role=%-14s parent=%-12s provider=%s model=%s %s (session: %s) %s\n",
+			d.Name, status, purpose, s.roleDisplay(d), parent, d.Provider, model, d.WorkDir, sessionDisplay(d.SessionID), formatSandboxGrant(d))
+		if line, faulted := s.EmptyTurnFault(d.Name); faulted {
+			fmt.Fprintf(&b, "  ^ %s\n", line)
+		} else if line := s.EmptyTurnBackoff(d.Name); line != "" {
+			fmt.Fprintf(&b, "  ^ %s\n", line)
+		}
 		if status == AgentStatusBornStuck {
 			diag := s.birthDescription(d, s.birthClock())
 			fmt.Fprintf(&b, "  ^ %s\n", FormatBornStuckLine(d, diag.Elapsed))
+		}
+		if line, inert := s.InertSeat(d.Name); inert {
+			fmt.Fprintf(&b, "  ^ %s\n", line)
+		}
+		if status == AgentStatusRunningAgainstIntent {
+			fmt.Fprintf(&b, "  ^ %s\n", "should not be running ("+fleetintent.Describe(s.fleetIntent().AgentState(d.Name))+")")
 		}
 		if alive {
 			if diag := s.diagnoseSeatMCPOnRequest(d, s.birthClock()); len(diag.Missing) > 0 {
@@ -245,11 +336,35 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		// sendqPinFor already read the queue, which publishes depth, head
 		// age, and block reason onto the authority. The list is the place
 		// an operator reads that without opening a log.
-		if line := FormatQueueStoppage(d.Name, s.seatState(d.Name), time.Now()); line != "" {
+		if line := s.queueStoppageForList(d.Name, time.Now()); line != "" {
 			fmt.Fprintf(&b, "  ^ %s\n", line)
 		}
 		if line, wedged := s.WedgedSeat(d.Name); wedged {
 			fmt.Fprintf(&b, "  ^ %s\n", line)
+		}
+		if class, last, failed := s.ProviderRequestFailure(d.Name); failed {
+			fmt.Fprintf(&b, "  ^ %s\n", FormatProviderRequestFailureLine(class, last))
+		}
+		if ownerBlocked {
+			fmt.Fprintf(&b, "  ^ %s\n", FormatOwnerDecisionBlockLine(ownerBlockID, ownerBlockSilence))
+		}
+		if awaitingParent {
+			fmt.Fprintf(&b, "  ^ %s\n", awaitingParentLine)
+		}
+		if seatliveness.Served(s.seatState(d.Name)) == seatliveness.ServedDead {
+			fmt.Fprintf(&b, "  ^ process_liveness=dead (provider process gone)\n")
+		}
+		if poAuditorFault != "" {
+			fmt.Fprintf(&b, "  ^ %s\n", poAuditorFault)
+		}
+		if poUnactedFault != "" {
+			fmt.Fprintf(&b, "  ^ %s\n", poUnactedFault)
+		}
+		if poOwnerMissionFault != "" {
+			fmt.Fprintf(&b, "  ^ %s\n", poOwnerMissionFault)
+		}
+		if poQueueBacklogFault != "" {
+			fmt.Fprintf(&b, "  ^ %s\n", poQueueBacklogFault)
 		}
 		// 🎯T661: a session the broker wire cannot carry is named on the row,
 		// so a PO sees why sends to it fail before trying one.
@@ -265,9 +380,13 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	}
 	// 🎯T401: finished-and-reaped names stay visible as recoverable addresses
 	// so the gate learns the seat is closed BEFORE composing into a void.
-	if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
+	if reaped := FormatReapedListSection(s.fleetIntent(), reapedLimit(showHistory)); reaped != "" {
 		b.WriteString("\n")
 		b.WriteString(reaped)
+	}
+	if absent := s.registryAbsentBrokerSection(); absent != "" {
+		b.WriteString("\n")
+		b.WriteString(absent)
 	}
 	if line := s.FormatNoticeSavings(); line != "" {
 		b.WriteString("\n")
@@ -305,8 +424,9 @@ func fleetHealthEventOccurrence(stable string, at time.Time) string {
 	return stable + "@" + at.UTC().Format(time.RFC3339Nano)
 }
 
-// notifyFleetHealth delivers a fleet outage/recovery note to the overseer
-// through the single deliver-by-name path (🎯T309.3). occurrence identifies
+// notifyFleetHealth records or delivers a fleet-health notice. Each call site
+// declares noticeInform (event log only, 🎯T1158) or noticeAct (overseer path,
+// 🎯T309.3). occurrence identifies
 // THIS release of the notice (hold id, attempt id, burst key, …) and is
 // mixed into the delivered bytes so a second, genuinely distinct event is
 // not collapsed by T428/T568 merely because the prose is stable. Empty
@@ -314,8 +434,13 @@ func fleetHealthEventOccurrence(stable string, at time.Time) string {
 // miss. Tests may leave the overseer seam unwired, in which case delivery
 // fails quietly here — a health note is ambient chatter, not a report
 // someone is waiting on.
-func (s *Server) notifyFleetHealth(occurrence, line string) {
+func (s *Server) notifyFleetHealth(class FleetHealthNoticeClass, occurrence, line string) {
 	if s == nil {
+		return
+	}
+	if !fleetHealthClassValid(class) {
+		slog.Error("fleet health note dropped: missing notice class (🎯T1158)",
+			"occurrence", strings.TrimSpace(occurrence))
 		return
 	}
 	wire := mixFleetHealthOccurrence(line, occurrence)
@@ -329,7 +454,13 @@ func (s *Server) notifyFleetHealth(occurrence, line string) {
 	// another overseer turn; it is counted instead.
 	if coalesced, saved := s.coalesceNotice(occurrence, wire); coalesced {
 		s.LogEvent("fleet_health", "notice_coalesced", map[string]any{
-			"key": strings.TrimSpace(occurrence), "saved": saved,
+			"key": strings.TrimSpace(occurrence), "saved": saved, "class": string(class),
+		})
+		return
+	}
+	if class == noticeInform {
+		s.LogEvent("fleet_health", "notice_inform", map[string]any{
+			"occurrence": strings.TrimSpace(occurrence), "line": wire,
 		})
 		return
 	}
@@ -383,12 +514,37 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	targetID = normalizeAgentTargetID(targetID)
 
 	life := map[string]any{"name": name, "workdir": workdir}
+	if invalidSingleSeatName(name) {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid agent name %q: whitespace is not allowed (pass one name)", name)), nil
+	}
 
 	if name == "" || workdir == "" {
 		s.logLifecycle(compAgentLifecycle, "start", "error", map[string]any{
 			"name": name, "err": "name and workdir are required",
 		})
-		return mcp.NewToolResultError("name and workdir are required"), nil
+		return mcp.NewToolResultError(withStartOutcome(StartOutcomeNotStarted, "name and workdir are required")), nil
+	}
+
+	// 🎯T758: a same-name start against a seat that is already running reports
+	// the existing outcome. It does not launch a second executor and does not
+	// re-deliver the opening brief — that is how a transport false-negative
+	// used to mint two implementers under one registry name.
+	if s.seatAlive(name) {
+		if d := s.registry.Def(name); d != nil {
+			life["session_id"] = sessionDisplay(d.SessionID)
+			life["existed"] = true
+			life["outcome"] = StartOutcomeStarted
+			life["already_running"] = true
+			s.logLifecycle(compAgentLifecycle, "start", "ok", life)
+			purpose := string(d.Purpose)
+			if strings.TrimSpace(purpose) == "" {
+				purpose = claudia.PurposeWork
+			}
+			msg := formatAgentStartResult(name, d.WorkDir, d.Parent, purpose, s.roleDisplay(*d), d.TargetID,
+				string(d.Provider), d.Model, sessionDisplay(d.SessionID), "", "", d)
+			msg += " (already running; same-name retry is a no-op — no second executor, no re-brief; 🎯T758)"
+			return mcp.NewToolResultText(msg), nil
+		}
 	}
 
 	// Budget clamp: both new spawn and re-launch of a pause/kill-clamped
@@ -421,20 +577,26 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	// otherwise every automated caller (frontier consume, PO proactive, the
 	// restart reattach) reaches a parked fleet through this one door.
 	//
-	// Reaped is the exception, and the distinction is the registry row rather
-	// than the name: resurrecting the row that was reaped is the 🎯T413 bug,
-	// while starting a fresh agent under a name the fleet once used is
-	// ordinary re-use.
+	// Reaped is always the exception for a fresh start: 🎯T560's kill
+	// preserves the registry row (and its descendants) alongside the Reaped
+	// stamp, so rowExisted is true for the ordinary "name reused after a
+	// preserved-row kill" case, not only for a never-registered name. Gating
+	// the fresh-start allowance on rowExisted (as 🎯T414 originally did)
+	// refused exactly that ordinary re-use: a start under a once-killed auto
+	// name died here, the brief it carried sat behind
+	// agent_intent_reaped, and the 🎯T984 sentinel then stopped the seat the
+	// moment a later caller (e.g. frontier_consume) got a process running
+	// anyway — because MarkAgentWorking was skipped on this path, intent
+	// stayed Reaped under a live process (🎯T1109). What 🎯T413 actually
+	// guards against is reviving the exact OLD stopped process in place
+	// without going through Launch at all — not a registry row's mere
+	// existence — and this start always calls Launch below, so there is no
+	// row-existence case left that needs a separate refusal here.
 	rowExisted := s.registry != nil && s.registry.Def(name) != nil
-	if dec := s.AllowFleetControl(name, fleetintent.ControlSpawn); !dec.Allow {
-		if dec.Blocking != fleetintent.Reaped || rowExisted {
-			life["err"] = dec.Reason
-			s.logLifecycle(compAgentLifecycle, "start", "error", life)
-			return mcp.NewToolResultError(fmt.Sprintf(
-				"refusing to start %q — %s (%s). Lift it with jevons_fleet_intent state=working before starting.",
-				name, fleetintent.Describe(dec.Blocking), dec.Reason)), nil
-		}
-		s.MarkAgentWorking(name, s.intentActor(ctx, args), "fresh start under a previously reaped name")
+	if err := s.ensureFreshStartIntent(name, s.intentActor(ctx, args)); err != nil {
+		life["err"] = err.Error()
+		s.logLifecycle(compAgentLifecycle, "start", "error", life)
+		return mcp.NewToolResultError(withStartOutcome(StartOutcomeNotStarted, err.Error())), nil
 	}
 
 	// Expand ~ in workdir.
@@ -457,9 +619,9 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	if st, err := os.Stat(workdir); err != nil || !st.IsDir() {
 		life["err"] = "workdir_missing"
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
-		return mcp.NewToolResultError(fmt.Sprintf(
+		return mcp.NewToolResultError(withStartOutcome(StartOutcomeNotStarted, fmt.Sprintf(
 			"workdir %q does not exist on disk; pass the shared clone path (the daemon creates the .jevons-worktrees-<repo>/%s isolated tree itself, per 🎯T254.2) — no registry row, no broker launch",
-			workdir, name)), nil
+			workdir, name))), nil
 	}
 
 	// Lineage: parent defaults to actor, else overseer root.
@@ -509,39 +671,21 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	}
 	life["role"] = resolved.Name
 
-	// 🎯T254.2: same-repo multi-worker fan-out defaults to isolation. A plain
-	// worker whose repo already holds another work agent — in the shared
-	// clone or in an isolated tree made from it — gets its own git worktree
-	// rather than sharing one dirty tree, and a re-minted worker goes back
-	// into the tree it already has. Only an integrator (role=boss) or a
-	// PO/auditor/aside/overseer touches the shared clone directly, and
-	// worker commits reach its branch through worktree.Integrate.
+	// 🎯T1151.1: every fleet work seat gets its own worktree before register.
 	isolationNote := ""
-	_, hasTree := worktree.Existing(workdir, name)
-	if shared := hasTree || s.repoSharedWithWorker(workdir, name); worktree.NeedsIsolation(purpose, resolved.Name, shared) {
-		if wt, err := worktree.Ensure(workdir, name); err == nil {
-			base := workdir
-			life["base_workdir"] = base
-			workdir = wt
-			life["workdir"] = workdir
-			life["worktree_isolated"] = true
-			if _, err := worktree.MirrorGoWork(base, wt); err != nil {
-				life["worktree_gowork_err"] = err.Error()
-			}
-			isolationNote = fmt.Sprintf(
-				"Worktree isolation (🎯T254.2): workdir %s is your own git worktree on branch %s, made from the shared clone %s. "+
-					"Commit there; do not commit in, merge into, or check out the shared clone. "+
-					"Your commits land through the integrator: go run ./cmd/integrate -repo %s %s.",
-				wt, worktree.BranchName(name), base, base, name)
-		} else {
-			// Not a git repo, already a linked worktree, or git refused:
-			// keep the given workdir rather than refusing the spawn outright.
-			life["worktree_isolate_err"] = err.Error()
+	{
+		var isoLife map[string]any
+		workdir, isolationNote, isoLife = isolateFleetWorkSeat(workdir, name, purpose, resolved.Name)
+		for k, v := range isoLife {
+			life[k] = v
+		}
+		if err := enforceFleetSeatWorkdir(name, purpose, resolved.Name, workdir); err != nil {
+			life["err"] = err.Error()
+			s.logLifecycle(compAgentLifecycle, "start", "error", life)
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 	}
-	if isolationNote != "" && strings.TrimSpace(prompt) != "" {
-		prompt = isolationNote + "\n\n" + prompt
-	}
+	prompt = prependIsolationBrief(prompt, isolationNote)
 
 	// 🎯T222: work + target_id → no second implementer; closed targets refused.
 	if purpose == claudia.PurposeWork && targetID != "" {
@@ -572,10 +716,11 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 			stored = string(d.Provider)
 		}
 	}
-	pick := s.mintProviderPick(providerArg, stored, rowExisted, taskTypeArg, purpose, name, ownerAsked)
+	storedPick, pickExisted, _ := s.providerPickInputs(name, providerArg, stored, rowExisted, ownerAsked)
+	pick := s.mintProviderPick(providerArg, storedPick, pickExisted, taskTypeArg, purpose, name, ownerAsked)
 	// 🎯T791: an empty plan dest is refused here with the reason (soft cap,
 	// excluded unsteerable providers) rather than a bare register failure.
-	if !rowExisted && strings.TrimSpace(pick.Provider) == "" && pick.Knob == cost.KnobClaudia && strings.TrimSpace(pick.Detail) != "" {
+	if !pickExisted && strings.TrimSpace(pick.Provider) == "" && pick.Knob == cost.KnobClaudia && strings.TrimSpace(pick.Detail) != "" {
 		s.mu.Lock()
 		s.pendingSpawnRole = ""
 		s.pendingOwnerAsked = false
@@ -584,9 +729,13 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		// 🎯T980: the frontier row shows pause and why, not a spinner.
 		s.noteSeatWait(targetID, pick.Detail)
-		return mcp.NewToolResultError("plan dest empty; refusing to land on a hot or unsteerable dest (🎯T390.1.5 / 🎯T791): " + pick.Detail), nil
+		refuse := "plan dest empty; refusing to land on a hot or unsteerable dest (🎯T390.1.5 / 🎯T791): " + pick.Detail
+		if sub := pick.SubstitutionCite(); sub != "" {
+			refuse += " [" + sub + "]"
+		}
+		return mcp.NewToolResultError(refuse), nil
 	}
-	if !rowExisted {
+	if !pickExisted {
 		if dest := strings.TrimSpace(pick.Provider); dest != "" {
 			if blocked := s.checkDestSpawnAllowed(purpose, name, dest); blocked != nil {
 				s.mu.Lock()
@@ -611,12 +760,16 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	if err != nil {
 		life["err"] = err.Error()
 		life["existed"] = existed
+		if routeNote != "" {
+			life["provider_knob"] = routeNote
+		}
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		// 🎯T990: no row to carry the reason, so the frontier row does.
+		regMsg := formatStartFailure(fmt.Errorf("register failed: %v", err), routeNote)
 		if targetID != "" && !existed {
-			s.noteSeatFailure(targetID, name, parent, "register failed: "+err.Error())
+			s.noteSeatFailure(targetID, name, parent, regMsg)
 		}
-		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
+		return mcp.NewToolResultError(withStartOutcome(StartOutcomeNotStarted, regMsg)), nil
 	}
 	life["existed"] = existed
 	if routeNote != "" {
@@ -648,9 +801,13 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		life["session_id"] = sessionDisplay(def.SessionID)
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		// 🎯T970: the row stays, so it says why it never ran.
-		s.noteSeatStop(name, seatstop.SourceStartFailed, "start failed: "+err.Error(), strings.TrimSpace(actor), "")
-		return mcp.NewToolResultError(prefixRehydrate(rehydrated,
-			fmt.Sprintf("start failed: %v", err))), nil
+		// 🎯T743: a launch that fails after a T652 substitution must name
+		// asked/minted so "my grok seat timed out" is never the account of
+		// a cursor seat that timed out.
+		failMsg := formatStartFailure(err, routeNote)
+		s.noteSeatStop(name, seatstop.SourceStartFailed, failMsg, strings.TrimSpace(actor), "")
+		return mcp.NewToolResultError(withStartOutcome(StartOutcomeNotStarted, prefixRehydrate(rehydrated, failMsg))), nil
+
 	}
 
 	missionStarted = true
@@ -683,16 +840,16 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 					ferr)
 				prompt = ""
 			} else {
+				failMsg := formatStartFailure(ferr, routeNote)
 				if released {
 					life["seat_released"] = true
-					s.notifySpawnFailure(def.Parent, def.TargetID, name, ferr.Error())
+					s.notifySpawnFailure(def.Parent, def.TargetID, name, failMsg)
 				}
 				life["failure_class"] = agenterr.Classify(ferr).String()
 				life["err"] = ferr.Error()
 				life["session_id"] = sessionDisplay(def.SessionID)
 				s.logLifecycle(compAgentLifecycle, "start", "error", life)
-				return mcp.NewToolResultError(prefixRehydrate(rehydrated,
-					fmt.Sprintf("start failed: %v", ferr))), nil
+				return mcp.NewToolResultError(prefixRehydrate(rehydrated, failMsg)), nil
 			}
 		} else {
 			briefNote = note
@@ -765,7 +922,7 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	s.logLifecycle(compAgentLifecycle, "start", "ok", life)
 
 	msg := formatAgentStartResult(name, def.WorkDir, def.Parent, string(def.Purpose), s.roleDisplay(*def), def.TargetID,
-		string(def.Provider), def.Model, sessionDisplay(def.SessionID), routeNote, prompt)
+		string(def.Provider), def.Model, sessionDisplay(def.SessionID), routeNote, prompt, def)
 	msg += briefNote
 	if isolationNote != "" {
 		msg += " [" + isolationNote + "]"
@@ -805,12 +962,72 @@ func (s *Server) repoSharedWithWorker(workdir, excludeName string) bool {
 	return false
 }
 
+func lifeString(life map[string]any, key string) string {
+	if life == nil {
+		return ""
+	}
+	v, _ := life[key].(string)
+	return v
+}
+
+// formatStartFailure is the owner-visible start-failure text (🎯T743).
+// When routeNote carries a T652 substitution (asked=X minted=Y), it is
+// appended so a timeout on the substituted dest is never reported as a
+// failure of the provider the caller asked for.
+func formatStartFailure(err error, routeNote string) string {
+	msg := "start failed"
+	if err != nil {
+		text := strings.TrimSpace(err.Error())
+		// register failed: already has its own prefix from the call site.
+		if strings.HasPrefix(text, "register failed:") || strings.HasPrefix(text, "start failed:") {
+			msg = text
+		} else if text != "" {
+			msg = "start failed: " + text
+		}
+	}
+	if sub := substitutionFromRouteNote(routeNote); sub != "" {
+		msg += " [" + sub + "]"
+	}
+	return msg
+}
+
+// substitutionFromRouteNote pulls the 🎯T743 "substituted: …" fragment out of
+// a pick.Cite() / routeNote string. Empty when no substitution was recorded.
+func substitutionFromRouteNote(routeNote string) string {
+	const marker = "substituted: "
+	i := strings.Index(routeNote, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := routeNote[i:]
+	// Cite appends " (losing_knob…)" after the substitution; cut at that.
+	if j := strings.Index(rest, " ("); j > 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSpace(rest)
+}
+
+// formatSandboxGrant reports the registry's minted sandbox policy, not an
+// inferred provider default. A blank mode means no explicit sandbox grant.
+func formatSandboxGrant(d claudia.AgentDef) string {
+	mode := d.SandboxMode
+	if mode == "" {
+		mode = "none"
+	}
+	roots := d.SandboxWritableRoots
+	if roots == nil {
+		roots = []string{}
+	}
+	return fmt.Sprintf("sandbox_grant={mode:%q writable_roots:%q network:%t git_write:%t}",
+		mode, roots, d.SandboxNetworkAccess, d.SandboxGitWrite)
+}
+
 // formatAgentStartResult is the owner-visible jevons_agent_start text.
 // 🎯T476: routeNote must already cite which knob selected the provider.
-func formatAgentStartResult(name, workdir, parent, purpose, role, targetID, provider, model, session, routeNote, prompt string) string {
+func formatAgentStartResult(name, workdir, parent, purpose, role, targetID, provider, model, session, routeNote, prompt string, grant ...*claudia.AgentDef) string {
 	msg := fmt.Sprintf(
-		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, role: %s, provider: %s",
-		name, session, workdir, parent, purpose, role, provider)
+		"outcome=%s: Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, role: %s, provider: %s",
+		StartOutcomeStarted, name, session, workdir, parent, purpose, role, provider)
 	if strings.TrimSpace(model) != "" {
 		msg += fmt.Sprintf(", model: %s", model)
 	}
@@ -822,6 +1039,9 @@ func formatAgentStartResult(name, workdir, parent, purpose, role, targetID, prov
 	}
 	if prompt != "" {
 		msg += ", prompt_delivered=true"
+	}
+	if len(grant) > 0 && grant[0] != nil {
+		msg += ", " + formatSandboxGrant(*grant[0])
 	}
 	msg += ", " + ParentReportChannelCite
 	msg += ")"
@@ -847,21 +1067,45 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if role == "" {
 		role = s.agentRole(name, purpose)
 	}
-	existed := s.registry.Def(name) != nil
-	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
-	if err != nil {
-		return nil, existed, "", err
+	// 🎯T1151.1: frontier_consume and every other stitchAgentStart caller
+	// share this path — work seats never register the shared clone as WorkDir.
+	workdir, _, _ = isolateFleetWorkSeat(workdir, name, purpose, role)
+	if err := enforceFleetSeatWorkdir(name, purpose, role, workdir); err != nil {
+		return nil, false, "", err
 	}
-	// Refresh copy after Ensure (Register may have stored a different pointer).
-	if d := s.registry.Def(name); d != nil {
+	existed := s.registry.Def(name) != nil
+	// 🎯T1117: do NOT persist a new row (EnsureAgentWithParent writes one,
+	// with AutoStart true, when !existed) before the admission check below
+	// can still refuse the start. A ghost AutoStart=true row left behind by
+	// a refused mint is bait for fleet_health's dead-AutoStart recovery
+	// sweep, which later launches it for real — a live, token-consuming
+	// broker seat with no corresponding completed Register() and no record
+	// of ever being admitted. For an existing row, EnsureAgentWithParent is
+	// a pure read (registerLocked only runs on first creation), so calling
+	// it early here is harmless and the existed-materialized check below
+	// still needs it.
+	var def *claudia.AgentDef
+	if existed {
+		d, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
+		if err != nil {
+			return nil, existed, "", err
+		}
+		if d2 := s.registry.Def(name); d2 != nil {
+			d = d2
+		}
 		def = d
+	}
+	if existed && def != nil && strings.TrimSpace(workdir) != "" {
+		// 🎯T1163: Goal/MCP attach below read WorkDir; apply isolation result
+		// before any ledger/MCP resolution, not only at final Register.
+		def.WorkDir = filepath.Clean(workdir)
 	}
 
 	// A pre-T1046 accepted send could mark an unsupported OMP pin as
 	// Materialized before any model reply. Diagnose before PickMintModel or
 	// Register can treat that flag as a valid resume binding.
 	if existed && def.Materialized && seatprovider.Resolve(def.Provider).Sidecar && seatprovider.Resolve(def.Provider).Plan == seatprovider.Codex &&
-		strings.TrimSpace(def.Model) != "" && !s.codexCatalogHasModel(def.Model) {
+		strings.TrimSpace(def.Model) != "" {
 		if reason := s.unsupportedMaterializedModel(def); reason != "" {
 			return nil, true, "", fmt.Errorf("seat %q: unsupported OMP model %q: %s", name, def.Model, reason)
 		}
@@ -878,21 +1122,38 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	//      Resolve / plan dest decides purely on plan-usage ranking — not
 	//      a grok default, and (🎯T1013.6) no Claude-first bias either
 	stored := ""
+	fromProvider := claudia.Provider("")
 	if def != nil {
 		stored = string(def.Provider)
+		fromProvider = def.Provider
 	}
 	s.mu.Lock()
 	ownerAsked := s.pendingOwnerAsked
 	s.mu.Unlock()
-	pick := s.mintProviderPick(providerArg, stored, existed, taskTypeArg, purpose, name, ownerAsked)
+	storedPick, pickExisted, droppedPinned := s.providerPickInputs(name, providerArg, stored, existed, ownerAsked)
+	pick := s.mintProviderPick(providerArg, storedPick, pickExisted, taskTypeArg, purpose, name, ownerAsked)
 	if strings.TrimSpace(pick.Provider) == "" && (pick.Knob == cost.KnobPlanDest || pick.Knob == cost.KnobClaudia) {
-		return nil, existed, pick.Cite(), fmt.Errorf(
-			"plan dest empty: all published providers fail mint thresholds; refusing to land on a hot dest (🎯T390.1.5)")
+		return nil, existed, pick.Cite(), s.planDestEmptyRegisterErr(droppedPinned)
+	}
+	// 🎯T1117: the admission check passed — now, and only now, persist a
+	// new row (or refresh an existing one). A new name was never written to
+	// the registry while the pick above could still have refused it.
+	if def == nil {
+		d, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
+		if err != nil {
+			return nil, existed, pick.Cite(), err
+		}
+		if d2 := s.registry.Def(name); d2 != nil {
+			d = d2
+		}
+		def = d
 	}
 	// The registry stores the id Launch talks to. Catalog ranking above
 	// keeps pick.Provider, the plan id (claude, codex, grok).
 	def.Provider = seatprovider.Resolve(claudia.Provider(pick.Provider)).Launch
 	routeNote := pick.Cite()
+	seatstate.ObserveRegistrySeat(s.registry, name)
+	rotateSessionOnDeadRemint(def, stored, s.seatState(name).LocalAlive)
 
 	// 🎯T324 + 🎯T325.2.1: session-truth model binding for this Launch.
 	// Explicit model= wins (T476). Fast-cheap task types prefer Spark /
@@ -903,6 +1164,13 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if def != nil {
 		storedModel = def.Model
 	}
+	// Cross-provider remint: the prior harness's model slug is not portable.
+	if existed && strings.TrimSpace(model) == "" && fromProvider != "" {
+		if !seatprovider.Same(fromProvider, claudia.Provider(pick.Provider)) {
+			storedModel = ""
+			def.Model = ""
+		}
+	}
 	mp := cost.PickMintModel(cost.MintModelArgs{
 		ModelArg:      model,
 		Existed:       existed,
@@ -912,6 +1180,8 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		PromptTokens:  cost.EstimatePromptTokens(prompt),
 		CodexEligible: s.providerDestEligible(cost.HarnessCodex),
 		Portfolio:     s.effectivePortfolio(),
+		Role:          role,
+		FableRatified: s.fableClassRatified,
 	})
 	// The catalog check precedes persistence AND launch. It also repairs an
 	// unmaterialized failed row that retained an obsolete Spark pin.
@@ -927,6 +1197,12 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def.Model = pin
 	} else if !existed || strings.TrimSpace(def.Model) == "" || (mp.Knob == cost.KnobEscalated && storedModel == cost.ModelCodexSpark) {
 		def.Model = cli.BindSessionModel("", def.Provider)
+	}
+	if strings.TrimSpace(def.Model) != "" {
+		explicitPin := strings.TrimSpace(model) != ""
+		if err := s.ValidateDestinationModel(string(def.Provider), def.Model, explicitPin); err != nil {
+			return nil, existed, routeNote, err
+		}
 	}
 	// Set parent only when minting or when legacy entry has empty parent.
 	if !existed || def.Parent == "" {
@@ -949,19 +1225,8 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	// keeps the stored objective so claudia's Session loop continues.
 	if !existed {
 		def.Goal = fleet.WorkSessionGoal(def.Purpose, def.TargetID, prompt, def.AutoStart)
-		if def.SandboxMode == "" {
-			def.SandboxMode = fleet.CodexWorkSandbox(def.Provider, def.Purpose, role)
-			def.SandboxWritableRoots, def.SandboxNetworkAccess =
-				fleet.CodexWorkSandboxTuning(def.Provider, def.Purpose, role)
-			def.SandboxGitWrite = fleet.CodexWorkGitWrite(def.Provider, def.Purpose, role)
-		}
-	} else if roles.Normalize(role) == roles.Auditor {
-		// Auditor stays read-only even on remint. claudia refuses a git
-		// grant on a read-only seat rather than dropping it (🎯T112), so
-		// the grant leaves with the mode or the remint cannot launch.
-		def.SandboxMode = ""
-		def.SandboxGitWrite = false
 	}
+	def.ProtectedPaths = fleet.SidecarLedgerProtectedPaths()
 	// Claudia Launch returns an existing live handle. An explicit
 	// cross-plan request is a model switch (jevons_agent_switch_model), not an
 	// in-place Register.
@@ -991,6 +1256,21 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def.MCPServers = mcpattach.SessionServers(s.mcp, def.WorkDir)
 	}
 	def.MCPExclusive = mcpattach.Exclusive
+	// 🎯T1032: jevons_agent_start with an explicit provider override keeps
+	// the row but must not carry codex-only sandbox fields onto claude.
+	if existed {
+		providerChanged := fromProvider != "" && !seatprovider.Same(fromProvider, def.Provider)
+		if err := fleet.ReconcileDefOnStart(name, def, fromProvider, providerChanged); err != nil {
+			return nil, existed, routeNote, err
+		}
+	}
+	fleet.ApplyWorkSeatSandbox(def, role)
+	// 🎯T1151.7: EnsureAgentWithParent ignores workdir when the row already
+	// exists (a preserved kill / reused auto name). Isolation ran above; persist
+	// the worktree path so Launch and MCP attach use it, not the stale clone.
+	if wd := strings.TrimSpace(workdir); wd != "" {
+		def.WorkDir = filepath.Clean(wd)
+	}
 	if err := s.registry.Register(*def); err != nil {
 		return nil, existed, "", err
 	}
@@ -1219,12 +1499,42 @@ func (s *Server) refuseEngagedOrClosedTarget(name, workdir, targetID string, for
 	}
 	var engaged []string
 	if s != nil && s.registry != nil {
-		engaged = workAgentsEngagedOnTarget(s.registry, targetID, workdir, name)
+		// 🎯T1114: the engagement gate counts only live seats. A row
+		// seatstate has observed as definitively dead (a stopped row, no
+		// process, whatever its fleet intent) must not hold the leaf
+		// against a PO that wants to spawn a fresh implementer. Unlike
+		// workAgentsBoundOnTarget (🎯T566.3, deliberately conservative for
+		// the consume sweep: unobserved == still bound), the admission gate
+		// excludes a name the instant seatstate says No — a nil process
+		// handle is the ordinary shape of every seat here, running or
+		// stopped, and is not itself evidence of life.
+		for _, cand := range workAgentsEngagedOnTarget(s.registry, targetID, workdir, name) {
+			if seatstate.ReadRegistry(s.registry, cand).Alive == seatstate.No {
+				continue
+			}
+			engaged = append(engaged, cand)
+		}
 	}
 	status, _ := loadTargetStatusForKickoff(workdir, targetID)
 	dec := targetfile.GateKickoff(status, engaged, force)
 	if dec.Allow {
 		return ""
+	}
+	if dec.Reason == "already_engaged" && s != nil && s.registry != nil {
+		// Name the seat(s) counted, with the live/stopped read that decided
+		// them, so a PO refused here can act on the specific seat instead of
+		// retrying blind (🎯T1114).
+		var annotated []string
+		for _, n := range dec.Engaged {
+			st := "running"
+			if seatstate.ReadRegistry(s.registry, n).Alive == seatstate.No {
+				st = "stopped"
+			}
+			annotated = append(annotated, fmt.Sprintf("engaged_by=%s status=%s", n, st))
+		}
+		if len(annotated) > 0 {
+			return dec.Message + " (" + strings.Join(annotated, ", ") + ")"
+		}
 	}
 	return dec.Message
 }
@@ -1244,6 +1554,9 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 
 	if name == "" || text == "" {
 		return mcp.NewToolResultError("name and text are required"), nil
+	}
+	if invalidSingleSeatName(name) {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid agent name %q: whitespace is not allowed (pass one name)", name)), nil
 	}
 	// 🎯T657: mode is the intent; interrupt=true is its deprecated alias.
 	mode, err := delivery.Parse(strings.TrimSpace(modeArg), interrupt)
@@ -1300,12 +1613,7 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 			}
 		}
 	}
-	s.mu.Lock()
-	if s.fleetBriefed == nil {
-		s.fleetBriefed = map[string]bool{}
-	}
-	text, injected := EnsureFleetBriefWithRole(s.fleetBriefed, name, text, roleBody)
-	s.mu.Unlock()
+	text, injected := s.ensureFleetBrief(name, text, roleBody)
 	if injected {
 		// 🎯T425: the brief is the daemon's own prose and it is almost entirely
 		// role-conditional, so it opens by naming the role its reader occupies.
@@ -1341,6 +1649,9 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 		// classifies the rehydrate/launch arm, which reaches the provider too.
 		return s.toolFailure("agent_send", name, err), nil
 	}
+	// 🎯T1233: the MCP call itself is the per-turn send observation.
+	s.notePOSendToChild(actor, name)
+	s.noteSendForPOReply(actor, name)
 	msg := result.Message
 	if injected {
 		msg += " (standing fleet brief T104/T78 prepended on first send)"
@@ -1356,6 +1667,10 @@ func (s *Server) handleAgentStop(ctx context.Context, req mcp.CallToolRequest) (
 			"err": "name is required",
 		})
 		return mcp.NewToolResultError("name is required"), nil
+	}
+
+	if err := s.singleSeatName(name); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	// 🎯T664: an uncertain verdict is resolved by looking, not by stopping.
@@ -1374,6 +1689,31 @@ func (s *Server) handleAgentStop(ctx context.Context, req mcp.CallToolRequest) (
 	// "unattributed", never the overseer.
 	actor := s.intentActor(ctx, args)
 	reason, _ := args["reason"].(string)
+
+	// 🎯T1257: a seat holding an undelivered owner message is never parked
+	// or reaped on the strength of the caller's own judgement alone — the
+	// 2026-10-28 jv-t1244-widget-implement specimen was parked "all landed
+	// and gated" with two owner notes still sitting, unread, in its queue.
+	overrideOwnerMessages, _ := args["override_owner_messages"].(bool)
+	if pending := s.undeliveredOwnerMessages(name); len(pending) > 0 {
+		if !overrideOwnerMessages {
+			s.logLifecycle(compAgentLifecycle, "stop", "skipped", map[string]any{
+				"name": name, "actor": actor, "reason": "t1257_owner_messages", "pending": len(pending)})
+			return mcp.NewToolResultError(FormatOwnerMessageStopRefusal("stop", name, pending)), nil
+		}
+		// The override is logged and surfaced to the owner — never silent.
+		s.logLifecycle(compAgentLifecycle, "stop", "owner_messages_overridden", map[string]any{
+			"name": name, "actor": actor, "reason": reason, "pending": len(pending)})
+		if s.notifyJevon != nil {
+			var ids []string
+			for _, e := range pending {
+				ids = append(ids, e.ID)
+			}
+			s.notifyJevon(fmt.Sprintf(
+				"🎯T1257: %s overrode the undelivered-owner-message guard and stopped %q with %d owner message(s) still pending (ids: %s). reason=%q",
+				actor, name, len(pending), strings.Join(ids, ", "), reason))
+		}
+	}
 
 	// 🎯T985: a worker with no more work to do is reaped, not parked. A stop
 	// whose reason (or, when silent, the seat's latest stored report) reads
@@ -1458,6 +1798,9 @@ func (s *Server) handleAgentKill(ctx context.Context, req mcp.CallToolRequest) (
 			actor = s.intentActor(ctx, args)
 		}
 		life["actor"] = actor
+	}
+	if invalidSingleSeatName(name) {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid agent name %q: whitespace is not allowed (pass one name)", name)), nil
 	}
 	// Idempotent kill (🎯T229): desired state is "not registered". After
 	// T165/T195 auto-reap, PO/overseer hygiene kills race the reaper and used
@@ -1668,6 +2011,19 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 	var toolCalls int
 
 	return func(ev claudia.Event) {
+		// Native Codex turn/failed arrives as system IsError, not assistant
+		// terminal stop (🎯T1052 / jv-t1046-failed-row-probe). Latch before
+		// idle classification can re-nudge the same unsupported pin.
+		if ev.IsError {
+			detail := strings.TrimSpace(ev.Text)
+			if detail == "" {
+				detail = strings.TrimSpace(ev.Reason)
+			}
+			if detail != "" {
+				s.applyProviderRequestTurnFailure(name, true, agenterr.ClassClientBug, detail, "")
+				s.noteUnsupportedModelFromAgentEvent(name, true, detail, "")
+			}
+		}
 		// Broadcast raw event to web UI activity feed.
 		s.broadcastAgentEvent(name, ev)
 		// 🎯T902: a mid-turn answer to a steered question goes to its asker now.
@@ -1691,14 +2047,14 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		// 🎯T766.2: the sink is the only place with sub-second knowledge of
 		// motion, so it feeds the authority. Every event proves the seat is
 		// alive and moved; a terminal stop additionally ends the turn.
-		s.Seats().FromTurnEvent(name, ev.IsTerminalStop(), time.Now())
+		s.Seats().FromTurnEvent(name, ev.IsTerminalStop() || ev.Type == "assistant" && ev.StopReason == "length", time.Now())
 		// 🎯T927: motion is what tells a running turn from one that died
 		// with its host handle. A bare acceptance is not motion: a sidecar
 		// accepts a prompt it only queues behind a turn that never ends.
 		if !ev.IsTerminalStop() && ev.ProgressType != claudia.ProgressPromptAccepted {
 			s.wedges.moved(name, time.Now())
 		}
-		if ev.IsTerminalStop() {
+		if ev.IsTerminalStop() || ev.Type == "assistant" && ev.StopReason == "length" {
 			text := responseText.String()
 			n := toolCalls
 			responseText.Reset()
@@ -1717,16 +2073,24 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			s.mu.Lock()
 			tracker := s.idleActivity
 			s.mu.Unlock()
+			var turnClass agenterr.Class
 			if tracker != nil {
 				tracker.NoteTerminalTurn(name, text, n)
+				tracker.NoteEmptyTurnCause(name, ev.StopReason)
+				s.noteEmptyTurnFault(name)
 				// Reason is the typed cause. The accumulated sentence is not.
-				class := tracker.ApplyTerminalCause(name, ev.Reason)
-				if agenterr.HardBlock(class, "") {
-					s.ObserveProviderFailure(class, text)
+				turnClass = tracker.ApplyTerminalCause(name, ev.Reason)
+				if agenterr.HardBlock(turnClass, "") {
+					s.ObserveProviderFailure(turnClass, text)
 				}
+				s.maybeNotifyRateLimitPersisted(name, turnClass)
 				tracker.NoteTurnErrored(name, ev.IsError)
+				s.applyProviderRequestTurnFailure(name, ev.IsError, turnClass, ev.Reason, text)
 			}
-			if text != "" {
+			if providerTurnRefused(ev.IsError, turnClass, text) {
+				// 🎯T959: provider refusal text is not forwarded as worker progress.
+				s.notifyProviderTurnRefused(name, turnClass)
+			} else if text != "" {
 				// Notify overseer first so the done report is delivered before
 				// the worker leaves the registry (🎯T165) — unless [silent]
 				// (ops events: daemon-restarted / worker-idle fine chatter).
@@ -1739,7 +2103,12 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			// Off the event goroutine since 🎯T416: the drain now waits for the
 			// message to become a turn, and blocking an agent's event stream
 			// for that window would stall its own progress reporting.
-			s.goDrainAgentSendQueue(name)
+			// 🎯T959: auth refusal terminals must not drain queued fleet sends
+			// before plan-login recovery's empty broker handoff — that races
+			// submitPlanAuthRedrive and submits pending payload first.
+			if turnClass != agenterr.ClassAuth {
+				s.goDrainAgentSendQueue(name)
+			}
 			// 🎯T793: a malformed load-bearing envelope (e.g. a silent-decision
 			// confidence written as a 1-10 rank instead of [0,1]) gets the
 			// author itself told the exact field and range, on its own
@@ -1765,6 +2134,24 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 				}
 				s.logLifecycle(compAgentLifecycle, "envelope", "correction_sent", fields)
 				return
+			}
+			// 🎯T1190: a ```jevons fence Parse rejects for placement gets the
+			// author a typed correction once per report body, same channel as
+			// 🎯T793, before reap sees unknown_report.
+			if s.tryDeliverPlacementCorrection(name, text) {
+				return
+			}
+			// 🎯T404.2: a valid owner-decision block with no question-default
+			// is not malformed (Validate does not refuse it — refusing would
+			// drop the question, the 🎯T378 failure) but the author is still
+			// told, on its own channel, same shape as 🎯T793. The question is
+			// already recorded/paged before this runs; the seat is reaped as
+			// usual — this is a side notice, not a correction that holds it.
+			if notice := envelope.MissingDefaultNotice(text); notice != "" {
+				if _, err := s.deliverByName(name, notice, OriginAgent, false); err != nil {
+					slog.Warn("T404.2 missing-default notice undeliverable", "agent", name, "err", err)
+				}
+				s.logLifecycle(compAgentLifecycle, "envelope", "missing_default_notice_sent", map[string]any{"agent": name})
 			}
 			// 🎯T165: finished work agents auto stop+Remove (not persona-only).
 			s.maybeReapDoneWorkAgent(name, text)
@@ -1882,6 +2269,26 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 	s.notifyParentReport(agentName, parentMsg)
 
 	overseer := s.overseerName()
+	// A worker whose parent is a running product owner reports to that PO,
+	// which acts on it (🎯T129); the overseer copy was a second turn for the
+	// same report. On 2026-10-23, 54 of the overseer's 84 prompts in two
+	// hours were these copies, most answered "[silent]", each re-reading
+	// the overseer's whole context. The overseer still gets reports from
+	// seats it parents and any report carrying a false-green flag.
+	if s.parentIsRunningProductOwner(agentName, overseer) && !strings.HasPrefix(msg, envelope.PrefixFalseGreen) {
+		s.logLifecycle(compAgentLifecycle, "notify", "parent_only", map[string]any{
+			"agent": agentName,
+		})
+		return
+	}
+	if s.poReplyHeld(agentName, text, strings.HasPrefix(msg, envelope.PrefixFalseGreen)) {
+		slog.Info("product owner reply held from the overseer (not an answer, not typed)",
+			"agent", agentName, "len", len(text), "report_id", handle.ReportID)
+		s.logLifecycle(compAgentLifecycle, "notify", "po_reply_held", map[string]any{
+			"agent": agentName, "report_id": handle.ReportID,
+		})
+		return
+	}
 	res, err := s.deliverByName(overseer, msg, OriginAgent, false)
 	if err != nil {
 		// Undeliverable is loud: the reply the owner is waiting on did not
@@ -1976,22 +2383,47 @@ func (s *Server) confirmStartBrief(ctx context.Context, name string, existed boo
 			// running/never_briefed seat as successful work, and (🎯T387)
 			// retire a row this call minted so the target is not left
 			// engaged by a worker that never ran.
+			failMsg := formatStartFailure(err, lifeString(life, "provider_knob"))
 			if released {
 				life["seat_released"] = true
 				// 🎯T433: the tool error below reaches only the caller, and a
 				// caller LLM dropping it is how a mint died twice with nobody
 				// told. The seat's parent hears about the lost mint by name,
 				// with the error verbatim, on the durable send path.
-				s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
+				s.notifySpawnFailure(def.Parent, def.TargetID, name, failMsg)
 			}
 			life["failure_class"] = agenterr.Classify(err).String()
 			life["err"] = err.Error()
 			life["session_id"] = sessionDisplay(def.SessionID)
 			s.logLifecycle(compAgentLifecycle, "start", "error", life)
-			return startBriefResult{life: life, failed: prefixRehydrate(rehydrated,
-				fmt.Sprintf("start failed: %v", err))}
+			return startBriefResult{life: life, failed: prefixRehydrate(rehydrated, failMsg)}
 		}
 	}
 	life["prompt_delivered"] = true
 	return startBriefResult{life: life, def: def, delivered: true}
+}
+
+// parentIsRunningProductOwner reports whether agentName's registry parent is a
+// product owner, other than the overseer, whose seat is running.
+func (s *Server) parentIsRunningProductOwner(agentName, overseer string) bool {
+	if s == nil || s.registry == nil {
+		return false
+	}
+	parent := ""
+	if def := s.registry.Def(agentName); def != nil {
+		parent = strings.TrimSpace(def.Parent)
+	} else if n, ok := s.RemovalAccount().NoticeFor(agentName); ok {
+		// A finish-report reaps the seat before its last turn-end notify
+		// runs, so the row is gone exactly when the report arrives; the
+		// removal notice keeps the parent. Without this, every finishing
+		// worker under a PO cost the overseer a turn (2026-10-27, T1229).
+		parent = strings.TrimSpace(n.Parent)
+	}
+	if parent == "" || parent == overseer || !s.parentIsProductOwner(parent) {
+		return false
+	}
+	// The overseer copy is the net for a PO known to be down. Liveness is
+	// Unknown for the minute after every restart (🎯T1157); treating that as
+	// down spent an overseer turn on a report the PO already held in sendq.
+	return s.seatState(parent).Alive != seatstate.No
 }

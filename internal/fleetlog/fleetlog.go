@@ -74,6 +74,9 @@ const (
 	// not a parked one: keeping it as a "stopped" row is a zombie in the
 	// fleet tree, so the sweep removes it instead of clearing the handle.
 	ReasonDeadSeat = "dead_seat"
+	// ReasonResumeRefusal is 🎯T1135: bounded resume refusal escalation
+	// removed the row so frontier consume can respawn the target.
+	ReasonResumeRefusal = "resume_refusal"
 	// ReasonExpire and ReasonRotationDrop have no caller today. They are part
 	// of the vocabulary so a future path that needs them takes a name from
 	// this list instead of inventing a silent removal.
@@ -90,8 +93,8 @@ const (
 func Reasons() []string {
 	out := []string{
 		ReasonAsideDismiss, ReasonBudgetKill, ReasonExpire, ReasonKill,
-		ReasonReapAchieve, ReasonReapDone, ReasonReapStop, ReasonRotationDrop,
-		ReasonStartupStall, ReasonStopEngagement, ReasonThreadRemove,
+		ReasonReapAchieve, ReasonReapDone, ReasonReapStop, ReasonResumeRefusal,
+		ReasonRotationDrop, ReasonStartupStall, ReasonStopEngagement, ReasonThreadRemove,
 		ReasonUnbriefedSeat,
 	}
 	sort.Strings(out)

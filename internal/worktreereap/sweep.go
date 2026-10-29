@@ -9,9 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/proclist"
 )
 
 // Config is one sweep of one clone.
@@ -189,6 +190,8 @@ func observe(e Entry, markers markerIndex) Observation {
 	// gitRaw, not git: the trim would eat the leading column this reads.
 	if out, err := gitRaw(e.Path, "status", "--porcelain", "--untracked-files=no"); err == nil {
 		obs.DirtyTracked, obs.Hollow = classifyStatus(out)
+	} else {
+		obs.StatusErr = err
 	}
 
 	return obs
@@ -357,25 +360,16 @@ func listWorktrees(root string) ([]Entry, error) {
 // judged against the same instant. A worktree reaped because its owner died
 // between two `ps` calls would be indistinguishable from a bug.
 func Snapshot() (Liveness, error) {
-	out, err := exec.Command("ps", "-eo", "pid=,command=").Output()
+	procs, err := proclist.All()
 	if err != nil {
 		return Liveness{}, err
 	}
 	live := Liveness{Cmds: map[int]string{}}
-	for line := range strings.SplitSeq(string(out), "\n") {
-		line = strings.TrimLeft(line, " ")
-		pidStr, cmd, ok := strings.Cut(line, " ")
-		if !ok {
-			continue
-		}
-		pid, err := strconv.Atoi(pidStr)
-		if err != nil {
-			continue
-		}
-		live.Cmds[pid] = strings.TrimSpace(cmd)
+	for _, p := range procs {
+		live.Cmds[p.PID] = p.Command
 	}
 	if len(live.Cmds) == 0 {
-		return live, fmt.Errorf("ps listed no processes")
+		return live, fmt.Errorf("process table listed no processes")
 	}
 	return live, nil
 }

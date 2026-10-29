@@ -38,6 +38,29 @@ func TestClassifyExistingOnlyReplacesOurOwnHook(t *testing.T) {
 	}
 }
 
+// 🎯T1299: an older copy of a hook that carries its own marker (pre-push
+// 🎯T1279, attribution 🎯T760) is ours to refresh, not foreign.
+func TestClassifyExistingRefreshesOlderCopiesOfEveryRepoHook(t *testing.T) {
+	for _, c := range []struct {
+		name, marker string
+	}{
+		{"pre-push", commitscope.PushHookMarker},
+		{"prepare-commit-msg", commitscope.AttributionHookMarker},
+		{"post-merge", commitscope.MergeHookMarker},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ours := []byte("#!/bin/sh\n# hook (" + c.marker + ") v2\n")
+			older := []byte("#!/bin/sh\n# hook (" + c.marker + ") v1\n")
+			if got := commitscope.ClassifyExisting(older, ours); got != commitscope.HookUpdated {
+				t.Errorf("older %s copy: ClassifyExisting = %v, want HookUpdated", c.name, got)
+			}
+			if got := commitscope.ClassifyExisting([]byte("#!/bin/sh\nexec make lint\n"), ours); got != commitscope.HookForeign {
+				t.Errorf("foreign %s: ClassifyExisting = %v, want HookForeign", c.name, got)
+			}
+		})
+	}
+}
+
 // TestInstallRefusesToSpeakForAHookItDidNotWrite is the destructive case: a
 // build step that silently overwrote a developer's own pre-commit hook would
 // be doing the very thing this target is about.
@@ -253,6 +276,8 @@ func installHookShims(t *testing.T, dir string) {
 	t.Helper()
 	mustWrite(t, filepath.Join(dir, "scripts", "hooks", "pre-commit"), readFile(t, shimPath(t)), 0o755)
 	mustWrite(t, filepath.Join(dir, "scripts", "hooks", "prepare-commit-msg"), readFile(t, prepareCommitMsgShimPath(t)), 0o755)
+	mustWrite(t, filepath.Join(dir, "scripts", "hooks", "pre-merge-commit"), readFile(t, filepath.Join(repoRoot(t), "scripts", "hooks", "pre-merge-commit")), 0o755)
+	mustWrite(t, filepath.Join(dir, "scripts", "hooks", "pre-push"), readFile(t, filepath.Join(repoRoot(t), "scripts", "hooks", "pre-push")), 0o755)
 }
 
 func readFile(t *testing.T, path string) string {

@@ -84,7 +84,7 @@ func TestT1013_6ResolveMintHasNoClaudeBias(t *testing.T) {
 	}
 	// AFTER: ResolveMint (the production omit-provider path) picks the
 	// greener Grok, not Claude — there is no Claude bias left to land on.
-	got, err := ResolveMint(context.Background(), cands, now, DefaultThresholds())
+	got, err := ResolveMint(context.Background(), cands, now, DefaultThresholds(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

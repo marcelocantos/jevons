@@ -107,6 +107,38 @@ func TestHasActivationEvidence(t *testing.T) {
 	}
 }
 
+func TestHasDailyPathEvidenceLegacyProse(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty", "", false},
+		{"daily path legacy", "proven on the daily path after bounce", true},
+		{"development surface", "observed on the development surface after restart-jevonsd", true},
+		{"hermetic only", "Done. go test ./internal/server PASS", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := HasDailyPathEvidence(tc.in)
+			if got != tc.want {
+				t.Fatalf("HasDailyPathEvidence(%q)=%v want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+	activated := envelope.Format(&envelope.Message{
+		Kind:         envelope.KindFinishReport,
+		Target:       "T572",
+		SHA:          "abcdef0123456",
+		Daily:        "restart-jevonsd",
+		Verdict:      envelope.VerdictGreen,
+		SilentLedger: envelope.SilentLedgerEmpty,
+	})
+	if !HasDailyPathEvidence(activated) {
+		t.Fatal("envelope daily slot must count for HasDailyPathEvidence")
+	}
+}
+
 func TestLooksLikeHermeticOnlyDaemonClaim(t *testing.T) {
 	prose := "Done. hermetic go test ./internal/server PASS"
 	if LooksLikeHermeticOnlyDaemonClaim(prose) {

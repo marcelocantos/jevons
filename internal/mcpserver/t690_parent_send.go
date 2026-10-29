@@ -107,4 +107,5 @@ func (s *Server) notifyParentReport(agentName, msg string) {
 		"agent": agentName, "parent": parent, "status": res.Status,
 		"channel": ParentReportChannel,
 	})
+	s.noteBlockedChildAwaitingDirection(agentName, parent, res.Status)
 }

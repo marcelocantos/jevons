@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/reportcollapse"
 )
 
 // 🎯T774 — A BACKLOG DRAINS AS ONE DIGEST, NOT ONE RECIPIENT TURN PER ENTRY.
@@ -118,6 +119,23 @@ func ids(cs []classified) string {
 	return strings.Join(parts, ", ")
 }
 
+// BuildFullMessage renders entries (oldest first) as one message addressed
+// to seat, every entry delivered in full under its own attribution header —
+// no collapsing, no "superseded by" folding. Used by ClaimAll (🎯T1252) to
+// merge a small backlog (below DigestThreshold, where BuildDigest's collapse
+// does not kick in) into one turn instead of one-per-terminal-stop.
+// Pure: it reads nothing and archives nothing.
+func BuildFullMessage(seat string, entries []Entry) string {
+	var body strings.Builder
+	fmt.Fprintf(&body, "[%d queued message(s) for %s, delivered together as one turn instead of one per turn — 🎯T1252]\n",
+		len(entries), seat)
+	for _, e := range entries {
+		fmt.Fprintf(&body, "\n-- %s, entry id=%s --\n%s\n",
+			e.EnqueuedAt.UTC().Format("15:04:05Z"), e.ID, strings.TrimSpace(e.Text))
+	}
+	return body.String()
+}
+
 // BuildDigest renders entries (oldest first) as one message addressed to seat.
 // Pure: it reads nothing and archives nothing.
 func BuildDigest(seat string, entries []Entry) string {
@@ -170,13 +188,28 @@ func BuildDigest(seat string, entries []Entry) string {
 		fmt.Fprintf(&body, "\n== Worker reports (%d senders, newest sender first) ==\n", len(reports))
 		for _, sender := range newestFirst(reports) {
 			rs := reports[sender]
-			newest := rs[len(rs)-1]
-			fmt.Fprintf(&body, "\n-- %s: newest of %d report(s), %s, entry id=%s --\n%s\n",
-				sender, len(rs), stamp(newest.e.EnqueuedAt), newest.e.ID, strings.TrimSpace(newest.e.Text))
-			if len(rs) > 1 {
-				collapsed += len(rs) - 1
-				fmt.Fprintf(&body, "   superseded by the above: %d earlier report(s) from %s, readable by entry id: %s\n",
-					len(rs)-1, sender, ids(rs[:len(rs)-1]))
+			var kept, collapsible []classified
+			for _, c := range rs {
+				if reportcollapse.NeverDrop(c.e.Text) || reportcollapse.IsTerminalReport(c.e.Text) {
+					kept = append(kept, c)
+				} else {
+					collapsible = append(collapsible, c)
+				}
+			}
+			for _, c := range kept {
+				fmt.Fprintf(&body, "\n-- %s: kept report, %s, entry id=%s --\n%s\n",
+					sender, stamp(c.e.EnqueuedAt), c.e.ID, strings.TrimSpace(c.e.Text))
+			}
+			if len(collapsible) > 0 {
+				newest := collapsible[len(collapsible)-1]
+				fmt.Fprintf(&body, "\n-- %s: newest of %d non-terminal report(s), %s, entry id=%s --\n%s\n",
+					sender, len(collapsible), stamp(newest.e.EnqueuedAt), newest.e.ID, strings.TrimSpace(newest.e.Text))
+				if len(collapsible) > 1 {
+					dropped := len(collapsible) - 1
+					collapsed += dropped
+					fmt.Fprintf(&body, "   superseded by the above: %d earlier non-terminal report(s) from %s, readable by entry id: %s\n",
+						dropped, sender, ids(collapsible[:len(collapsible)-1]))
+				}
 			}
 			// A relay for a seat that has since reported is folded into its report.
 			if hs := helds[sender]; len(hs) > 0 {
@@ -248,6 +281,36 @@ type archiveFile struct {
 // inside a digest. A receipt-bound digest instead retains its exact identity
 // and payload and is retried through ClaimFront.
 func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
+	return s.claimMerged(agent, func(n int) bool { return n > DigestThreshold }, BuildDigest)
+}
+
+// ClaimAll folds every claimable Pending entry into one Attempting entry when
+// there are 2..DigestThreshold of them, delivering each one in full — no
+// collapsing, no superseding, every message attributed and in order.
+//
+// 🎯T1252: below DigestThreshold, a drain used to claim ONE entry (ClaimFront)
+// and stop once that entry began a turn, leaving the rest of a small backlog
+// to wait for the NEXT terminal stop — the next time the seat goes idle,
+// which can be a full long turn away. Two or more owner notes queued behind
+// one hour-long implement turn then arrived an hour apart each, instead of
+// together the moment the seat freed up. ClaimAll closes that gap: a backlog
+// too small for ClaimDigest's collapse is still drained as one turn, just
+// without collapsing anything away.
+//
+// Returns ok=false — touching nothing — when there are fewer than two
+// pending entries (ClaimFront is the right claim), when ClaimDigest's own
+// threshold applies instead, when an attempt this store owns is in flight,
+// or when a typed/bound entry is pending. Held (Attempting/Uncertain)
+// entries stay exactly where they are, same as ClaimDigest.
+func (s *Store) ClaimAll(agent string) (Entry, bool, error) {
+	return s.claimMerged(agent, func(n int) bool { return n >= 2 && n <= DigestThreshold }, BuildFullMessage)
+}
+
+// claimMerged is ClaimDigest and ClaimAll's shared claim: gather every
+// claimable Pending entry, check qualifies(count) before touching anything,
+// then fold the qualifying backlog into one Attempting entry rendered by
+// build. Held, typed, and bound entries are never folded in.
+func (s *Store) claimMerged(agent string, qualifies func(int) bool, build func(string, []Entry) string) (Entry, bool, error) {
 	if s == nil {
 		return Entry{}, false, fmt.Errorf("sendq: no store")
 	}
@@ -262,9 +325,9 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 		return Entry{}, false, nil
 	}
 	// Typed directives, owner questions, and previously bound receipt identities
-	// cannot be folded into a digest:
-	// a digest has one delivery attempt and cannot carry one question identity
-	// for several distinct requests. A later hold must be
+	// cannot be folded into a merged entry:
+	// a merged entry has one delivery attempt and cannot carry one question
+	// identity for several distinct requests. A later hold must be
 	// able to remove the precise pending authorization under the queue lock.
 	// An empty state that still carries an attempt id is not pending.
 	for _, e := range f.Entries {
@@ -289,14 +352,14 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 		}
 		members = append(members, e)
 	}
-	if len(members) <= DigestThreshold {
+	if !qualifies(len(members)) {
 		return Entry{}, false, nil
 	}
 	sort.SliceStable(members, func(i, j int) bool { return members[i].EnqueuedAt.Before(members[j].EnqueuedAt) })
 
 	merged := Entry{
 		ID:         NewID(),
-		Text:       BuildDigest(agent, members),
+		Text:       build(agent, members),
 		EnqueuedAt: members[0].EnqueuedAt,
 	}
 	memberIDs := make([]string, len(members))
@@ -337,6 +400,69 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 		return Entry{}, false, err
 	}
 	return merged, true, nil
+}
+
+// ResolveClaimAllFailure settles a ClaimAll merge that did not confirm by
+// unpacking it back to exactly the per-entry state ClaimFront would have
+// left behind had it alone claimed the oldest member: that member takes the
+// failure outcome (so 🎯T418 / 🎯T623's per-entry retry/hold rules apply to
+// it unchanged), and every other member returns to plain Pending, untouched
+// — never merged, never resent, never lost.
+//
+// 🎯T1252: ClaimAll exists to deliver a SUCCESSFUL small drain as one turn.
+// A failed send must not cost the per-entry retry guarantees ClaimFront
+// already gives at that scale. ClaimDigest's own above-threshold blob stays
+// merged on failure and is unpacked only lazily on the next claim
+// (TestT774UncertainDigestStaysHeldAndReadable) — a deliberate tradeoff at
+// that scale that is wrong for 2-5 messages.
+func (s *Store) ResolveClaimAllFailure(agent string, merged Entry, outcome AttemptOutcome, detail string) error {
+	if outcome != DefinitelyNotSent && outcome != Unverified {
+		return fmt.Errorf("sendq: ResolveClaimAllFailure outcome must be DefinitelyNotSent or Unverified, got %q", outcome)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	owned := merged.AttemptID != "" && s.active[agent] == merged.AttemptID
+	if owned {
+		delete(s.active, agent)
+	}
+	f, err := s.load(agent)
+	if err != nil {
+		return err
+	}
+	at := -1
+	for idx, e := range f.Entries {
+		if e.ID == merged.ID {
+			at = idx
+			break
+		}
+	}
+	if at < 0 || f.Entries[at].AttemptID != merged.AttemptID || (f.Entries[at].State == Pending && !owned) {
+		return fmt.Errorf("sendq: stale delivery attempt for %q", agent)
+	}
+	members, ok := s.archivedMembers(merged.ID)
+	if !ok || len(members) == 0 {
+		return fmt.Errorf("sendq: ResolveClaimAllFailure: no archived members for %s", merged.ID)
+	}
+	head, _, err := applyDelivery(members[0], stepClaim, "", NewID(), nil)
+	if err != nil {
+		return err
+	}
+	switch outcome {
+	case DefinitelyNotSent:
+		head, _, err = applyDelivery(head, stepNotSent, detail, "", nil)
+	case Unverified:
+		head, _, err = applyDelivery(head, stepUnverified, detail, "", nil)
+	}
+	if err != nil {
+		return err
+	}
+	unpacked := append([]Entry{head}, members[1:]...)
+	kept := make([]Entry, 0, len(f.Entries)+len(unpacked)-1)
+	kept = append(kept, f.Entries[:at]...)
+	kept = append(kept, unpacked...)
+	kept = append(kept, f.Entries[at+1:]...)
+	f.Entries = kept
+	return s.save(f)
 }
 
 func (s *Store) archive(a archiveFile) error {

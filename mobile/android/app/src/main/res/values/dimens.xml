@@ -1,0 +1,5 @@
+<resources>
+    <!-- Space between the widget title and the provider columns. UsageRender
+         subtracts it from the bar track height so the bars still fit. -->
+    <dimen name="usage_title_gap">8dp</dimen>
+</resources>

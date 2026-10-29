@@ -58,18 +58,18 @@ func currentEventJournal() *eventlog.Journal {
 // outright (🎯T1013.6), not relocated — an omit-provider mint is decided
 // purely by claudia.Resolve's own dest-band ranking (🎯T693: locked, then
 // under, then ok; slack breaks ties within a band).
-func ResolveMint(ctx context.Context, cands []DestCand, now time.Time, th Thresholds) (claudia.ModelPick, error) {
-	return resolvePlanCandidates(ctx, cands, "", "", true, now, th)
+func ResolveMint(ctx context.Context, cands []DestCand, now time.Time, th Thresholds, tieBreak []claudia.Provider) (claudia.ModelPick, error) {
+	return resolvePlanCandidates(ctx, cands, "", "", true, now, th, tieBreak)
 }
 
 // ResolveDest is the migrate/park dest pick (🎯T691 / 🎯T693). exclude
 // drops the seat's current provider. No PreferProvider — not Claude-first.
 // Steerability is not filtered here: 🎯T791 scopes the exclusion to mint.
-func ResolveDest(ctx context.Context, cands []DestCand, exclude string, now time.Time, th Thresholds) (claudia.ModelPick, error) {
-	return resolvePlanCandidates(ctx, cands, "", claudia.Provider(exclude), false, now, th)
+func ResolveDest(ctx context.Context, cands []DestCand, exclude string, now time.Time, th Thresholds, tieBreak []claudia.Provider) (claudia.ModelPick, error) {
+	return resolvePlanCandidates(ctx, cands, "", claudia.Provider(exclude), false, now, th, tieBreak)
 }
 
-func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclude claudia.Provider, steerableOnly bool, now time.Time, th Thresholds) (claudia.ModelPick, error) {
+func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclude claudia.Provider, steerableOnly bool, now time.Time, th Thresholds, tieBreak []claudia.Provider) (claudia.ModelPick, error) {
 	excluded := map[claudia.Provider]bool{seatprovider.Resolve(exclude).Plan.AsProvider(): exclude != ""}
 	usage := make([]claudia.PlanUsage, 0, len(cands))
 	// 🎯T1013.1: the owner's band override is an input to claudia.Resolve
@@ -92,7 +92,7 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 			continue
 		}
 		provider := seatprovider.Resolve(claudia.Provider(p)).Plan.AsProvider()
-		u := backendToPlanUsage(c.Backend)
+		u := planUsageForResolve(c.Backend, now)
 		u.Provider = provider
 		usage = append(usage, u)
 		if ov := c.Backend.Override; ov != nil {
@@ -129,10 +129,15 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		exclusionStrs = append(exclusionStrs, string(p))
 	}
 	j := currentEventJournal()
+	tieBreakStrs := make([]string, 0, len(tieBreak))
+	for _, p := range tieBreak {
+		tieBreakStrs = append(tieBreakStrs, string(p))
+	}
 	eventlog.LogEvent(j, "info", "claudia_resolve", "request", "resolve: requesting plan destination", map[string]any{
 		"prefer_provider":    string(prefer),
 		"exclude_provider":   string(exclude),
 		"steerable_only":     steerableOnly,
+		"tie_break":          tieBreakStrs,
 		"catalog_exclusions": exclusionStrs,
 		"capped":             capped,
 		"unsteerable":        unsteer,
@@ -144,7 +149,7 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		PreferPlan: true, RequireUsage: true, Background: true,
 		PreferProvider: prefer, ExcludeProviders: exclusions,
 		Usage: usage, Now: now, Thresholds: cth,
-		OwnerOverride: ownerOverride,
+		OwnerOverride: ownerOverride, TieBreak: tieBreak,
 	})
 	if err != nil {
 		parts := []string{err.Error()}
@@ -244,7 +249,7 @@ func backendsToPlanUsage(cands []DestCand) []claudia.PlanUsage {
 // ordering but no tag carries it yet. Once the pin does, this guard is a
 // no-op and the verdict is claudia's alone.
 func classifyPlan(be Backend, now time.Time, th Thresholds) claudia.PlanVerdict {
-	u := backendToPlanUsage(be)
+	u := planUsageForResolve(be, now)
 	if u.Status != claudia.PlanUsageAvailable {
 		return claudia.PlanVerdict{
 			Usage:   u,
@@ -255,7 +260,13 @@ func classifyPlan(be Backend, now time.Time, th Thresholds) claudia.PlanVerdict 
 	return claudia.ClassifyPlan(u, now, claudiaThresholdsPtr(th))
 }
 
-func backendToPlanUsage(be Backend) claudia.PlanUsage {
+// planUsageForResolve is how Claudia sees a backend for mint/migrate/resolve
+// (🎯T824). A window whose resets_at is already past describes the previous
+// period — it must not pin hot/ahead/exhausted bands or mark the whole
+// backend unavailable while headroom is still visible. Those windows are
+// treated as unknown-but-eligible (ResetsAt cleared). Fetch-age staleness
+// with no rollover still fails closed as an unreadable reading.
+func planUsageForResolve(be Backend, now time.Time) claudia.PlanUsage {
 	out := backendsToPlanUsage([]DestCand{{Provider: be.Provider, Backend: be}})
 	if len(out) == 0 {
 		return claudia.PlanUsage{
@@ -264,13 +275,25 @@ func backendToPlanUsage(be Backend) claudia.PlanUsage {
 			Reason:   be.Reason,
 		}
 	}
-	// Keep stale readings visible in the cockpit, but never let them move
-	// a seat or admit a new one. Claudia sees an unavailable policy input.
-	if be.Stale {
-		out[0].Status = claudia.PlanUsageUnavailable
-		out[0].Reason = "stale plan reading"
+	u := out[0]
+	if !be.Stale && (be.FetchedAt.IsZero() || now.Sub(be.FetchedAt) <= DefaultStaleAfter) {
+		return u
 	}
-	return out[0]
+	if windowRolledOver(be.Windows, now) {
+		for i := range u.Windows {
+			if u.Windows[i].ResetsAt != nil && u.Windows[i].ResetsAt.Before(now) {
+				u.Windows[i].ResetsAt = nil
+			}
+		}
+		return u
+	}
+	u.Status = claudia.PlanUsageUnavailable
+	u.Reason = "stale plan reading"
+	return u
+}
+
+func backendToPlanUsage(be Backend) claudia.PlanUsage {
+	return planUsageForResolve(be, time.Now())
 }
 
 func claudiaThresholdsPtr(th Thresholds) *claudia.PlanThresholds {

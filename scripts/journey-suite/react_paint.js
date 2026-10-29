@@ -56,10 +56,17 @@ async function waitReact(page) {
   // #root is the React mount, not chrome. Vanilla owner chrome is asserted
   // per-scenario (#messages, #input, …). Do not treat today's tree as ready.
   await page.waitForFunction(() => !!document.getElementById('root'), null, { timeout: 20000 });
+  // 🎯T1303: #status-text reads "connecting" until the socket is up and then
+  // the overseer phase (idle, thinking, …); it never reads "connected". The
+  // old wait for that word always ran its full 25 s and was swallowed, so
+  // every scenario paid 25 s and none was told when the socket never came up.
   await page.waitForFunction(() => {
     const st = document.getElementById('status-text');
-    return st && String(st.textContent || '') === 'connected';
-  }, null, { timeout: 25000 }).catch(() => {});
+    const txt = st ? String(st.textContent || '').trim() : '';
+    return txt !== '' && txt !== 'connecting';
+  }, null, { timeout: 25000 }).catch(() => {
+    throw new Error('cockpit never connected: #status-text still "connecting" after 25 s');
+  });
 }
 
 async function shot(page) {
@@ -71,6 +78,10 @@ async function shot(page) {
 
 // Vanilla owner-visible chrome the retired targets named.
 async function requireIds(page, ids, tid) {
+  // 🎯T1303: chrome that paints from fetched data appears after the socket
+  // connects. Give it time to appear; a missing element still fails.
+  await page.waitForFunction((want) => want.every((id) => !!document.getElementById(id)),
+    ids, { timeout: 10000 }).catch(() => {});
   const missing = await page.evaluate((want) => {
     return want.filter((id) => !document.getElementById(id));
   }, ids);
@@ -236,11 +247,31 @@ async function scenarioComposer(page) {
 async function scenarioFleet(page) {
   // T68 / T72 / T72.1: RHS tree shows the live agent graph.
   await requireIds(page, ['agents'], 'T72');
-  const found = await page.evaluate((name) => {
+  const inTree = () => page.evaluate((name) => {
     const root = document.getElementById('agents');
     if (!root) return false;
     return (root.textContent || '').indexOf(name) >= 0;
   }, AGENT);
+  // 🎯T1303: the tree paints from /api/agents, which the cockpit refetches
+  // every 5 s; a socket that is up does not mean that answer has arrived.
+  // Wait for the seat (or a fold that may hold it) before judging.
+  await page.waitForFunction((name) => {
+    const root = document.getElementById('agents');
+    return !!root && ((root.textContent || '').indexOf(name) >= 0 ||
+      !!root.querySelector('.agent-idle-fold[aria-expanded="false"]'));
+  }, AGENT, { timeout: 15000 }).catch(() => {});
+  let found = await inTree();
+  if (!found) {
+    // 🎯T1122: an idle or parked leaf worker folds into its parent's
+    // "N idle — show" line by design. The seat is still in the tree; open
+    // the folds and look again. A minted, unbriefed seat is idle, so whether
+    // it folded depended on timing (J25 failed 3 of 5 runs, 2026-10-22..29).
+    const folds = page.locator('#agents .agent-idle-fold[aria-expanded="false"]');
+    for (let i = await folds.count(); i > 0; i--) {
+      await folds.first().click();
+    }
+    found = await inTree();
+  }
   if (!found) fail('T72.1', 'live fleet agent ' + AGENT + ' must appear in #agents (vanilla RHS tree)');
   const tree = await page.locator('#agents .agent-node').count();
   if (tree < 1) fail('T68', 'RHS must paint who-started-whom as a relationship tree (.agent-node)');
@@ -270,9 +301,12 @@ async function scenarioFrontier(page) {
   await page.goto('http://' + HOST + '/?agent=jevons', { waitUntil: 'domcontentloaded', timeout: 30000 });
   // T131 / T168 / T173 / T185: headerless table + Graph control.
   const tab = page.locator('#rhs-tab-frontier');
+  // 🎯T1303: a fresh navigation; React has not painted the RHS yet.
+  await tab.first().waitFor({ state: 'attached', timeout: 10000 }).catch(() => {});
   if ((await tab.count()) < 1) fail('T131', 'RHS must have a Frontier tab (#rhs-tab-frontier)');
   await tab.click();
   await requireIds(page, ['frontier-pane', 'frontier-graph', 'frontier-body'], 'T185');
+  await page.locator('#frontier-table').first().waitFor({ state: 'attached', timeout: 10000 }).catch(() => {});
   const table = await page.locator('#frontier-table').count();
   if (table < 1) fail('T173', 'Frontier tab must paint a headerless table (vanilla #frontier-table)');
   const thead = await page.locator('#frontier-table thead').count();

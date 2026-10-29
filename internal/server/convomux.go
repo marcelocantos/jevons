@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -140,10 +141,14 @@ func (h *muxHub) journalLock(name string) *sync.Mutex {
 }
 
 type muxSession struct {
-	send        chan []byte
-	mu          sync.Mutex
-	transcripts map[string]*muxWatch
-	planUsage   bool
+	ownerCockpitHTTP *http.Request // 🎯T1129: upgrade request for owner-send auth
+	send             chan []byte
+	mu               sync.Mutex
+	transcripts      map[string]*muxWatch
+	planUsage        bool
+	// Latest plan-usage mux frame when send is full — never pop unrelated
+	// transcript/control payloads from sess.send (🎯T1224).
+	planUsagePending []byte
 }
 
 func newMuxHub() *muxHub {
@@ -177,6 +182,20 @@ func parseTranscriptChannel(ch string) (name string, ok bool) {
 
 func encodeMux(ch, t string, body any) ([]byte, error) {
 	env := muxEnvelope{V: muxVersion, Ch: ch, T: t}
+	if raw, ok := body.(json.RawMessage); ok {
+		if !json.Valid(raw) {
+			return nil, fmt.Errorf("invalid raw mux JSON")
+		}
+		header, err := json.Marshal(env)
+		if err != nil {
+			return nil, err
+		}
+		// Preserve the subscribed JSON bytes, including whitespace and HTML
+		// characters. json.Marshal(RawMessage) would rewrite both.
+		payload := append(header[:len(header)-1], []byte(`,"body":`)...)
+		payload = append(payload, raw...)
+		return append(payload, '}'), nil
+	}
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
@@ -345,6 +364,35 @@ func (sess *muxSession) enqueue(payload []byte) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// enqueuePlanUsage coalesces to the latest snapshot when the send queue is
+// full. Pending bytes are flushed after each successful socket write so
+// transcript/send-ack ordering is preserved (🎯T1224).
+func (sess *muxSession) enqueuePlanUsage(payload []byte) {
+	if sess == nil || len(payload) == 0 {
+		return
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	// A writer may drain the channel immediately, but its post-write flush
+	// cannot pass this lock until the pending slot is fully published.
+	if sess.enqueue(payload) {
+		sess.planUsagePending = nil
+	} else {
+		sess.planUsagePending = append([]byte(nil), payload...)
+	}
+}
+
+func (sess *muxSession) tryFlushPlanUsagePending() {
+	if sess == nil {
+		return
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if len(sess.planUsagePending) != 0 && sess.enqueue(sess.planUsagePending) {
+		sess.planUsagePending = nil
 	}
 }
 
@@ -572,7 +620,12 @@ func (h *muxHub) fanFoldsLocked(name string, folds []muxwin.LiveFold) {
 			if !sess.enqueue(payload) {
 				continue
 			}
-			w.markSent(changed.ID)
+			// Only puts establish the frame id in the client's delivered set.
+			// Appends must not mark sent — a dropped put enqueue would otherwise
+			// look delivered and block retry (🎯T64.3).
+			if op == "put" {
+				w.markSent(changed.ID)
+			}
 		}
 	}
 }
@@ -682,8 +735,9 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	sess := &muxSession{
-		send:        make(chan []byte, 256),
-		transcripts: make(map[string]*muxWatch),
+		send:             make(chan []byte, 256),
+		transcripts:      make(map[string]*muxWatch),
+		ownerCockpitHTTP: r,
 	}
 	if s.mux == nil {
 		s.mux = newMuxHub()
@@ -711,6 +765,7 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					return
 				}
+				sess.tryFlushPlanUsagePending()
 			}
 		}
 	}()
@@ -771,7 +826,6 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 		if env.Ch == planUsageChannel {
 			sess.setPlanUsage(true)
 			s.writePlanUsage(ctx, conn)
-			s.kickPlanUsageRefresh()
 			return
 		}
 		if !isTranscript {
@@ -829,8 +883,7 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 			return
 		}
 		go s.interruptMuxSeat(name)
-	case "resend":
-		// 🎯T811: retry a still-queued owner message now. Never re-enqueues.
+	case "remove_held":
 		if !isTranscript || !s.isOverseerAgent(name) {
 			return
 		}
@@ -838,9 +891,40 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 			MsgID string `json:"msg_id"`
 		}
 		_ = json.Unmarshal(env.Body, &body)
-		ch := env.Ch
 		go func() {
-			if err := s.ResendOwnerMessage(strings.TrimSpace(body.MsgID)); err != nil {
+			if err := s.RemoveOwnerHeld(strings.TrimSpace(body.MsgID)); err != nil {
+				s.muxWrite(context.Background(), conn, env.Ch, "error", map[string]any{"error": err.Error(), "id": body.MsgID})
+			}
+		}()
+	case "resend":
+		// 🎯T811: retry a still-queued owner message now. Never re-enqueues.
+		// 🎯T1130: an optional mode (steer | interrupt) instead escalates a
+		// daemon-held entry — pulled out of the queue and delivered under
+		// that mode, never a second copy left behind.
+		if !isTranscript || !s.isOverseerAgent(name) {
+			return
+		}
+		var body struct {
+			MsgID string `json:"msg_id"`
+			Mode  string `json:"mode"`
+		}
+		_ = json.Unmarshal(env.Body, &body)
+		ch := env.Ch
+		msgID := strings.TrimSpace(body.MsgID)
+		rawMode := strings.TrimSpace(body.Mode)
+		go func() {
+			if rawMode != "" {
+				mode, perr := delivery.Parse(rawMode, false)
+				if perr != nil {
+					s.muxWrite(context.Background(), conn, ch, "error", map[string]any{"error": perr.Error(), "id": msgID})
+					return
+				}
+				if err := s.EscalateOwnerHeld(msgID, mode); err != nil {
+					s.muxWrite(context.Background(), conn, ch, "error", map[string]any{"error": err.Error(), "id": msgID})
+				}
+				return
+			}
+			if err := s.ResendOwnerMessage(msgID); err != nil {
 				s.muxWrite(context.Background(), conn, ch, "error", map[string]any{"error": err.Error()})
 			}
 		}()
@@ -887,6 +971,18 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 		}
 		ch := env.Ch
 		go func() {
+			// 🎯T1129: authorise before acting. A refused Cut in used to
+			// interrupt the running turn and only then be refused.
+			if sess != nil && sess.ownerCockpitHTTP != nil && (text != "" || mode.Interrupts()) {
+				if err := s.authorizeOwnerSurfaceHTTP(sess.ownerCockpitHTTP, sendOriginOwner, name); err != nil {
+					errBody := map[string]any{"error": err.Error()}
+					if sendID != "" {
+						errBody["id"] = sendID
+					}
+					s.muxWrite(context.Background(), conn, ch, "error", errBody)
+					return
+				}
+			}
 			if mode.Interrupts() {
 				s.interruptMuxSeat(name)
 			}
@@ -1114,6 +1210,9 @@ func (s *Server) muxCoalescedFromDB(name string) ([]muxwin.Event, bool) {
 		}
 	}
 	lo = muxwin.CapFollowingLo(lo, n, muxwin.MaxConnectEvents)
+	if s.isOverseerAgent(name) {
+		lo = muxwin.FloorLoToOwner(lo, s.statedbTailStartOwner(name, 1))
+	}
 	events := s.statedbRange(name, lo, n+1)
 	if s.mux != nil {
 		s.mux.replaceCacheN(name, events, 0, lo > 1, n)
@@ -1199,6 +1298,13 @@ func (s *Server) writeMuxWindow(ctx context.Context, conn muxConn, sess *muxSess
 	}
 	if hi == 0 {
 		resolved.Lo = muxwin.CapFollowingLo(resolved.Lo, n, muxwin.MaxConnectEvents)
+		if s.isOverseerAgent(name) {
+			ownerLo := s.statedbTailStartOwner(name, 1)
+			if ownerLo <= 0 {
+				ownerLo = s.statedbTailStart(name, 1)
+			}
+			resolved.Lo = muxwin.FloorLoToOwner(resolved.Lo, ownerLo)
+		}
 	}
 	// Absolute n: do not walk a cache-relative halo (that is what made
 	// first-paint claim older=0 at cache index 1). Page-up fetches more.
@@ -1381,4 +1487,39 @@ func (s *Server) writeMuxPage(ctx context.Context, conn muxConn, name string, en
 		lo = 1
 	}
 	_ = s.writeMuxWindow(ctx, conn, nil, name, lo, end, false)
+}
+
+// muxFanProvisionalWire fans a live-only provisional assistant frame to mux
+// watchers without persisting or coalescing it (🎯T584).
+func (s *Server) muxFanProvisionalWire(frameJSON string) {
+	if s == nil || s.mux == nil || strings.TrimSpace(frameJSON) == "" {
+		return
+	}
+	s.mu.RLock()
+	name := s.overseerName
+	s.mu.RUnlock()
+	if name == "" {
+		name = "jevons"
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(frameJSON), &body); err != nil {
+		return
+	}
+	payload, err := encodeMux(transcriptChannel(name), "frame", body)
+	if err != nil {
+		return
+	}
+	s.mux.mu.Lock()
+	for sess := range s.mux.conns {
+		w := sess.watchGet(name)
+		if w == nil {
+			continue
+		}
+		_, subscribed := w.window()
+		if !subscribed {
+			continue
+		}
+		_ = sess.enqueue(payload)
+	}
+	s.mux.mu.Unlock()
 }

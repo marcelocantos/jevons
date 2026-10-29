@@ -174,6 +174,22 @@ func TestIntegrateConflictTouchesNothing(t *testing.T) {
 // Another worker's uncommitted and staged edits in the shared clone are not
 // the integrator's to touch: unrelated ones survive a landing, and one on a
 // landed path refuses the landing whole.
+// 🎯T1134: a dirty bullseye.yaml row in the shared clone survives integrate;
+// the landing path never stashes or overwrites it.
+func TestIntegratePreservesDirtyBullseyeYAML(t *testing.T) {
+	base := sharedClone(t)
+	writeFile(t, filepath.Join(base, "bullseye.yaml"), "ledger:\n  T1133: uncommitted row\n")
+	_, sha := workerCommit(t, base, "jv-alpha", "a.txt", "alpha\n")
+
+	if _, err := worktree.Integrate(&worktree.IntegrateArgs{BaseWorkdir: base, AgentName: "jv-alpha"}); err != nil {
+		t.Fatalf("Integrate with dirty bullseye.yaml: %v", err)
+	}
+	mustReach(t, base, sha)
+	if got := readFile(t, filepath.Join(base, "bullseye.yaml")); got != "ledger:\n  T1133: uncommitted row\n" {
+		t.Fatalf("landing clobbered uncommitted ledger row: %q", got)
+	}
+}
+
 func TestIntegratePreservesSharedCloneEdits(t *testing.T) {
 	base := sharedClone(t)
 	_, sha := workerCommit(t, base, "jv-alpha", "a.txt", "alpha\n")
@@ -308,5 +324,71 @@ func TestSharesRepoAndExisting(t *testing.T) {
 	}
 	if br := git(t, wt, "symbolic-ref", "--short", "HEAD"); br != worktree.BranchName("jv-alpha") {
 		t.Fatalf("tree is on %q, want %q", br, worktree.BranchName("jv-alpha"))
+	}
+}
+
+func TestIntegrateRefusesLedgerShrinkOnBranch(t *testing.T) {
+	base := sharedClone(t)
+	full := "schema_version: 1\ntargets:\n  T1: {name: a}\n  T2: {name: b}\n  T3: {name: c}\n  T4: {name: d}\n  T5: {name: e}\n  T6: {name: f}\n  T7: {name: g}\n"
+	writeFile(t, filepath.Join(base, "bullseye.yaml"), full)
+	git(t, base, "add", "bullseye.yaml")
+	git(t, base, "commit", "-q", "-m", "seed ledger")
+
+	wt, err := worktree.Ensure(base, "jv-shrink")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(wt, "bullseye.yaml"), "schema_version: 1\ntargets:\n  T1: {name: a}\n")
+	writeFile(t, filepath.Join(wt, "land.txt"), "x\n")
+	git(t, wt, "add", "bullseye.yaml", "land.txt")
+	git(t, wt, "commit", "-q", "-m", "truncate ledger")
+	tip := git(t, base, "rev-parse", "master")
+
+	_, err = worktree.Integrate(&worktree.IntegrateArgs{BaseWorkdir: base, AgentName: "jv-shrink"})
+	if !errors.Is(err, worktree.ErrWorkerLedger) {
+		t.Fatalf("want ErrWorkerLedger, got %v", err)
+	}
+	if now := git(t, base, "rev-parse", "master"); now != tip {
+		t.Fatalf("refused landing moved master %s -> %s", tip, now)
+	}
+}
+
+// 🎯T1151.3: worker branches do not carry ledger edits; integrate keeps the
+// shared tip's ledger even when the worktree still has a stale copy.
+func TestIntegrateKeepsSharedLedgerWhenWorkerDidNotEditLedger(t *testing.T) {
+	base := sharedClone(t)
+	writeFile(t, filepath.Join(base, "bullseye.yaml"), "schema_version: 1\ntargets:\n  T1: {name: a}\n")
+	git(t, base, "add", "bullseye.yaml")
+	git(t, base, "commit", "-q", "-m", "seed ledger")
+
+	wt, err := worktree.Ensure(base, "jv-stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(wt, "land.txt"), "x\n")
+	git(t, wt, "add", "land.txt")
+	git(t, wt, "commit", "-q", "-m", "worker code only")
+
+	masterLedger := "schema_version: 1\ntargets:\n  T1: {name: a}\n  T3: {name: master}\n"
+	writeFile(t, filepath.Join(base, "bullseye.yaml"), masterLedger)
+	git(t, base, "commit", "-q", "-am", "master ledger")
+	tipBefore := git(t, base, "rev-parse", "master")
+
+	res, err := worktree.Integrate(&worktree.IntegrateArgs{BaseWorkdir: base, AgentName: "jv-stale"})
+	if err != nil {
+		t.Fatalf("Integrate: %v", err)
+	}
+	if res.Merge == "" {
+		t.Fatalf("want merge commit, got %+v", res)
+	}
+	ledger := readFile(t, filepath.Join(base, "bullseye.yaml"))
+	if ledger != masterLedger {
+		t.Fatalf("landing changed shared ledger:\n%s", ledger)
+	}
+	if strings.Contains(ledger, "T2:") {
+		t.Fatalf("worker stale ledger leaked into shared branch:\n%s", ledger)
+	}
+	if tipBefore != res.From {
+		t.Fatalf("From tip = %s, expected %s", res.From, tipBefore)
 	}
 }

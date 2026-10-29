@@ -95,3 +95,45 @@ func TestOwnerQuestionViewShowsSpoolNotDeliveryAndResolution(t *testing.T) {
 		t.Fatalf("replayed report reopened answer: %+v %v", open, err)
 	}
 }
+
+// The MCP list path, not merely the outbox reader, must consult blurter's
+// audit by the spooled event ID, including after a daemon restart.
+func TestOwnerQuestionListReconcilesBlurterAudit(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	repo := t.TempDir()
+	s := New(repo, nil, nil)
+	s.SetOwnerQuestionsDir(state)
+	for _, id := range []string{"received", "quiet", "pending"} {
+		q := ownerquestion.Question{Identity: ownerquestion.Identity{Repo: repo, Target: "T45", ID: id, Version: "v1"}, Text: "Choose " + id, Asker: "po", AnswerRoute: "reply", State: ownerquestion.Open}
+		if err := s.recordOwnerQuestion(q); err != nil {
+			t.Fatal(err)
+		}
+		out := ownerquestions.New(state)
+		out.Send = func(_, _, _, _ string) (string, error) { return "/tmp/blurter/spool/" + id + ".json", nil }
+		if _, err := out.Observe(ownerquestions.Question{Key: repo + "#T45#" + id, Text: q.Text}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(state+"/blurter", 0700); err != nil {
+		t.Fatal(err)
+	}
+	audit := `{"id":"received","app":"jevons","outcome":"delivered","sinks":["slack: ok","banner: ok"],"reason":"new event"}
+{"id":"quiet","app":"jevons","outcome":"suppressed","reason":"dedup window"}
+`
+	if err := os.WriteFile(state+"/blurter/audit.jsonl", []byte(audit), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cold := New(repo, nil, nil)
+	cold.SetOwnerQuestionsDir(state)
+	r, err := cold.handleOwnerQuestions(context.Background(), mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{}}})
+	if err != nil || r.IsError {
+		t.Fatalf("list: %v %+v", err, r)
+	}
+	text := ideaToolText(r)
+	for _, want := range []string{`"notification": "delivered"`, `"delivered": true`, `"slack: ok"`, `"banner: ok"`, `"notification": "suppressed"`, `"notification_reason": "dedup window"`, `"notification": "spooled"`, `"delivered": false`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %s in %s", want, text)
+		}
+	}
+}

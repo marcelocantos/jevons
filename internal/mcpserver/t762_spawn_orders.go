@@ -92,11 +92,58 @@ func (s *Server) spawnOrderJournalEvidence(now time.Time) spawnorder.Evidence {
 	if s.eventLogTail == nil {
 		return spawnorder.Evidence{ReadErr: "no event journal is wired to this server"}
 	}
+	s.spawnOrderMu.RLock()
+	ev := s.spawnOrderEvidence
+	readAt := s.spawnOrderReadAt
+	s.spawnOrderMu.RUnlock()
+
+	fresh := !readAt.IsZero() && now.Sub(readAt) < spawnOrderAttemptsTTL
+	if fresh {
+		return ev
+	}
+	if readAt.IsZero() {
+		return s.refreshSpawnOrderEvidenceSync(now)
+	}
+	s.kickSpawnOrderEvidenceRefresh()
+	return ev
+}
+
+// kickSpawnOrderEvidenceRefresh returns completion of the scan it starts, or
+// nil when no scan starts. Readers continue to use their snapshot.
+func (s *Server) kickSpawnOrderEvidenceRefresh() <-chan struct{} {
+	if s.eventLogTail == nil {
+		return nil
+	}
+	if !s.spawnOrderRefreshRunning.CompareAndSwap(false, true) {
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer s.spawnOrderRefreshRunning.Store(false)
+		s.refreshSpawnOrderEvidenceSync(time.Now())
+	}()
+	return done
+}
+
+func (s *Server) refreshSpawnOrderEvidenceSync(now time.Time) spawnorder.Evidence {
+	s.spawnOrderMu.RLock()
+	revision := s.spawnOrderRevision
+	s.spawnOrderMu.RUnlock()
+	ev := s.loadSpawnOrderEvidenceFromJournal()
 	s.spawnOrderMu.Lock()
 	defer s.spawnOrderMu.Unlock()
-	if !s.spawnOrderReadAt.IsZero() && now.Sub(s.spawnOrderReadAt) < spawnOrderAttemptsTTL {
-		return s.spawnOrderEvidence
+	if revision != s.spawnOrderRevision {
+		// The caller may reconcile this result immediately. Do not interpret
+		// an incomplete scan as evidence that a seat was never attempted.
+		return spawnorder.Evidence{ReadErr: "start journal changed during read"}
 	}
+	s.spawnOrderEvidence = ev
+	s.spawnOrderReadAt = now
+	return ev
+}
+
+func (s *Server) loadSpawnOrderEvidenceFromJournal() spawnorder.Evidence {
 	var ev spawnorder.Evidence
 	// Two reads: the daemon's own start events (unattributed) and the
 	// order-correlated ones the start observer journals. Coverage is the
@@ -125,8 +172,6 @@ func (s *Server) spawnOrderJournalEvidence(now time.Time) spawnorder.Evidence {
 			}
 		}
 	}
-	s.spawnOrderEvidence = ev
-	s.spawnOrderReadAt = now
 	return ev
 }
 
@@ -170,9 +215,7 @@ func (s *Server) observeSpawnOrderStart(h func(context.Context, mcp.CallToolRequ
 			}
 		}
 		s.LogEvent(spawnorder.JournalComponent, spawnorder.JournalStart, fields)
-		s.spawnOrderMu.Lock()
-		s.spawnOrderReadAt = time.Time{} // the next read must see this start
-		s.spawnOrderMu.Unlock()
+		s.kickSpawnOrderEvidenceRefresh()
 		return res, err
 	}
 }

@@ -2,7 +2,316 @@
 
 This is the evidence map for 🎯T1074, grounded in the [October audit](../audits/entropy-audit-2026-10-16.md). Bullseye owns acceptance and target state. A proposed check below is not evidence that it has run, and a passing component check does not certify the integrated daily-driver goal.
 
-## Current checkpoint: resume and transport retirement
+## Current checkpoint: owner-session audit, 2026-10-24
+
+
+The daily-driver goal remains open. This checkpoint supersedes the older
+progress narratives below; those retain their original revision-scoped evidence
+and are not claims about the current running system.
+
+### Latest verification boundary
+
+The later owner-session candidate work has **not** been activated or combined
+into a verified revision pair. The fleet landing hold remains in force.
+Current component evidence, independently checked by the owner-session agent:
+
+| Contract | Candidate evidence | Remaining boundary |
+| --- | --- | --- |
+| Combined Claudia prerequisites | Private `36df6758`, scoped clean race gate `7bfcb82c`; successor `ecf2d566`, sidecar `e40e4acf` (313 passed), Go child-env `b144fbaf` | Successor fixes shell overlay precedence while retaining login-shell behavior for empty overlays. Root inspected source and records, and froze exact ecf2d566 separately for Je consumer proof. Full hermetic owner gate, complete process-lifetime acceptance and activated-pair evidence remain open. |
+| Native tool visibility, main transcript | Jevons `a987fb63`, live gate `05ffaff5`, recorded lifecycle replay | Preserve this pass; no repeated provider run is needed. |
+| Native tool visibility, real worker/sidebar | Jevons `550a39df`, live running→terminal artifacts in `/tmp/jevons-j1218-sidebar-live-20261024T114322Z`; clean web `1e4cb229` (774 passed, 48 skipped), bundle `9f558c31` | The live sidebar run has no formal gate ID. Its actual pass and rendered artifacts were inspected; it is not integrated-pair evidence. |
+| Trusted native-child guard context | Jevons `841fa193`, actual dispatcher gate `b047499d`; private typed-consumer composition `5915ca50`, clean race gate `86642e1a` | Standard Bash and native Cursor ordinary-git refusal have evidence. Actual held/stale integrator and authorized canonical landing remain unproven; advanced implementation is active. The earlier package compile failure `68b793da` is preserved and fixed by composing already-reviewed typed/bounded consumers, not by treating moved tests as product proof. |
+| Durable control-plane admission | Claudia `b5c149da`, scoped clean race gate `efaa3c0a` (root/controlplane/daemon; no matched broker-wire tests) | Independent bounded source review accepts the three corrected production paths and autonomous reconcile restart test. Full combined gates and live evidence remain open. Broker receipt projection carries request/state only; full identity validation uses the existing receipt query API. |
+| Independent MCP lifetime | Built-service J43 reached the pinned auth-probe candidate after parser correction | Incomplete: Cursor login refused under `CLAUDIA_OMP_NO_REFRESH`. Normal recovery waits for owner availability; no repeated paid attempts. |
+| Provider substitution | Jevons `c251467b`, clean scoped gate `92db44d3` | Private candidate; integration and activation remain held. |
+| Progress-triggered roster cost | Jevons `74ccb07a`, full statedb clean gate `c678cf99`, production delivery plus copied-state replay `42981616` | Accepted local candidate, not active. Same 100-agent snapshot, 100 refreshes: pre-fix `1fe206ac` measured 10,000 agent-row write events / 432 ms process CPU; final candidate measured zero / 22 ms. |
+| Explicit queued follow-up/reap ordering | Jevons `25eed650` remains withheld; earlier helper gate `6796273f` is not acceptance | Advanced Grok now owns the real producer/removal correction. Required: typed admission provenance, exact successor identity, existing lifecycle removal decision shared with admission, no lock across wire waits, conditional same-incarnation cleanup. Generic Claudia T225 companion is ready for consumer wiring. Actual producer/barrier tests and owner journey remain required. |
+| Generic conditional session removal | Claudia `2c8d0fff`, registry race `558eb05f`, deterministic orderings repeated30 `86e2a0dd` | Root source review accepts the component. Frozen separately for Je consumer wiring; neither use in the complete product nor activation is proved. Earlier faulty-oracle RED `d930a881` remains evidence. |
+| Informational owner-direct completion | Jevons `91c0cafd` is withheld; raw helper run is diagnostic only | Last-origin-per-seat map misattributes interleaved work and resets on restart; ordinary GREEN oracle evidence also incorrectly triggers parent work. Acceptance now pins request/session attribution and the missing controls. Reuse durable request/queue provenance rather than a second notification store. |
+
+The sidebar, performance and guard authors were reaped after their assigned
+work; the admission author is parked during combined verification. The queue
+and generic shell-overlay Cursor authors remain active. An additional
+unrelated fleet landing `f43dcb19` bypassed NoMerge at 23:04:55 Melbourne.
+Root set `frontier_consume.disabled=true` and performed a configuration-only
+restart at 23:15 using the unchanged verified `f2657e4f` binary. Jevons is now
+PID46818, health build `eb94158e68e5e2a9`; broker40220/sidecar40260 survived.
+Startup logs confirm the frontier pause. Previous config is preserved at
+`/tmp/jevons-frontier-before-37bhogob.yaml`. This contains new automatic
+launches; it does not claim the pending guard candidate is active or that
+existing workers were stopped. The 🎯T1221 replay
+uses a consistent SQLite backup, per-run copies, identical test-only trigger
+instrumentation, and the actual `ReplaceAgents` path. Raw baseline/comparison
+artifacts are `/tmp/t1221-replay-comparison.txt` and the final replay is
+`/tmp/t1221-root-74ccb07a.txt`. The complete progress regression drives
+`DeliverOverseerEvent`, observes `agents_changed`, and preserves real row
+updates/deletions. This is the explicit journey exception for an invisible
+database-cost mechanism: no provider behavior changed. Captured stacks and
+the measured improvement do not prove it dominated the owner's CPU spike.
+
+The queue successor candidate `a652ea7b` is withheld despite its focused tests:
+it introduced a payload `root:` prefix as an authority heuristic and still
+lacks a conditional final removal fence tied to the finishing request/session.
+Missing digest member evidence also falls back to aggregate classification.
+Root sent the active Cursor author a concrete withhold and requested a scout
+before further implementation. Do not count these commits as accepted fixes.
+
+The current architecture description landed at `524af7b509c1`, with clean
+post-integration docratchet gate **GREEN `5c089087`**. The running Jevons remains
+the previously verified `f2657e4f` build; documentation integration does not
+imply another activation.
+
+The real trunk incident `546cf44c2445` produced one automatic Cursor fixer,
+whose whitespace-tolerant test correction `ad1d5415` landed at `53d837a8`.
+Clean gate **GREEN `f9b7dfe8`** exercised the previously failing clean-checkout
+web check, and the incident file was cleared. This proves engagement and
+repair for that occurrence; browser-visible notice acceptance remains open.
+
+Claudia recovery source `83ca3cc8` and its matching sidecar are active.
+Full owner gate **GREEN `a6ec64f6`** passed 293 sidecar tests,
+all Go race packages, vet, stability and mutation evidence on clean tree
+`736a936ce5d9b291fefc82dd8723149c2df698dd`; 🎯T1211's verification repair is
+achieved. The binary and matching scripts run from
+`~/.local/lib/claudia/owner-cleanup-83ca3cc`, whose activation manifest records
+the exact hashes and source. After the owner approved the restart, broker
+PID 40220 and sidecar PID 40260 started there; Jevons PID 1207 continued
+running. Fresh normal usage requests returned Claude HTTP 200 at
+2026-10-24T18:19:45+11:00 and Grok HTTP 200 at 18:19:47+11:00. All four
+agent-auth states were healthy, and registered seat names, session IDs and
+startup flags compared unchanged. 🎯T1209 is achieved. This is bounded live
+usage evidence, not forced expiry of live credentials or a paid model turn.
+
+The next typed-control-boundary candidate uses bounded 256-row pages after
+review rejected full-history materialization. Claudia `34ce92b4` passed clean
+unfiltered component race gate **GREEN `fc160948`**. Paired Jevons candidate
+`faeb4bdf` passed clean component race gate **GREEN `781a1bc0`**, using an
+explicit temporary module file pointing to the frozen Claudia candidate.
+That is candidate-pair evidence, not published-dependency delivery. **RED
+`e947202f`** exposed a later journal start being missed by a fresh spawn-order
+cache. 🎯T1214 source `f0b09fb9` passed clean unfiltered race gate **GREEN
+`eabd89b4`**; its byte-identical canonical reslice `557c501a` passed clean
+published-dependency MCP race gate **GREEN `35aeccd6`**. Guarded integration
+landed at `df8c53dc`, with clean build **GREEN `7e9b79b6`** and full MCP plus
+docratchet **GREEN `4e8d6b70`**. 🎯T1214 is achieved. History is still
+scanned each pass, so bounded memory is not a claim of unchanged CPU cost.
+
+🎯T1213's separate test-log race repair landed at `3e34ddd4`, with clean
+source race gate **GREEN `ff96dd1b`** and post-integration MCP plus docratchet
+gate **GREEN `7755b690`**. Earlier integration and baseline failures
+`2abeabef`/`139f5fc6` named disappearing shared Go-cache archives; the accepted
+run used an explicit private cache. Original race **RED `370bf5bd`** remains
+evidence. The owner-session targets are explicitly owned to avoid duplicate
+fleet implementation; a duplicate T1213 worker was paused through the actual
+cockpit and observed idle. These are component/coordination results, not
+completion of 🎯T1074.9 or the daily-driver goal.
+
+The generic Claudia interrupt prerequisite is frozen at `da92e14d` and
+independently source-approved. Clean full sidecar **GREEN `fdd29728`**
+passed 296 tests, and clean root/daemon/OMP race **GREEN `d76d60ab`** passed.
+The clean complete owner gate **GREEN `6da5500f`** also passed on exact
+`da92e14d` (25m22s): 296 sidecar tests, vet, all Go race packages, stability
+and mutation checks. Its log SHA256 is
+`e95655cc624870164030ff4a9ab7ca4eb446fab850dec29552e8599cd2ed9240`.
+The eleven listed utility packages have no tests; they are not silently
+counted as behavioral coverage. The original record and log are preserved
+unchanged in the canonical gate store. Runtime and per-execution turn
+identities are checked at the sidecar abort boundary; an explicit ready
+capability prevents old or intermediate receivers from receiving an abort
+they cannot fence. This is not yet durable control-plane authority or a
+live-provider completion claim.
+
+Sqlpipe candidate `c810da54` supplies serialized `RunPeer` ownership,
+joined receiver shutdown and a bounded initialization hook for query
+subscriptions. Root source review and clean unfiltered Go wrapper race
+**GREEN `61617071`** cover real file-backed peers, empty handshakes,
+subsequent writes, reset/reconnect, ownership rejection and hook failure.
+This remains an isolated upstream candidate, not a published dependency
+or proof of every native/platform transport. Lifecycle and independent MCP
+work are composing it through explicit temporary module files.
+
+Claudia adapter `64994517` replaces its private control-link pump with that
+runner and exposes fixed subscriptions plus an update wake outside the
+database lock. Independent source review and clean full control-plane race
+**GREEN `c6af658b`** cover actual separate processes and files, reconnect,
+subscription-triggered writes and cancellation of a blocked receiver after
+initialization failure. This candidate retains the existing bounded frame
+format; it is not yet integrated lifecycle or independent MCP evidence.
+
+A real Cursor delegation exposed 🎯T1215: `claudia-po` spawned
+`cl-t1212-usage-read-diag` from a Jevons clone (`0607f79b`, Jevons remote and
+module) despite a brief naming Claudia `83ca3cc8`. The owner-session sent
+an immediate stop/scope correction and briefed `jevons-po` to distinguish
+incorrect arguments from an isolation resolver defect. No correct-source
+implementation or successful delegation is claimed. The original clone
+is evidence. Follow-up report `20261024T073757Z-b5d78018` confirmed that the
+PO supplied Jevons as the source and supplied Jevons gate/integrate
+instructions; isolation obeyed that request. The mistaken worker is reaped.
+🎯T1215 now explicitly distinguishes implementation source from target
+ledger home. The repair worker must address that named cause, rather than
+change a correctly behaving resolver.
+
+- **Engine:** 🎯T1074.12 selected bare `pi-agent-core`, with Claudia's
+  `History`/maintenance adapter. Jevons now pins published Claudia `v0.64.0`;
+  its release source has the bare-core dependency and no coding-agent SDK
+  dependency. Do not resume the abandoned SDK migration or treat its journal
+  ownership as current design.
+- **Shared control plane:** `cost.ReplicaSource` now opens a separate owned
+  database and connects through Claudia's broker control socket. The earlier
+  shared-file transport defect has been repaired. However, repository-wide
+  source inspection at Jevons `6d3b6a86` found only test callers of
+  `AcceptDesiredSeat`, `AcceptGrant` and `AcceptControlIntent`. Full lifecycle
+  reconciliation is still open under 🎯T1074.9. Initialization currently lives
+  inside cost setup; service lifecycle must not depend on accounting being on.
+- **Per-seat communication:** the connected MCP path commits intents and
+  outcomes, but its caller is inside jevonsd (`seatpair_call.go`). The executor
+  and lookup open both databases and synchronize peers in memory. This does
+  not establish the independent MCP-service lifetime required by 🎯T1074.10.
+  Execution precedes outcome persistence, leaving a crash window in which an
+  external effect could be repeated. Preserve the connected-call evidence;
+  complete process ownership and transactional/idempotent or uncertain-effect
+  recovery before claiming the full contract.
+- **Target corrections:** 🎯T1074.6 and 🎯T1074.10 are reopened to reflect
+  these missing acceptance clauses. The engine decision stays achieved.
+  Legacy transport removal and the successful connected call remain useful
+  partial evidence; neither is discarded or expanded into a broader claim.
+- **Visibility first:** the running usage endpoint reported Grok HTTP 401 while
+  the separate agent-auth endpoint reported `xai-oauth` healthy. Billing-reader
+  failure must be visible without mislabeling a functioning agent login.
+  🎯T1198 addresses integration failures that cause repeated ledger updates
+  rather than an actionable owner fault and a bounded repair response.
+
+This audit inspected source, target state and read-only development endpoints.
+It did not run a new full product gate or prove unattended operation. Follow-on
+verification must drive production callers through process separation,
+disconnect/restart and the effect/outcome crash window, then one bounded real
+coding mission. No sign-in prompts, credentials or parked seats were touched.
+
+### Visibility landing and rollback specimen
+
+The usage-bar source `f7748c97d7ba` passed clean React gate `3d6d94c5`
+(762 passed, 48 existing skips) and bundle gate `f89abadd`; its isolated render
+shows the billing error separately from healthy agent login and offers only a
+usage refresh. This is 🎯T1200, not a credential-recovery claim or development
+activation. Its first integration merge `3db6d04e` failed existing trunk checks:
+`TestT1079NoRawProviderComparisons` named `fleet/claude_trust.go` and
+`mcpserver/seat_waits.go`, and `TestT975EveryRegistryTestPackageIsGuarded`
+named `seatinert`. Clean baseline `b07265f0` independently reproduces RED
+`164dd0e2`. 🎯T1202 repairs the actual invariants without weakening the tests.
+
+The failed integration rollback removed the non-overlapping uncommitted
+🎯T1200 row, which had been added through Bullseye. Source inspection found
+`rollbackLanding` executes `git reset --hard`. 🎯T1201 requires exact preservation
+of accepted staged/unstaged changes and safe refusal on concurrent overlaps;
+the old shared integrator must not be invoked again while this defect remains.
+The lost row was recovered through Bullseye. 🎯T1203 separately makes the existing
+commit hook reject malformed staged ledger syntax, including private indexes.
+These targets remain open; diagnostic or isolated source gates are not proof
+that the development cockpit now serves the fixes.
+
+The prerequisite source `5d3408dbf618` passes unchanged ratchets (`6f433864`)
+and the full fleet, MCP server and seatinert packages (`a2a39de0`) in clean
+trees. Staged-ledger validation `deb73c73202f` passes the full commitscope
+suite (`7c00f2dc`), including real-hook fixtures for index/worktree disagreement
+and foreign staged work. Trunk-fault source `3bab195bb49d` passes full
+worktree, MCP server and integrate packages (`1098caad`) and independent
+review. These sources are not landed or activated at this checkpoint.
+
+🎯T1204 records a separate linked-worktree defect: `commitbase` constructs
+its private index beneath literal `.git`, which is a file in a linked
+worktree. The usage source was prepared in a standalone isolated clone
+instead. Its repair must retain exact-blob scoping and the existing HEAD
+compare-and-swap check; it is not part of the rollback repair.
+
+The prerequisite integration then refused before checkout mutation because
+its gate selector chose the newer focused ratchet `6f433864` instead of the
+eligible unfiltered `a2a39de0`. 🎯T1205 records that selection defect. A fresh
+unfiltered prerequisite run in a dedicated gate store avoids ambiguity while
+retaining the full coverage requirement. Rollback source `0cc93780085e` has
+independent approval and pristine unfiltered race GREEN `500bd9ba`; its exact
+binary is used for local integration until that source itself lands.
+
+The fresh prerequisite gate `d4d59409` passed all three affected packages on
+clean `5d3408dbf618`. Its merge candidate `3fbaa070e287` then passed the full
+docratchet package but failed `TestObserveTurnExtensionHasAHardBound`:
+the observer first resumed at 83 ms, after the configured 80 ms hard bound,
+so no intermediate extension occurred. The test nevertheless required its
+extension marker. 🎯T1206 covers deterministic verification of both schedules
+without widening the deadline. The integration returned RED and restored
+HEAD to `2359adf3`. Unlike the original destructive rollback specimen, the
+new unrelated Bullseye-created 🎯T1206 row survived uncommitted and remained
+queryable afterward. This is additional real-path preservation evidence for
+the reviewed helper, not a GREEN integration or activated product claim.
+
+### Local activation checkpoint, 2026-10-24
+
+The reviewed cohesion batch landed as `f2657e4f81cc`. Its pristine merged
+tree passed all eleven changed Go packages, including the unchanged
+cross-cutting ratchets: `GREEN f0c46d3e`, output SHA-256
+`1e449f6cf01309deebbef78971d61f892b47bbbf7799f28533be1a9740868745`.
+The earlier immutable branch gate was `GREEN 085f3df7`; final bundle
+comparison was `GREEN 19a3ef29`, with the same UI tree covered by full React
+`GREEN 013f15b4` (762 passed, 48 existing skips).
+
+This lands the rollback, provider-resolution/test-isolation, staged-ledger
+syntax, linked-worktree index, gate selection, deterministic observation
+and executable-census repairs (🎯T1201–🎯T1207). Linux executable-census
+coverage is compile-only; Darwin runtime coverage passed. No vanished
+fixture PID is retrospectively attributed. The shared control replica and
+receipt readers now start independently of optional accounting; this is
+partial 🎯T1074.9 evidence, not lifecycle reconciliation or independent MCP
+execution. Per-seat startup catch-up retains its existing accounting
+predicate pending the execution-ownership repair.
+
+The development daemon was activated from this committed revision with
+workspace overlays disabled. `/health` reports build `eb94158e68e5e2a9`;
+supervisord reports RUNNING. Binary metadata names pristine `f2657e4f81cc`
+and published Claudia `v0.64.0`, with no sibling replacement. Exact
+pre/post comparisons preserved all 98 registered seat names, session IDs,
+auto-start flags and materialization flags. This is reattachment evidence,
+not an active-MCP restart journey or a new coding mission.
+
+The new usage UI is served, but its live Retry interaction remains to be
+verified separately. The owner's active Firefox page was left alone.
+🎯T1198's autonomous fixer response, 🎯T1200's live UI acceptance and
+🎯T1209's trusted-broker usage recovery remain open. No authentication
+recovery, Keychain prompt, parked-seat restart, release or remote push was
+performed. The overall daily-driver goal remains open.
+
+The separate dependency batch landed as `10872c6d7e9e`, with pristine
+React/bundle/Chromium `GREEN 35547a7c` and merged docratchet
+`GREEN d6dead1d`. 🎯T1208's audit records the unchanged embedded sanitizer
+and the two residual low advisories. No synthetic bundle change was made.
+
+The canonical architecture rewrite at `b00b833debba` remains unlanded.
+Its candidate `33d712f3` failed `RED ae72414f`; unchanged trunk `365b4db1`
+reproduced the same clean-web failure in `RED b61651ee`. A later T584
+preview change had invalidated the compact transcript's source-shape test.
+The safe integrator preserved pending ledger edits and rolled the candidate
+back. The resulting typed incident `546cf44c2445…` was consumed by the
+running sentinel: both owner notification and PO wake are recorded true.
+An actual single-fixer response and a repaired gate remain to be observed;
+those flags alone do not achieve 🎯T1198.
+
+Claudia's combined MCP/billing baseline `7d361b863194` passed full owner
+`GREEN 4d278116`. The newer credential-recovery source `780b41de0f1b`
+passed affected Go race `GREEN 8c3ad9d8` and all 287 sidecar tests
+`GREEN df735c4e`, but full owner `RED bba1c5bf` exposed two fixture-startup
+timeouts. 🎯T1211 separates bounded setup from unchanged abort/send
+assertions; reviewed source `29b3393e53ee` passes all 293 sidecar tests
+(`GREEN 31ce4305`). Its full owner gate is `RED 4fdd791d`: two existing Go
+process tests still consume the removed fixture marker as evidence of mock
+provider selection. Restoring that marker while retaining independent socket
+readiness is pending; no timeout was widened to conceal the failure. Neither
+that source nor the credential-recovery change has been activated. 🎯T1212 separately
+records the missing bodyless-failure history; it does not delay recovery.
+
+Activation must bind both the broker binary and its sidecar/auth scripts to
+the verified revision. The current supervisor wrapper defaults those scripts
+to the shared Claudia checkout, so replacing only the binary would not prove
+an immutable deployment. A normal broker restart also replaces its sidecar;
+it is distinct from the non-cancelling Jevons UI-daemon reattachment above.
+
+## Historical checkpoint: resume and transport retirement
 
 The integrated cleanup is **not ready for daemon activation**. Full clean Claudia gate `RED c8369e35` measured `72bfc6b967bb4cbeaeef65ae08a4054124d04c2d`, tree `b786db20faaa61ffb1338e4c9d9b648dd31e371f`. Its 255 sidecar tests and vet passed, but Go tests failed on retained CLI expectations and integration omissions; stability and mutation stages were not reached. Log SHA-256: `9a7429b5dd7085f9602d383aab6bb5214ad1c86fed87c2c0c1a7d32958569620`. Earlier full greens do not certify this tree.
 
@@ -628,3 +937,23 @@ Claudia `01542f0502251486c14ecc386ced7d984a1da2c1` adds `StubAgentOps.SendWithRe
 `TestT1074NilSeamFleetBatchReachesAgent` leaves both notify seams nil, attaches that stub, and checks the seat is observed alive. `drainOverseerNotes` then reaches the hook with one `fn-` id for the joined notes. The failed handoff retries the same id and the same text. The next identical batch is a new id. The mission is already stored when the hook runs. Untagged `Send` is not called. `TestT1074NilSeamFreezeFailureDoesNotSend` drives the same drain and checks that a recorder error does not call the hook. Default `go test -race` of these tests, the fleet-batch tests, and the owner-health re-injection tests passed. The run used the scratch paired module file. This does not reach a live sidecar.
 
 A process with no request-id method still uses `Send`. A seat that lacks `SendEscalatingWithRequestID` still uses `SendEscalating`. Those are the remaining untagged production handoffs, and they are the incapable-sender fallback rather than a dropped id on a capable `*claudia.Agent`. This is not the seat reconciler, a per-seat MCP pair, or a live provider journey. 🎯T1074.2 stays blocked on 🎯T1074.9. 🎯T1074.3 stays blocked on 🎯T1074.9 and 🎯T1074.10. The hermetic-gate checklist item stays open. No full `make gate` was run for this slice.
+
+## T1224 transport-only usage recovery journey exception (2026-10-25)
+
+`TestT1224BrowserTransport` mounts the tracked React bundle over
+`RegisterReactUIRoutes`, `Server.New`/`RegisterRoutes`, and a real isolated
+`httptest.Server`. Playwright uses the actual plan-usage HTTP and mux handlers,
+not mocked responses; it forwards the first socket until a deliberately
+blackholed server-to-browser leg, then requires a second socket, resubscription
+and recovered ticker. Controlled `SetPlanUsageSource`/`SetPlanUsageRefresh`
+values show a failed provider with its reason and an explicitly aged last
+reading, one active forced refresh over repeated visibility events, and repaint
+without navigation. The real socket-writer stress fixture separately checks
+numbered transcript-frame order under concurrent usage fan-out and the latest
+usage snapshot. This is a **journey exception for the transport/UI seam**:
+no provider credentials or agent are used, so it proves neither provider
+collection reliability nor attribution of the original intermittent incident.
+The later passive cache observation of Claude unavailable during renewal
+backoff with healthy agent auth belongs to 🎯T1224.1, not this transport fix;
+a later live product pilot is separate. No development daemon activation is
+claimed by this isolate.

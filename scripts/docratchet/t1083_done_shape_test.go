@@ -78,7 +78,7 @@ func TestT1083DoneShapeTaught(t *testing.T) {
 			t.Errorf("%s does not show envelope.DoneShape verbatim", doc)
 		}
 	}
-	for _, doc := range []string{"agents-guide.md", "internal/config/persona.md"} {
+	for _, doc := range []string{"agents-guide.md", "internal/roles/builtin/overseer.md"} {
 		body := readRepo(t, doc)
 		for _, want := range []string{"🎯T1083", enum, "envelope.DoneShape", "read-only"} {
 			if !strings.Contains(body, want) {

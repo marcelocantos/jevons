@@ -101,6 +101,13 @@ func (s *Server) noteDeadSeats(reps []DeadAgentReport) {
 		if r.Detail != "" {
 			detail = r.Detail
 		}
+		if r.Error != "" {
+			if detail == "" {
+				detail = "re-launch failed: " + r.Error
+			} else if !strings.Contains(detail, r.Error) {
+				detail += "; re-launch failed: " + r.Error
+			}
+		}
 		source, reason := seatstop.SourceExit, seatstop.Unknown
 		planned := false
 		switch {
@@ -110,7 +117,13 @@ func (s *Server) noteDeadSeats(reps []DeadAgentReport) {
 		case r.Cause != "":
 			reason = r.Cause
 		}
+		if fleet.GrantHeldText(detail) || fleet.GrantHeldText(r.Error) {
+			reason = fleet.GrantHeldRelaunchDetail(detail, r.Error)
+		}
 		s.noteSeatStopRecord(seatstop.Record{Seat: r.Name, Source: source, Reason: reason, Detail: detail, Planned: planned})
+		if fleet.GrantHeldText(detail) || fleet.GrantHeldText(r.Error) {
+			s.recordGrantHeldRelaunchOutcome(r.Name, detail, r.Error)
+		}
 	}
 }
 
@@ -120,12 +133,18 @@ func (s *Server) NoteDeadSeat(name, cause, detail string) {
 	s.noteDeadSeats([]DeadAgentReport{{Name: name, Cause: cause, Detail: detail}})
 }
 
-// lostToBroker reports that name's latest recorded stop is the broker's
-// doing, so the reattach loop may relaunch it if the broker did not bring it
-// back (🎯T925). A deliberate stop never carries this source.
+// lostToBroker reports that this host lost name to the broker (connection
+// closed, planned restart, or seat gone while the broker stayed up), so the
+// reattach loop may relaunch it if adopt does not stick (🎯T925 / 🎯T1139).
+// A deliberate stop never carries broker source; the handle's own exit
+// cause is read when the ledger has not caught up yet.
 func (s *Server) lostToBroker(name string) bool {
 	rec, ok := s.seatStops().Last(name)
-	return ok && rec.Source == seatstop.SourceBroker
+	if ok && rec.Source == seatstop.SourceBroker {
+		return true
+	}
+	cause, dead := stoppedSeatCause(s, name)
+	return dead && fleet.BrokerCaused(cause)
 }
 
 // sweepDeadAccounted is recoverDeadHandles with the 🎯T662 record kept.
@@ -141,10 +160,20 @@ func (s *Server) sweepDeadAccountedWith(overseer string, intent fleetintent.Snap
 		return nil
 	}
 	s.observeRegistryLiveness()
-	reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent, s.autoSeatHold)
+	reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent, s.autoSeatHold, s.wasDeliberatelyStopped, s.admitRehydrate)
+	reps = append(reps, recoverResumeRefusedStopped(s.registry, s.RemovalAccount(), overseer, intent, s.autoSeatHold, s.wasDeliberatelyStopped, s.admitRehydrate)...)
 	s.noteDeadHandleRevives(reps)
 	s.noteDeadSeats(reps)
 	return reps
+}
+
+// wasDeliberatelyStopped reports that name's last recorded stop was a
+// supervisor stop/kill (🎯T1112), so the ambient dead-handle sweep must not
+// read a mere later intent flip (no send/spawn/revive aimed at this name)
+// as licence to relaunch it.
+func (s *Server) wasDeliberatelyStopped(name string) bool {
+	rec, ok := s.seatStops().Last(name)
+	return ok && rec.Source == seatstop.SourceSupervisor
 }
 
 // massStopLookback bounds how far back a mass-stop reading looks. Wider
@@ -192,7 +221,7 @@ func (s *Server) MassStopLine() string {
 	}
 	s.mu.Unlock()
 	if !seen {
-		s.notifyFleetHealth(a.Key(), line)
+		s.notifyFleetHealth(noticeAct, a.Key(), line)
 	}
 	return line
 }
@@ -232,15 +261,23 @@ const PlannedNotBack = "did not come back after a planned broker restart"
 // back — the row's rehydrate health then says what holds it. Every other
 // stop shows its recorded reason, as SeatStopReason does.
 func (s *Server) SeatStopShown(name string) (reason string, at time.Time, ok bool) {
+	reason, _, at, ok = s.SeatStopDetailsShown(name)
+	return
+}
+
+// SeatStopDetailsShown preserves the trusted Actor alongside the stop reason.
+// An intent park takes precedence over a stale stop record; its By is the
+// authoritative actor, even when the reason has no "by X:" syntax.
+func (s *Server) SeatStopDetailsShown(name string) (reason, actor string, at time.Time, ok bool) {
 	if s == nil {
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
 	// 🎯T983: a seat deliberately stood down is not expected back, whatever
 	// its last stop record says, or whether a fresh daemon has one at all.
 	// A planned restart's record replaced the park's own, so the row said
 	// the seat had failed to come back; with no record it said "unknown".
 	if ir, ok := s.fleetIntent().Agents[name]; ok && fleetintent.StoodDown(ir.State) {
-		return intentStopLine(ir), ir.At, true
+		return intentStopLine(ir), ir.By, ir.At, true
 	}
 	rec, ok := s.seatStops().Last(name)
 	if !ok {
@@ -248,17 +285,17 @@ func (s *Server) SeatStopShown(name string) (reason string, at time.Time, ok boo
 		// runs after it. The handle already knows the broker said it was
 		// restarting on purpose, so the row is quiet rather than 'unknown'.
 		if cause, dead := stoppedSeatCause(s, name); dead && fleet.BrokerPlanned(cause) {
-			return "", time.Now(), true
+			return "", "", time.Now(), true
 		}
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
 	if rec.Planned {
 		if time.Since(rec.At) < seatstop.PlannedGrace {
-			return "", rec.At, true
+			return "", "", rec.At, true
 		}
-		return PlannedNotBack, rec.At, true
+		return PlannedNotBack, "", rec.At, true
 	}
-	return rec.Reason, rec.At, true
+	return rec.Reason, rec.Actor, rec.At, true
 }
 
 // intentStopLine is a fleet row's reason for a seat whose intent keeps it

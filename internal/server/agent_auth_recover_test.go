@@ -14,8 +14,13 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleet"
 )
+
+func planAuthErr(text string) error {
+	return agenterr.WithCause(agenterr.CauseAuth, errors.New(text))
+}
 
 func TestAuthRecoverOnlyOffersStoppedPlanFailures(t *testing.T) {
 	for _, tc := range []struct {
@@ -24,15 +29,16 @@ func TestAuthRecoverOnlyOffersStoppedPlanFailures(t *testing.T) {
 		err      error
 		want     bool
 	}{
-		{"auth-offer-anthropic", "anthropic", errors.New("anthropic refresh failed: invalid_grant"), true},
-		{"auth-offer-openai-codex", "openai-codex", errors.New("omp: keychain was not read at startup"), true},
-		{"auth-offer-grok", "grok", errors.New("no xai-oauth login"), true},
+		{"auth-offer-anthropic", "anthropic", planAuthErr("anthropic refresh failed: invalid_grant"), true},
+		{"auth-offer-openai-codex", "openai-codex", planAuthErr("omp: keychain was not read at startup"), true},
+		{"auth-offer-grok", "grok", planAuthErr("no xai-oauth login"), true},
 		// 🎯T1079: a codex row is the openai-codex sidecar seat; its login is
 		// the plan's, recovered the same way.
-		{"auth-offer-codex", "codex", errors.New("invalid_grant"), true},
+		{"auth-offer-codex", "codex", planAuthErr("invalid_grant"), true},
 		{"auth-offer-resumable", "anthropic", nil, false},
-		{"auth-offer-exited", "anthropic", errors.New("tool process exited"), true},
-		{"auth-offer-ollama", "ollama", errors.New("invalid_grant"), false},
+		{"auth-offer-exited", "anthropic", errors.New("tool process exited"), false},
+		{"auth-offer-conversation", "anthropic", errors.New("existing conversation required for this seat and session; refusing to mint a replacement session"), false},
+		{"auth-offer-ollama", "ollama", planAuthErr("invalid_grant"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.err != nil {
@@ -79,7 +85,7 @@ func TestAuthRecoverRechecksSeatAndReportsClaudiaFailure(t *testing.T) {
 	if w := request(); w.Code != http.StatusConflict || called != 0 {
 		t.Fatalf("stale click status=%d called=%d body=%s", w.Code, called, w.Body.String())
 	}
-	fleet.RecordRehydrateFailure(name, errors.New("anthropic refresh failed: invalid_grant"))
+	fleet.RecordRehydrateFailure(name, planAuthErr("anthropic refresh failed: invalid_grant"))
 	t.Cleanup(func() { fleet.RecordRehydrateFailure(name, nil) })
 	if w := request(); w.Code != http.StatusBadGateway || called != 1 || !strings.Contains(w.Body.String(), "sign-in was cancelled") {
 		t.Fatalf("recovery status=%d called=%d body=%s", w.Code, called, w.Body.String())
@@ -112,7 +118,7 @@ func TestAuthRecoverRelaunchesOnlyTheStoppedSeatAndClearsItsFailure(t *testing.T
 	if _, err := reg.Launch(healthy); err != nil {
 		t.Fatal(err)
 	}
-	fleet.RecordRehydrateFailure(affected, errors.New("invalid_grant"))
+	fleet.RecordRehydrateFailure(affected, planAuthErr("invalid_grant"))
 	t.Cleanup(func() { fleet.RecordRehydrateFailure(affected, nil) })
 	s := New("test", t.TempDir())
 	s.SetRegistry(reg)

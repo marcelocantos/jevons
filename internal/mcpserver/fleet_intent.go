@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/reapverify"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // 🎯T414: the daemon's half of the shared intent representation. The pure
@@ -97,6 +98,7 @@ func (s *Server) onAccountedRemoval(name string, rm fleetlog.Removal) {
 	}
 	s.MarkAgentReapedWithCause(name, by, strings.TrimSpace(rm.Detail), strings.TrimSpace(rm.Reason))
 	s.armPostReapCommitWatch(name, rm)
+	s.clearLandHoldSeat(name)
 }
 
 // intentStore returns the installed store (nil-safe).
@@ -114,6 +116,9 @@ func (s *Server) intentStore() *fleetintent.Store {
 func (s *Server) fleetIntent() fleetintent.Snapshot {
 	return s.intentStore().Snapshot()
 }
+
+// FleetIntent is the durable intent snapshot for HTTP surfaces (🎯T1121).
+func (s *Server) FleetIntent() fleetintent.Snapshot { return s.fleetIntent() }
 
 // AllowFleetControl is the one question a control asks: may control c act on
 // this agent? The Decision carries the intent so the caller can name it.
@@ -136,6 +141,12 @@ func (s *Server) SetAgentIntent(name string, st fleetintent.State, by, reason st
 	if err := store.SetAgent(name, st, by, reason, time.Now()); err != nil {
 		return err
 	}
+	if err := s.refreshBrokerIntent(); err != nil {
+		return err
+	}
+	if fleetintent.Resolve(st) == fleetintent.Working {
+		s.clearProviderRequestFailed(name)
+	}
 	slog.Info("fleet intent set",
 		"component", "fleet_intent",
 		"name", name, "state", string(st), "by", by, "reason", reason,
@@ -154,12 +165,20 @@ func (s *Server) SetFleetIntent(st fleetintent.State, by, reason string) error {
 		s.kickOverseerNotifyDrain()
 		return nil
 	}
+	prev := s.fleetIntent().FleetState()
 	if err := store.SetFleet(st, by, reason, time.Now()); err != nil {
 		return err
 	}
 	slog.Info("fleet intent set (fleet-wide)",
 		"component", "fleet_intent", "state", string(st), "by", by, "reason", reason,
 	)
+	if st := fleetintent.Resolve(st); prev != st {
+		if st == fleetintent.BlockedOwner {
+			_ = s.syncOMPPause(true)
+		} else if prev == fleetintent.BlockedOwner && st == fleetintent.Working {
+			_ = s.syncOMPPause(false)
+		}
+	}
 	s.kickOverseerNotifyDrain()
 	return nil
 }
@@ -191,9 +210,31 @@ func (s *Server) kickOverseerNotifyDrain() {
 }
 
 // ForgetAgentIntent drops a stored intent when the name leaves the registry.
+// SetBrokerIntentRefresh installs the synchronous publication after each
+// deliberate agent intent change. A failed publication fails the tool rather
+// than reporting a park the broker would be unable to see on its next boot.
+func (s *Server) SetBrokerIntentRefresh(fn func() error) {
+	s.mu.Lock()
+	s.brokerIntentRefresh = fn
+	s.mu.Unlock()
+}
+
+func (s *Server) refreshBrokerIntent() error {
+	s.mu.Lock()
+	fn := s.brokerIntentRefresh
+	s.mu.Unlock()
+	if fn != nil {
+		return fn()
+	}
+	return nil
+}
+
 func (s *Server) ForgetAgentIntent(name string) {
 	if err := s.intentStore().Forget(name); err != nil {
 		slog.Warn("fleet intent forget failed", "component", "fleet_intent", "name", name, "err", err)
+	}
+	if err := s.refreshBrokerIntent(); err != nil {
+		slog.Warn("broker intent refresh failed", "err", err)
 	}
 }
 
@@ -242,6 +283,9 @@ func (s *Server) MarkAgentReapedWithCause(name, by, reason, stopReason string) {
 			"component", "fleet_intent",
 			"name", name, "state", string(fleetintent.Reaped), "by", by, "reason", reason, "stop_reason", stopReason,
 		)
+		if err := s.refreshBrokerIntent(); err != nil {
+			slog.Warn("broker intent refresh failed on reap", "name", name, "err", err)
+		}
 	}
 	s.drainSharedIndex(name)
 }
@@ -273,6 +317,34 @@ func (s *Server) MarkAgentWorking(name, by, reason string) {
 	}
 }
 
+// ensureFreshStartIntent is the single 🎯T414/🎯T413/🎯T1109 gate every start
+// path must pass through before registering or launching a process: should
+// this name be running at all? A standing park or provider wall refuses the
+// start here, naming the intent — except Reaped, which 🎯T560's kill leaves
+// behind on a preserved row precisely so the name can be reused. A fresh
+// start under a reaped name is the ordinary case (not a revival of the old
+// stopped process — Launch always runs below any caller of this helper), so
+// here the intent is reset to Working before the caller registers/launches.
+// Skipping this reset is exactly the 🎯T1109 bug: a caller that registers and
+// launches a process without going through this door leaves the registry
+// row's intent at Reaped under a live process, and the 🎯T984 sentinel then
+// stands the seat back down within its next sweep, reading the stale intent
+// as ground truth. Every start path — jevons_agent_start's own handler,
+// frontier_consume's auto-spawn, and any future caller — MUST call this (or
+// MarkAgentWorking directly, as the 🎯T530 restart-to-drain path already
+// does) before registering a name that might be a previously-reaped row.
+func (s *Server) ensureFreshStartIntent(name, actor string) error {
+	if dec := s.AllowFleetControl(name, fleetintent.ControlSpawn); !dec.Allow {
+		if dec.Blocking != fleetintent.Reaped {
+			return fmt.Errorf(
+				"refusing to start %q — %s (%s). Lift it with jevons_fleet_intent state=working before starting.",
+				name, fleetintent.Describe(dec.Blocking), dec.Reason)
+		}
+		s.MarkAgentWorking(name, actor, "fresh start under a previously reaped name")
+	}
+	return nil
+}
+
 // FleetIntentSummary is the owner-facing one-liner for the cockpit / logs.
 func (s *Server) FleetIntentSummary() string { return s.fleetIntent().Summarize() }
 
@@ -286,12 +358,25 @@ func (s *Server) FleetIntentSummary() string { return s.fleetIntent().Summarize(
 func (s *Server) handleFleetIntent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
-	name = strings.TrimSpace(name)
+	if name != "" && invalidSingleSeatName(name) {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid agent name %q: whitespace is not allowed (pass one name)", name)), nil
+	}
 	raw, _ := args["state"].(string)
 	raw = strings.TrimSpace(raw)
 
 	if raw == "" {
-		return mcp.NewToolResultText(FormatFleetIntentReport(s.fleetIntent())), nil
+		if name != "" {
+			snap := s.fleetIntent()
+			if rec, ok := snap.Agents[name]; ok {
+				return mcp.NewToolResultText(fmt.Sprintf("Intent for %q: %s", name, rec.Describe())), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Intent for %q: working (no recorded intent).", name)), nil
+		}
+		limit := fleetIntentReportLimit
+		if boolArg(args["all"]) {
+			limit = 0
+		}
+		return mcp.NewToolResultText(FormatFleetIntentReport(s.fleetIntent(), limit)), nil
 	}
 
 	st, err := fleetintent.Parse(raw)
@@ -315,15 +400,46 @@ func (s *Server) handleFleetIntent(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultText(fmt.Sprintf(
 			"Fleet-wide intent is now %s (by %s). %s%s\n\n%s",
 			fleetintent.Describe(st), actor, fleetIntentEffect(st, "the fleet"), note,
-			FormatFleetIntentReport(s.fleetIntent()))), nil
+			FormatFleetIntentReport(s.fleetIntent(), fleetIntentReportLimit))), nil
 	}
 
+	if err := s.singleSeatName(name); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	if err := s.SetAgentIntent(name, st, actor, reason); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	stopped := s.nameLooksStopped(name)
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Intent for %q is now %s (by %s). %s%s",
-		name, fleetintent.Describe(st), actor, fleetIntentEffect(st, name), note)), nil
+		"Intent for %q is now %s (by %s). %s%s%s",
+		name, fleetintent.Describe(st), actor, fleetIntentEffect(st, name), note,
+		fleetIntentRevivalCaveat(st, stopped))), nil
+}
+
+// nameLooksStopped reports that name is a registered row with no live
+// process right now — the shape 🎯T560 preserves after a supervisor kill.
+// Best-effort: a nil registry or unknown name reads as not-stopped so the
+// caveat only ever adds information, never a false alarm.
+func (s *Server) nameLooksStopped(name string) bool {
+	if s == nil || s.registry == nil {
+		return false
+	}
+	if s.registry.Def(name) == nil {
+		return false
+	}
+	return s.seatState(name).Alive != seatstate.Yes
+}
+
+// fleetIntentRevivalCaveat is 🎯T1112's clarifying sentence: lifting a
+// stopped row's intent to working removes the decline, but it is not itself
+// a spawn, a send, or a revive — nothing mints a process from this call
+// alone. An operator clearing stale intents should not be surprised by a
+// fleet six minutes later.
+func fleetIntentRevivalCaveat(st fleetintent.State, stopped bool) string {
+	if !stopped || !fleetintent.Runnable(st) {
+		return ""
+	}
+	return " This row stays stopped until spawned or sent to (🎯T1112) — lifting intent only clears the decline; it does not start the process."
 }
 
 // fleetIntentEffect states the consequence in the caller's terms. An intent
@@ -338,8 +454,13 @@ func fleetIntentEffect(st fleetintent.State, subject string) string {
 		" while this stands — each declines naming the intent. Lift it with state=working."
 }
 
-// FormatFleetIntentReport renders the full intent state for an operator.
-func FormatFleetIntentReport(snap fleetintent.Snapshot) string {
+// fleetIntentReportLimit bounds a default intent read: the stood-down list
+// had grown to 579 names (113 KB) back to 2026-10-03, paid on every read.
+const fleetIntentReportLimit = 25
+
+// FormatFleetIntentReport renders the intent state for an operator: the
+// limit most recent stood-down agents (all when limit <= 0), then a count.
+func FormatFleetIntentReport(snap fleetintent.Snapshot, limit int) string {
 	b := &strings.Builder{}
 	fmt.Fprintf(b, "Fleet intent: %s\n", snap.Fleet.Describe())
 	held := snap.NotWorking()
@@ -348,8 +469,12 @@ func FormatFleetIntentReport(snap fleetintent.Snapshot) string {
 		return b.String()
 	}
 	fmt.Fprintf(b, "%d agent(s) stood down:\n", len(held))
-	for _, name := range held {
+	shown, omitted := newestIntents(snap, held, limit)
+	for _, name := range shown {
 		fmt.Fprintf(b, "  %s — %s\n", name, snap.Agents[name].Describe())
+	}
+	if omitted > 0 {
+		fmt.Fprintf(b, "  … %d older stood-down agent(s) omitted; all=true lists them, name=<agent> reads one.\n", omitted)
 	}
 	return b.String()
 }

@@ -318,9 +318,13 @@ func TestT3927OwnerDirectToPONotRerouted(t *testing.T) {
 }
 
 func TestStripLeadingIdentityEnvelopeStopsAtEndFact(t *testing.T) {
-	header := FormatIdentityHeader(AgentIdentity{Name: "jevons-po", Role: RoleProductOwner})
-	if !strings.Contains(header, "You are jevons-po, a product owner") {
-		t.Fatal("doctrine missing")
+	header := FormatIdentityHeader(AgentIdentity{
+		Name:    "jevons-po",
+		Role:    RoleProductOwner,
+		RoleDoc: "internal/roles/builtin/product-owner.md",
+	})
+	if !strings.Contains(header, "ROLE DOCTRINE: internal/roles/builtin/product-owner.md") {
+		t.Fatal("role file pointer missing from header (🎯T511)")
 	}
 	if !strings.HasSuffix(strings.TrimRight(header, "\n"), envelope.PrefixIdentityEnd) {
 		t.Fatal("header does not end on the identity-end fact")

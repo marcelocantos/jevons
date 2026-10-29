@@ -86,14 +86,11 @@ func DiscoverLedgerPath(cwd string) (string, error) {
 	return "", fmt.Errorf("no bullseye.yaml under %s", abs)
 }
 
-// LoadTargetStatusFromCwd looks up target status in the nearest ledger.
+// LoadTargetStatusFromCwd looks up target status in the repository ledger
+// that owns cwd (🎯T389 / 🎯T1105 / 🎯T1166).
 func LoadTargetStatusFromCwd(cwd, targetID string) (status string, ok bool) {
-	path, err := DiscoverLedgerPath(cwd)
-	if err != nil {
-		return "", false
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
+	data, ok := ReadLedgerFileForWorkdir(cwd)
+	if !ok {
 		return "", false
 	}
 	return LookupTargetStatus(data, targetID)

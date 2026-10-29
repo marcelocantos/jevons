@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
@@ -113,6 +114,35 @@ func StaleProviderCaps(def claudia.AgentDef) []claudia.Capability {
 		}
 	}
 	return stale
+}
+
+// ReconcileDefOnStart drops, on def in place, provider-native settings the
+// seat's chosen provider refuses — for example a codex sandbox left on the
+// row when jevons_agent_start moves the seat to claude (🎯T1032). A
+// restriction the destination cannot enforce is refused with
+// ErrProviderSwitchWouldWeaken. Non-empty drops are recorded for the fleet
+// row (dropped_caps).
+func ReconcileDefOnStart(name string, def *claudia.AgentDef, from claudia.Provider, providerChanged bool) error {
+	if def == nil {
+		return nil
+	}
+	dropped, err := dropStaleProviderCaps(def)
+	if err != nil {
+		return fmt.Errorf("agent %q on %s: %w", name, providerLabel(def.Provider), err)
+	}
+	if len(dropped) == 0 {
+		return nil
+	}
+	var detail string
+	if providerChanged && from != "" && !seatprovider.Same(from, def.Provider) {
+		detail = fmt.Sprintf("%s→%s (start): dropped %s",
+			providerLabel(from), providerLabel(def.Provider), strings.Join(dropped, "; "))
+	} else {
+		detail = fmt.Sprintf("start on %s: dropped stale %s",
+			providerLabel(def.Provider), strings.Join(dropped, "; "))
+	}
+	noteCapDrop(name, detail)
+	return nil
 }
 
 // dropStaleProviderCaps clears, in place, every def setting its current
@@ -240,9 +270,24 @@ var rehydrateFailures sync.Map // name -> rehydrateRecord
 // is, not only in the daemon log.
 var capDrops sync.Map // name -> string
 
+// keepPriorPlanAuthFailure: a later launch fallback must not replace a seat's
+// recorded plan-login loss with a generic startup refusal (🎯T876). The owner
+// still sees invalid_grant (or the broker's auth text), not a misleading
+// Keychain line from a retry path that never repaired the login.
+func keepPriorPlanAuthFailure(name string, err error) bool {
+	if err == nil || PlanAuthFailure(err) {
+		return false
+	}
+	v, ok := rehydrateFailures.Load(name)
+	return ok && recordedPlanAuthFailure(v)
+}
+
 func noteRehydrate(name string, err error) {
 	if err == nil {
 		rehydrateFailures.Delete(name)
+		ClearGrantHeldRelaunch(name)
+	} else if keepPriorPlanAuthFailure(name, err) {
+		// Leave the stored typed auth failure on the row.
 	} else {
 		rehydrateFailures.Store(name, rehydrateRecord{
 			Text:  err.Error(),
@@ -298,6 +343,8 @@ func LaunchReconciled(reg *claudia.Registry, name string) (*claudia.Agent, error
 		noteRehydrate(name, err)
 		return nil, err
 	}
+	// 🎯T709: ~/.claude.json must carry trust before Claude Code starts.
+	PreflightTrustRegistry(reg, name)
 	agent, err := reg.Launch(name)
 	err = ExplainLaunchCapError(reg.Def(name), err)
 	noteRehydrate(name, err)
@@ -322,7 +369,7 @@ func RehydrateBroken(def claudia.AgentDef) bool {
 func classifyRehydrate(def claudia.AgentDef) (health string, broken bool) {
 	if v, ok := rehydrateFailures.Load(def.Name); ok {
 		if rec, ok := v.(rehydrateRecord); ok && rec.Text != "" {
-			return "broken: " + rec.Text, true
+			return "broken: " + RehydrateBrokenDisplayText(rec.Text), true
 		}
 	}
 	stale := StaleProviderCaps(def)

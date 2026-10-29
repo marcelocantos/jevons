@@ -9,6 +9,7 @@ package t553oracle
 // closes the T553.1 residue "the oracle never inspects :13705 itself".
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -51,6 +52,32 @@ func TestT505DevelopmentServesCommittedBundle(t *testing.T) {
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
+	healthReq, err := http.NewRequest(http.MethodGet, base+"/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthResp, err := client.Do(healthReq)
+	if err != nil {
+		t.Fatalf("GET %s/health: %v", base, err)
+	}
+	defer healthResp.Body.Close()
+	healthBody, err := io.ReadAll(healthResp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if healthResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s/health: %s", base, healthResp.Status)
+	}
+	var health struct {
+		Build string `json:"build"`
+	}
+	if err := json.Unmarshal(healthBody, &health); err != nil {
+		t.Fatalf("/health JSON: %v", err)
+	}
+	if health.Build == "" {
+		t.Fatalf("/health missing build id (🎯T993): %s", healthBody)
+	}
+
 	get := func(p string) ([]byte, error) {
 		req, err := http.NewRequest(http.MethodGet, base+p, nil)
 		if err != nil {
@@ -71,7 +98,7 @@ func TestT505DevelopmentServesCommittedBundle(t *testing.T) {
 		}
 		return b, nil
 	}
-	checked, err := ServedMatchesBundle(bundle, get)
+	checked, err := ServedMatchesBundle(bundle, get, health.Build)
 	if err != nil {
 		t.Fatalf("%s does not serve ui/bundle.zip@%.12s: %v (compared so far: %v)", base, sha, err, checked)
 	}

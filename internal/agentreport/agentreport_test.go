@@ -296,3 +296,26 @@ func TestListMissingAgentIsEmptyNotError(t *testing.T) {
 		t.Errorf("got %d records, want 0", len(got))
 	}
 }
+
+func TestLatestDeclaredSkipsProseOverlay(t *testing.T) {
+	dir := t.TempDir()
+	agent := "jv-t1190-store"
+	finish := "```jevons\njevons: kind finish-report\njevons: target T1190\njevons: oracle sha=abcdef0\njevons: silent-ledger none\n```\n"
+	prose := "Re-verifying after restart with no envelope."
+	t0 := time.Date(2026, 10, 22, 9, 11, 0, 0, time.UTC)
+	t1 := time.Date(2026, 10, 22, 10, 13, 0, 0, time.UTC)
+	if _, err := Save(dir, agent, finish, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Save(dir, agent, prose, t1); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := Latest(dir, agent)
+	if err != nil || latest.Text != prose {
+		t.Fatalf("Latest = %q err=%v", latest.Text, err)
+	}
+	decl, err := LatestDeclared(dir, agent)
+	if err != nil || decl.Text != finish {
+		t.Fatalf("LatestDeclared = %q err=%v want finish envelope", decl.Text, err)
+	}
+}

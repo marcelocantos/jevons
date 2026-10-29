@@ -160,9 +160,7 @@ func (s *Server) recordSendqReconciliation(name string, rec sendq.Receipt, now t
 	owned, ownedOK, ownedErr := s.sendQueue().OwnedAttempt(name)
 	if pin, pinned := s.sendqPinFor(name); pinned {
 		fmt.Fprintf(&b, "Still PINNED on %s: %s\n", pin.EntryID, formatSendqPinLine(name, pin, !ownedOK))
-		s.notifyFleetHealth(rec.By.At.Format(time.RFC3339Nano)+":"+name, fmt.Sprintf(
-			"sendq reconciled for %q (%s), but the queue is still blocked by entry %s (🎯T726).",
-			name, rec.By.Describe(), pin.EntryID))
+		s.notifyFleetHealth(noticeAct, rec.By.At.Format(time.RFC3339Nano)+":"+name, fmt.Sprintf("sendq reconciled for %q (%s), but the queue is still blocked by entry %s (🎯T726).", name, rec.By.Describe(), pin.EntryID))
 		if ownedOK {
 			b.WriteString(inFlightExitLine(owned))
 		}
@@ -178,10 +176,7 @@ func (s *Server) recordSendqReconciliation(name string, rec sendq.Receipt, now t
 	}
 
 	fmt.Fprintf(&b, "%q is no longer blocked by an unresolved attempt; %d message(s) remain queued.\n", name, rec.Depth)
-	s.notifyFleetHealth(rec.By.At.Format(time.RFC3339Nano)+":"+name, fmt.Sprintf(
-		"sendq for %q reconciled by %s: %s (%s). %d removed (%d bytes, payloads in the eventlog), %d still queued. "+
-			"The seat is no longer held by an unresolved delivery attempt (🎯T726).",
-		name, rec.By.Actor, rec.By.Outcome, rec.By.Evidence, len(rec.Removed), rec.RemovedBytes(), rec.Depth))
+	s.notifyFleetHealth(noticeAct, rec.By.At.Format(time.RFC3339Nano)+":"+name, fmt.Sprintf("sendq for %q reconciled by %s: %s (%s). %d removed (%d bytes, payloads in the eventlog), %d still queued. The seat is no longer held by an unresolved delivery attempt (🎯T726).", name, rec.By.Actor, rec.By.Outcome, rec.By.Evidence, len(rec.Removed), rec.RemovedBytes(), rec.Depth))
 
 	if rec.Depth > 0 {
 		if _, live := s.liveSender(name); live {

@@ -2,9 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { classifyInjectUserText } from './inject';
+import { TUI_PREVIEW_FAULT, type ProvisionalMap } from './provisional';
 import { coalesceAssistantText, isSealedAssistant, joinAssistantTexts, streamIdOf } from './stream';
+import { isAgentForgedOwnerEvent } from './agentForgedOwnerTurns';
 import { turnOriginOf, type TurnOrigin } from './paint';
 import { isGenericToolName, summariseInput } from './toolSummary';
+import { now } from '../clock';
+import { isAsideWireUserText } from './asideWire';
 
 /** Lifted display fold: notes, ⋯ n steps, prose. Not a second hydrate. */
 
@@ -15,6 +19,12 @@ export const SEND_ERROR_TYPE = 'send_error';
 
 export function isSendErrorFrame(frame: unknown): boolean {
   return asRec(frame).type === SEND_ERROR_TYPE;
+}
+
+export const PROVIDER_TRANSPORT_TYPE = 'provider_transport';
+
+export function isProviderTransportFrame(frame: unknown): boolean {
+  return asRec(frame).type === PROVIDER_TRANSPORT_TYPE;
 }
 
 export function diagnosticLabel(text: string, count: number): string {
@@ -52,8 +62,13 @@ export type DisplayRow = {
   origin?: TurnOrigin;
   /** User only: the daemon's owner-message id (🎯T806). */
   msgId?: string;
-  /** User only: delivery state painted into the message row (🎯T811). */
-  delivery?: { state: 'undelivered' | 'delivered'; reason?: string };
+  /**
+   * User only: delivery state painted into the message row (🎯T811).
+   * 'held' (🎯T1130): the daemon is holding this message behind a running
+   * turn — same chrome slot as undelivered, but offers Steer / Cut-in
+   * instead of Resend.
+   */
+  delivery?: { state: 'undelivered' | 'delivered' | 'held' | 'removed'; reason?: string };
   /** Assistant only, during displayRows: the bubble's stream (🎯T907). */
   streamId?: string;
   /** Assistant only, during displayRows: its untrimmed text (🎯T907). */
@@ -123,7 +138,7 @@ export function shouldAckPendingSend(
   const start = Number.isFinite(afterIndex) && afterIndex > 0 ? afterIndex : 0;
   for (let i = frames.length - 1; i >= start; i--) {
     const f = frames[i];
-    if (isSendErrorFrame(f)) continue;
+    if (isSendErrorFrame(f) || isProviderTransportFrame(f)) continue;
     if (isUserFrame(f)) return normalizeOwnerEchoText(proseText(f)) === want;
   }
   return false;
@@ -192,11 +207,28 @@ export function stepsLabel(n: number): string {
   return '⋯ ' + n + (n === 1 ? ' step' : ' steps');
 }
 
-export function summariseToolUse(c: Record<string, unknown>): string {
+function formatToolExecutionSuffix(c: Record<string, unknown>, when?: number): string {
+  const st = typeof c.execution_status === 'string' ? c.execution_status.trim().toLowerCase() : '';
+  if (!st || st === 'completed' || st === 'complete' || st === 'succeeded' || st === 'success') return '';
+  if (st === 'failed' || st === 'error') return ' (failed)';
+  if (st === 'cancelled' || st === 'canceled') return ' (cancelled)';
+  if (when !== undefined && (st === 'in_progress' || st === 'pending' || st === 'running')) {
+    const sec = Math.max(0, Math.floor((now() - when) / 1000));
+    if (sec >= 2) {
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return m > 0 ? ` (${m}m ${s}s)` : ` (${s}s)`;
+    }
+  }
+  if (st === 'in_progress' || st === 'pending' || st === 'running') return ' (running)';
+  return '';
+}
+
+export function summariseToolUse(c: Record<string, unknown>, when?: number): string {
   const name = typeof c.name === 'string' && c.name.trim() ? c.name : 'tool';
   const extra = summariseInput(c.input);
-  if (isGenericToolName(name)) return extra || name;
-  return extra ? name + ': ' + extra : name;
+  const base = isGenericToolName(name) ? extra || name : extra ? name + ': ' + extra : name;
+  return base + formatToolExecutionSuffix(c, when);
 }
 
 export function stepItems(frame: unknown): StepItem[] {
@@ -208,10 +240,11 @@ export function stepItems(frame: unknown): StepItem[] {
   }
   const f = asRec(frame);
   if (f.type === 'tool_result' || f.type === 'result') return [];
-  if (f.type === 'tool_use') return [{ cls: 'tool-use', text: summariseToolUse(f) }];
+  const when = frameWhen(frame);
+  if (f.type === 'tool_use') return [{ cls: 'tool-use', text: summariseToolUse(f, when) }];
   const out: StepItem[] = [];
   for (const b of blocks(frame)) {
-    if (b.type === 'tool_use') out.push({ cls: 'tool-use', text: summariseToolUse(b) });
+    if (b.type === 'tool_use') out.push({ cls: 'tool-use', text: summariseToolUse(b, when) });
   }
   return out;
 }
@@ -248,11 +281,35 @@ export function userTurnOrigin(frame: unknown, raw: string, inspect = false): Tu
   return inspect && isWrappedInjectUserText(raw) ? 'agent' : 'owner';
 }
 
-export type DisplayRowsOpts = { inspect?: boolean };
+export type DisplayRowsOpts = {
+  inspect?: boolean;
+  /**
+   * The owner's main chat with the overseer (🎯T1122). A turn the owner did
+   * not start (a worker report, a fleet notice, a harness inject) is machine
+   * traffic: its user row and the overseer's replies fold into that turn's
+   * steps, so the live end shows the owner's conversation, and the machine
+   * chatter is one click away instead of a column of "No action needed."
+   */
+  ownerChat?: boolean;
+  /** Live TUI preview suffix keyed by stream_id (🎯T584). */
+  provisionalByStream?: ProvisionalMap;
+};
 
 /** 🎯T569: identical assistant prose is one bubble, even after later steps. */
 function alreadyPaintedAssistant(out: DisplayRow[], text: string): boolean {
   return out.some((r) => r.kind === 'assistant' && r.text === text);
+}
+
+function overlayProvisional(
+  text: string,
+  sealed: boolean,
+  streamId?: string,
+  provisional?: ProvisionalMap,
+): string {
+  if (sealed || !streamId || !provisional) return text;
+  const prov = provisional[streamId];
+  if (!text.trim() && prov) return prov;
+  return text;
 }
 
 function pushAssistant(
@@ -362,6 +419,23 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
     runItems = [];
     runWhen = undefined;
   };
+  // 🎯T1122: inside a turn the owner did not start, nothing paints as a
+  // bubble in the owner's chat (DisplayRowsOpts.ownerChat). A window that
+  // opens mid-turn has no boundary yet, so it starts as machine traffic; the
+  // mux window floor keeps the owner's latest turn in view (🎯T1159).
+  let machineTurn = !!opts?.ownerChat;
+  // The owner's turn ends when the overseer seals its reply (a terminal stop,
+  // not tool_use). Prose after that and before the next boundary is a turn
+  // nobody journalled a boundary for (transcripts before 🎯T1169): machine.
+  let ownerSealedStream: string | undefined;
+  let ownerSealed = false;
+  const foldAfterSeal = (f: unknown) => ownerSealed && streamIdOf(f) !== ownerSealedStream;
+  const noteSeal = (f: unknown) => {
+    if (opts?.ownerChat && !machineTurn && isSealedAssistant(f)) {
+      ownerSealed = true;
+      ownerSealedStream = streamIdOf(f);
+    }
+  };
   for (const f of frames) {
     const rec = asRec(f);
     if (rec.recorded === 'lossless') continue;
@@ -376,7 +450,14 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
       continue;
     }
     const when = frameWhen(f);
-    if (isSendErrorFrame(f)) {
+    if (rec.type === TUI_PREVIEW_FAULT) {
+      const text = String(rec.text || '').trim();
+      if (!text) continue;
+      flush();
+      out.push({ kind: 'diagnostic', text, count: 1, when });
+      continue;
+    }
+    if (isSendErrorFrame(f) || isProviderTransportFrame(f)) {
       const text = String(rec.text || '').trim();
       if (!text) continue;
       // 🎯T806: a delivered frame flips the undelivered row for the same
@@ -384,11 +465,13 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
       const msgId = typeof rec.msg_id === 'string' ? rec.msg_id : '';
       // 🎯T811: with the owner bubble on screen the state lives in that row.
       const owner = msgId ? userRows.get(msgId) : undefined;
-      if (owner && (rec.state === 'undelivered' || rec.state === 'delivered')) {
+      if (owner && (rec.state === 'undelivered' || rec.state === 'delivered' || rec.state === 'held' || rec.state === 'removed')) {
         owner.delivery =
           rec.state === 'undelivered'
             ? { state: 'undelivered', reason: typeof rec.reason === 'string' ? rec.reason : text }
-            : { state: 'delivered' };
+            : rec.state === 'held'
+              ? { state: 'held' }
+              : rec.state === 'removed' ? { state: 'removed' } : { state: 'delivered' };
         continue;
       }
       flush();
@@ -420,16 +503,21 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
     };
     // Old foldDisplayEvent: agent_note is a turn-slot item, not a painted note.
     if (isAgentNote(f)) {
+      if (opts?.ownerChat) machineTurn = true;
       for (const it of stepItems(f)) addStep(it);
       continue;
     }
     if (isUserFrame(f)) {
       const raw = proseText(f);
+      // 🎯T250 / 🎯T264: [attention:] / [target-aside:] wires never paint on
+      // main. Inspect (sidebar) still sees them so T265 can strip the header.
+      if (!opts?.inspect && isAsideWireUserText(raw)) continue;
       const explicitOwner = rec.turn_origin === 'owner';
       // 🎯T233: harness injects fold to a compact ⋯ nugget with hover detail.
       // Canonical owner provenance wins even when the owner quotes a report.
       const nug = explicitOwner ? null : classifyInjectUserText(raw);
       if (nug) {
+        if (opts?.ownerChat) machineTurn = true;
         flush();
         out.push({ kind: 'steps', text: nug.label, steps: 0, inject: nug.injectKind, items: [{ cls: 'inject-detail', text: nug.detail }], when });
         continue;
@@ -439,7 +527,19 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
       if (!text) continue;
       const frameId = asRec(f).id;
       const id = typeof frameId === 'string' ? frameId : undefined;
-      const origin = userTurnOrigin(f, raw, !!opts?.inspect);
+      let origin = userTurnOrigin(f, raw, !!opts?.inspect);
+      if (isAgentForgedOwnerEvent(id)) {
+        origin = 'agent';
+      }
+      if (opts?.ownerChat) {
+        machineTurn = origin !== 'owner';
+        ownerSealed = false;
+        ownerSealedStream = undefined;
+        if (machineTurn) {
+          addStep({ cls: 'machine-message', text });
+          continue;
+        }
+      }
       const last = out[out.length - 1];
       // Canonical identities distinguish real repeated prompts. Text-only
       // echo folding is limited to old unindexed frames of the same origin.
@@ -458,24 +558,57 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
     if (bs.length) {
       for (const b of bs) {
         if (b.type === 'tool_use') {
-          addStep({ cls: 'tool-use', text: summariseToolUse(b) });
+          addStep({ cls: 'tool-use', text: summariseToolUse(b, when) });
           continue;
         }
         if (!isProseBlock(b)) continue;
         const t = String(b.text || '').trim();
         if (!t || isSilentAssistantText(t)) continue;
-        pushAssistant(out, flush, t, when, isSealedAssistant(f), streamIdOf(f), String(b.text || ''));
+        if (machineTurn || foldAfterSeal(f)) {
+          addStep({ cls: 'machine-reply', text: t });
+          continue;
+        }
+        pushAssistant(
+          out,
+          flush,
+          overlayProvisional(t, isSealedAssistant(f), streamIdOf(f), opts?.provisionalByStream),
+          when,
+          isSealedAssistant(f),
+          streamIdOf(f),
+          String(b.text || ''),
+        );
       }
+      noteSeal(f);
       continue;
     }
     if (rec.type === 'tool_use') {
-      addStep({ cls: 'tool-use', text: summariseToolUse(rec) });
+      addStep({ cls: 'tool-use', text: summariseToolUse(rec, when) });
       continue;
     }
     const rawText = proseText(f);
     const t = rawText.trim();
     if (!t || isSilentAssistantText(t)) continue;
-    pushAssistant(out, flush, t, when, isSealedAssistant(f), streamIdOf(f), rawText);
+    if (machineTurn || foldAfterSeal(f)) {
+      addStep({ cls: 'machine-reply', text: t });
+      continue;
+    }
+    pushAssistant(
+      out,
+      flush,
+      overlayProvisional(t, isSealedAssistant(f), streamIdOf(f), opts?.provisionalByStream),
+      when,
+      isSealedAssistant(f),
+      streamIdOf(f),
+      rawText,
+    );
+    noteSeal(f);
+  }
+  if (opts?.provisionalByStream) {
+    for (const [sid, prov] of Object.entries(opts.provisionalByStream)) {
+      if (!prov.trim()) continue;
+      if (out.some((r) => r.kind === 'assistant' && r.streamId === sid && !r.sealed)) continue;
+      pushAssistant(out, flush, prov, undefined, false, sid, prov);
+    }
   }
   flush();
   return joinCutLines(out);

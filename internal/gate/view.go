@@ -3,7 +3,10 @@
 
 package gate
 
-import "regexp"
+import (
+	"regexp"
+	"time"
+)
 
 // ErrNotFound is the distinguishable token a supervisor gets when an
 // attestation cites an id with no record behind it (🎯T697). It is a word
@@ -21,11 +24,12 @@ func ValidRecordID(id string) bool {
 	return id != "" && recordIDRe.MatchString(id)
 }
 
-// View is the supervisor-facing projection of a Record (🎯T697): the
+// View is the supervisor-facing projection of a Record (🎯T697 / 🎯T701): the
 // command that ran, the status it actually exited with, the verdict a
-// worker may cite, and the tree it measured. It is what /api/gates and
-// jevons_gate_show return, so a session without filesystem access to the
-// store or permission to run bin/gate can still check an attestation.
+// worker may cite, the tree it measured, how long it ran, and where its
+// output lives. It is what /api/gates and jevons_gate_show return, so a
+// session without filesystem access to the store or permission to run
+// bin/gate can still check an attestation.
 type View struct {
 	ID          string          `json:"id"`
 	Name        string          `json:"name"`
@@ -35,6 +39,8 @@ type View struct {
 	StatusKnown bool            `json:"status_known"`
 	Status      string          `json:"status"`
 	Verdict     Verdict         `json:"verdict"`
+	Duration    string          `json:"duration"`
+	OutputPath  string          `json:"output_path,omitempty"`
 	Tree        *TreeProvenance `json:"tree,omitempty"`
 	Attestation string          `json:"attestation"`
 	VoidReason  string          `json:"void_reason,omitempty"`
@@ -56,6 +62,8 @@ func ViewOf(rec *Record) View {
 		StatusKnown: rec.StatusKnown,
 		Status:      rec.Status(),
 		Verdict:     rec.Verdict,
+		Duration:    rec.Duration().Round(100 * time.Millisecond).String(),
+		OutputPath:  rec.OutputPath,
 		Tree:        rec.Tree,
 		Attestation: rec.Attestation(),
 		VoidReason:  rec.VoidReason,

@@ -196,6 +196,15 @@ func FormatDaemonRestartedText(parent string, workers []WorkerIdleRef) string {
 // Named so GATE / daily-path logs show a skip, not a missing error.
 const reasonSleepingPO = "sleeping_po"
 
+// reasonAgentIntentStoodDown is the 🎯T1118 skip decision: the restart
+// restart-notify path respects per-agent fleet intent (🎯T414) the same
+// way restart reattach does (fleetintent.StoodDown). A parked/stood-down
+// coordinator is never woken by this sweep, however many work children it
+// has or however recoverable the owner's overall open intent is — a park
+// promises "nothing revives it", and work-children/open-intent are signals
+// for a *sleeping* (never deliberately stood down) coordinator only.
+const reasonAgentIntentStoodDown = "agent_intent"
+
 // SkipSleepingCoordinatorRestart is the 🎯T627.5 gate for idle_nudge
 // daemon-restarted. A registered PO/boss that is process-stopped, has no
 // recoverable open owner intent, and has zero work children is left
@@ -206,7 +215,13 @@ const reasonSleepingPO = "sleeping_po"
 // This does not treat sleeping/parked as never-materialized (🎯T629):
 // skip is "do not rehydrate"; a seat that must recover still goes
 // through send → fail-closed Cursor resume.
-func SkipSleepingCoordinatorRestart(target, overseer string, processAlive, openIntent bool, workChildren int) (skip bool, reason string) {
+//
+// agentStoodDown (🎯T1118) is the per-agent 🎯T414 intent decision
+// (fleetintent.StoodDown on ControlRevive/ControlDeliverStart) — true when
+// the owner or a product path deliberately parked or stopped this exact
+// agent. It is checked before processAlive/openIntent/workChildren so a
+// parked PO with live work children is still left down.
+func SkipSleepingCoordinatorRestart(target, overseer string, processAlive, openIntent bool, workChildren int, agentStoodDown bool) (skip bool, reason string) {
 	target = strings.TrimSpace(target)
 	overseer = strings.TrimSpace(overseer)
 	if overseer == "" {
@@ -214,6 +229,15 @@ func SkipSleepingCoordinatorRestart(target, overseer string, processAlive, openI
 	}
 	if target == "" || strings.ToLower(target) == strings.ToLower(overseer) {
 		return false, ""
+	}
+	// 🎯T1118: a deliberate per-agent park/stop-intent outranks everything
+	// below — process-alive, owner open-intent and work-children are all
+	// signals that this coordinator merely went quiet, not that someone
+	// told it to stop. Checked first, exactly like restart reattach's own
+	// fleetintent.StoodDown gate, so this path cannot wake what reattach
+	// correctly left down three minutes earlier.
+	if agentStoodDown {
+		return true, reasonAgentIntentStoodDown
 	}
 	if processAlive {
 		return false, ""

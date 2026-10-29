@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/audit"
 	"github.com/marcelocantos/jevons/internal/auth"
+	"github.com/marcelocantos/jevons/internal/brokerintent"
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/chatlog"
@@ -40,9 +42,11 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
+	"github.com/marcelocantos/jevons/internal/ownerquestionview"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/portown"
 	"github.com/marcelocantos/jevons/internal/provider"
+	"github.com/marcelocantos/jevons/internal/repowatch"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/seatprovider"
@@ -51,9 +55,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/statedb"
 	"github.com/marcelocantos/jevons/internal/supervise"
+	"github.com/marcelocantos/jevons/internal/superviselog"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
-	"github.com/marcelocantos/jevons/internal/uidaemon"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
@@ -67,11 +71,6 @@ import (
 func main() {
 	configPath := flag.String("config", "", "config file (default ~/.jevons/config.yaml; missing file = built-in defaults)")
 	port := flag.Int("port", 13705, "listen port")
-	uiMode := flag.String("ui", "", "empty=full daemon; probe=React surface check")
-	installUIAgents := flag.Bool("install-ui-agents", false, "write and load the React surface probe, then exit")
-	uninstallUIAgents := flag.Bool("uninstall-ui-agents", false, "unload the React surface probe, then exit")
-	installDaemonAgent := flag.Bool("install-daemon-agent", false, "write the development jevonsd KeepAlive LaunchAgent (🎯T553.3), then exit")
-	uninstallDaemonAgent := flag.Bool("uninstall-daemon-agent", false, "unload the development jevonsd KeepAlive LaunchAgent, then exit")
 	bindAddr := flag.String("bind", "", "listen interface (default 127.0.0.1 â loopback only; remote devices use the pigeon relay)")
 	relayURL := flag.String("relay", "", "relay URL to register with (e.g. https://carrier-pigeon.fly.dev)")
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
@@ -112,39 +111,12 @@ func main() {
 	if *debug {
 		logLevel = slog.LevelDebug
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	slog.SetDefault(slog.New(slog.NewTextHandler(superviselog.SlogWriter(os.Stderr), &slog.HandlerOptions{
 		Level: logLevel,
 	})))
-
-	if *installUIAgents {
-		runInstallUIAgents()
-	}
-	if *installDaemonAgent {
-		runInstallDaemonAgent(*workDir)
-	}
-	if *uninstallDaemonAgent {
-		if err := supervise.UnloadAgent(supervise.DaemonLabel); err != nil {
-			slog.Error("uninstall daemon KeepAlive", "err", err)
-			os.Exit(1)
-		}
-		home, _ := os.UserHomeDir()
-		_ = os.Remove(supervise.DaemonPlistPath(home))
-		os.Exit(0)
-	}
-	if *uninstallUIAgents {
-		if err := uidaemon.Uninstall(); err != nil {
-			slog.Error("uninstall UI LaunchAgents", "err", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-	switch strings.TrimSpace(*uiMode) {
-	case "probe":
-		runUIProbe()
-	case "", "full":
-	default:
-		slog.Error("unknown -ui", "ui", *uiMode)
-		os.Exit(2)
+	if os.Getenv(planusage.FixtureEnv) != "" {
+		slog.Error("JEVONS_PLAN_USAGE_FIXTURE is retired; seed plan usage into the isolate control replica before starting jevonsd")
+		os.Exit(1)
 	}
 
 	// ð¯T282: drop any enclosing agent session's identity before anything
@@ -217,7 +189,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Set up the overseer workdir with rendered persona instructions.
+	// Set up the overseer workdir with rendered instructions (🎯T44 / 🎯T511:
+	// cfg.Persona = owner-templated shell + overseer role file; no third prompt).
 	jevDir := cfg.OverseerDir()
 	if err := os.MkdirAll(jevDir, 0o755); err != nil {
 		slog.Error("cannot create overseer workdir", "err", err)
@@ -263,6 +236,12 @@ func main() {
 	// anything that reads it, and the same instance goes to all three.
 	seats := seatstate.New(seatstate.Args{})
 	srv := server.New(cli.Version, cfg.StateDir)
+	// Credential corruption is fatal even when relay is disabled: an old
+	// daemon must not accidentally run as unpaired and later overwrite it.
+	if _, err := srv.Credentials().Load(); err != nil {
+		slog.Error("malformed credential store; refusing startup", "err", err)
+		os.Exit(1)
+	}
 	srv.SetSeats(seats)
 	srv.SetOverseerName(cfg.OverseerName)
 	// ð¯T200: declarative domain portfolios from config (no GM agent).
@@ -391,9 +370,17 @@ func main() {
 	// as a change the moment Watch fired OnChange. First load seeds this
 	// and does not bounce; only a successive-load diff does.
 	var fileBaseline config.Config
+	var applyFableClassRatified func(string)
+	var refreshBrokerIntentForConfig func(config.Config)
 	cfgHot, err := config.Watch(watcher, &config.WatchArgs[config.Config]{
 		Path: cfgPath, Load: config.Load, Fallback: cfg,
 		OnChange: func(next config.Config) {
+			if refreshBrokerIntentForConfig != nil {
+				refreshBrokerIntentForConfig(next)
+			}
+			if applyFableClassRatified != nil {
+				applyFableClassRatified(next.FableClassDefaults.Ratified)
+			}
 			srv.SetPortfolios(next.Portfolios)
 			if providerCfg != nil {
 				if err := providerCfg.Reload(); err != nil {
@@ -411,6 +398,9 @@ func main() {
 	}
 	if cfgHot != nil {
 		fileBaseline = cfgHot.Get()
+		if applyFableClassRatified != nil {
+			applyFableClassRatified(cfgHot.Get().FableClassDefaults.Ratified)
+		}
 	}
 
 	// ð¯T8.3 execution safety (doit Engine: L1/L2/L3, audit, capabilities).
@@ -603,34 +593,9 @@ func main() {
 	// sees serving resume, the daemon it would tell is a process that
 	// started seconds ago knowing nothing. The record on disk is the
 	// handover between them, and this loop is the daemon reading it.
+	// The daemon's process is held by supervisord (🎯T1111); nothing here
+	// supervises a supervisor.
 	go supervise.ReportLoop(ctx, supervise.Dir(cfg.StateDir), 0, srv.NotifyOwnerNote)
-
-	// 🎯T405: and the other direction — the daemon supervises its own
-	// supervisor. The watchdog was installed on 2026-08-10 and stopped
-	// being held by launchd fourteen minutes later; the plist stayed on
-	// disk, the machine never rebooted, and for five days and four
-	// daemon bounces nothing noticed, because the only thing watching
-	// the watchdog was the owner. A supervisor whose absence has no
-	// alarm supervises nothing the moment it is the thing that broke.
-	// These two loops make each process responsible for the other, and
-	// they live in different process trees precisely so that whatever
-	// takes one down cannot take the other with it.
-	//
-	// 🎯T1090: only the development daemon does this. The loop observes
-	// and reinstates the owner's real LaunchAgent under $HOME, so an
-	// isolate running it reported the owner's watchdog as a gap from a
-	// test run (gate 252cf6ac) and could have rewritten its plist.
-	if supervisesOwnerWatchdog(cfg.Port, cfg.StateDir) {
-		go supervise.WatchAgentLoop(ctx, supervise.AgentPaths{
-			StateDir: cfg.StateDir,
-			Home:     supervise.HomeDir(),
-			Repo:     supervise.RepoRoot(),
-			Port:     cfg.Port,
-		}, supervise.DefaultAgentConfig(), 0, srv.NotifyOwnerNote)
-	} else {
-		slog.Info("supervise: not the development daemon; leaving the owner's watchdog LaunchAgent alone",
-			"port", cfg.Port, "state_dir", cfg.StateDir, "label", supervise.AgentLabel)
-	}
 
 	// ð¯T27.9: start the liveness check loop once the daemon context exists.
 	if liveMon != nil {
@@ -639,10 +604,18 @@ func main() {
 
 	// ð¯T40: SIGINT/SIGTERM = normal stop (StopAll); SIGHUP = upgrade exit
 	// (skip StopAll, write handles). JEVONS_UPGRADE_EXIT=1 also marks
-	// SIGTERM/SIGINT as upgrade when launchd cannot send SIGHUP.
+	// SIGTERM/SIGINT as upgrade when the supervisor cannot send SIGHUP.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigCh)
+	// 🎯T1294: an isolate's stdin can be a lifeline held by the process that
+	// started it (the journey suite). When that process is gone — SIGKILL, a
+	// crash, its shell killed — no signal reaches this daemon, and on
+	// 2026-10-29 isolates ran orphaned for 15 hours, auditing on a paid
+	// model. End of stdin is a normal stop.
+	if os.Getenv(lifelineEnv) == "stdin" {
+		go watchLifeline(os.Stdin, sigCh)
+	}
 	// 🎯T1067: SIGUSR1 writes goroutine and heap profiles to
 	// <state_dir>/dumps and keeps running.
 	if dumpSignal != nil {
@@ -742,10 +715,17 @@ func main() {
 	// lazily, because a daemon restart is one of the three things that
 	// resurrected a deliberately parked fleet on 2026-08-10 — an intent the
 	// restart cannot read is an intent the restart overrides.
+	if err := mcpSrv.OpenLandHold(cfg.StateDir); err != nil {
+		slog.Error("land hold store failed", "err", err)
+		os.Exit(1)
+	}
 	if err := mcpSrv.OpenFleetIntent(cfg.StateDir); err != nil {
 		slog.Error("fleet intent store failed", "err", err)
 		os.Exit(1)
 	}
+	mcpSrv.ReconcileOMPPauseOnBoot()
+	srv.SetFleetIntentSource(mcpSrv.FleetIntent)
+	srv.SetAutoSeatHoldReader(mcpSrv.AutoSeatHold)
 	// T998: durable target churn bound, independent of provider quota.
 	if err := mcpSrv.OpenMissionProtection(cfg.StateDir); err != nil {
 		slog.Error("mission protection store failed", "err", err)
@@ -755,6 +735,10 @@ func main() {
 	// only in memory, so a bounce replaced it with "unknown".
 	if err := fleet.UseRehydrateFailureFile(filepath.Join(cfg.StateDir, "rehydrate-failures.json")); err != nil {
 		slog.Error("rehydrate failure store failed", "err", err)
+		os.Exit(1)
+	}
+	if err := fleet.UseResumeRefusalFile(filepath.Join(cfg.StateDir, "fleet", "resume_refusal.json")); err != nil {
+		slog.Error("resume refusal count store failed", "err", err)
 		os.Exit(1)
 	}
 	// 🎯T536.2: agent-name → role assignments (sidecar; inspectable via agent_list).
@@ -776,10 +760,15 @@ func main() {
 		slog.Error("thread store failed", "err", err)
 		os.Exit(1)
 	}
-	// Token-spend clamp-down (ð¯T36): start it before the butler so its
-	// spawn/resume guards feed the butler's lifecycle. Returns nil if the
-	// usage DB is unavailable â the cockpit still runs, just unguarded.
-	guard := startCostGuard(ctx, cfg, watcher, registry, scanner, srv, mcpSrv)
+	// Start shared control-plane observations before optional accounting.
+	// Accounting may be disabled or unavailable without losing receipts.
+	replica, guard := startControlServices(ctx, cfg, watcher, registry, scanner, srv, mcpSrv)
+	defer func() {
+		cancel()
+		if err := replica.Close(); err != nil {
+			slog.Error("control plane close failed", "err", err)
+		}
+	}()
 
 	// ð¯T114: same Claudia adapter is Fleet (threads) and Participants
 	// (agent-only names) so Deliver/PushEvent share one id space.
@@ -794,9 +783,12 @@ func main() {
 	// next send/deliver and leaves session_id unchanged.
 	startTurnRate(guard, fleetAdapter)
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
+	applyFableClassRatified = mcpSrv.SetFableClassRatified
+	applyFableClassRatified(cfg.FableClassDefaults.Ratified)
 	// ð¯T325.3: durable idea intake ledger (state_dir/ideas.json).
 	mcpSrv.SetIdeaStateDir(cfg.StateDir)
 	mcpSrv.SetOwnerQuestionsDir(cfg.StateDir)
+	mcpSrv.SetOwnerQuestionSilenceWindow(cfg.OwnerQuestions.SilenceWindow()) // 🎯T404.2
 	// ð¯T388: durable agent-report store (state_dir/agent-reports/) so a
 	// terminal report survives the ð¯T165/T195 reap of the agent that wrote it,
 	// and an over-bound delivery can name a call that returns the whole text.
@@ -936,7 +928,19 @@ func main() {
 	// 🎯T390: subscription plan remaining, per backend, for the cockpit and
 	// as capacity's one honest budget dimension under a flat subscription.
 	planServeReady := make(chan struct{})
-	plans := startPlanUsage(ctx, mcpSrv, srv, cfg.StateDir, planServeReady)
+	plans, err := startPlanUsage(ctx, mcpSrv, srv, cfg.StateDir, planServeReady, replica)
+	if err != nil {
+		// The bars depend on the Claudia control plane; the rest of the
+		// daemon (cockpit, fleet, overseer paging) must not. Exiting here
+		// turned a broker outage into a supervisor crash loop with no page.
+		slog.Error("plan usage unavailable; serving without it", "err", err)
+		unavailable, _ := json.Marshal(map[string]any{
+			"disabled": true,
+			"error":    "plan usage unavailable: " + err.Error(),
+		})
+		srv.SetPlanUsageSource(func() any { return json.RawMessage(unavailable) })
+		plans = nil
+	}
 
 	capGov := startCapacityGovernor(cfg, watcher, guard, plans, mcpSrv, srv)
 
@@ -960,6 +964,10 @@ func main() {
 	// writing durable versioned notes and briefing the overseer.
 	startAmbientResearch(ctx, cfg, mcpSrv, capacityGate(capGov))
 
+	// 🎯T1022.2 PO repo-watch: polls `gh` issues/PRs per PO workdir and
+	// delivers a typed brief to the owning PO.
+	startRepoWatch(ctx, cfg, mcpSrv, capacityGate(capGov))
+
 	// ð¯T357 periodic full-scan audit: bounded advanced-model passes over
 	// code, skills, and prompts, folded into durable residue.
 	startPeriodicAudit(ctx, cfg, mcpSrv, capacityGate(capGov))
@@ -972,10 +980,8 @@ func main() {
 	// See https://github.com/marcelocantos/mnemo
 
 	// Overseer: claudia Session (default backend from config/env; usually Grok).
-	overseerModelChoice := cfg.OverseerModel
-	if overseerModelChoice == "" {
-		overseerModelChoice = cfg.Model
-	}
+	overseerModelChoice := cost.EffectiveOverseerModel(
+		cfg.OverseerModel, cfg.Model, cfg.FableClassDefaults.Ratified, string(defaultProvider))
 	jevonDef, err := registerOverseerSeat(registry, cfg.OverseerName, jevDir, overseerModelChoice, defaultProvider)
 	if err != nil {
 		slog.Error("jevon agent setup failed", "err", err)
@@ -998,6 +1004,15 @@ func main() {
 		// 🎯T828: J8b forces a just-messaged worker into delivered_unconfirmed
 		// so the plain stop always hits the T664 refusal arm.
 		mcpSrv.EnableT664FaultSeam(cfg.StateDir)
+		// 🎯T807: shorten the overseer page threshold on isolate daemons only.
+		if v := os.Getenv("JEVONS_TEST_OVERSEER_PAGE_AFTER"); v != "" {
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				slog.Error("invalid JEVONS_TEST_OVERSEER_PAGE_AFTER", "value", v, "err", err)
+				os.Exit(1)
+			}
+			srv.SetOverseerPageAfter(d)
+		}
 	}
 	// ð¯T275: HTTP POST /api/agents/{name}/send uses the same deliver path as
 	// MCP jevons_agent_send â queue when busy (not 409 dead-end). Drain on
@@ -1010,11 +1025,32 @@ func main() {
 		return server.AgentSendOutcome{Status: res.Status, Mechanism: res.Mechanism,
 			Message: res.Message, InterruptAfterMS: res.InterruptAfterMS}, nil
 	})
+	srv.SetOwnerQuestionAnswerHook(func(id ownerquestionview.Identity, answer string) (string, error) {
+		return mcpSrv.AnswerOwnerQuestionIdentity(id, answer, "owner")
+	})
 	// 🎯T662: /api/agents rows carry why a seat stopped and the mass-stop line.
-	srv.SetSeatStopReader(mcpSrv.SeatStopShown)     // 🎯T944
-	srv.SetSeatStartingReader(mcpSrv.AgentStarting) // 🎯T970
-	srv.SetSeatWaitClear(mcpSrv.ClearSeatWait)      // 🎯T980
-	srv.SetWedgedReader(mcpSrv.WedgedSeat)          // 🎯T927
+	srv.SetSeatStopDetailsReader(mcpSrv.SeatStopDetailsShown)            // 🎯T1059 trusted actor + reason
+	srv.SetSeatStopReader(mcpSrv.SeatStopShown)                          // 🎯T944 fallback
+	srv.SetPOAuditorFaultReader(mcpSrv.POAuditorMutualWaitFaultLine)     // 🎯T1192
+	srv.SetAwaitingParentDirectionReader(mcpSrv.AwaitingParentDirection) // 🎯T1233
+	srv.SetSeatStartingReader(mcpSrv.AgentStarting)                      // 🎯T970
+	srv.SetSeatWaitClear(mcpSrv.ClearSeatWait)                           // 🎯T980
+	srv.SetSeatPauseControl(server.SeatPauseControl{
+		Pause:   func(name string) error { return mcpSrv.PauseSeatOwner(name, "owner") },
+		Unpause: func(name string) error { return mcpSrv.UnpauseSeatOwner(name, "owner") },
+		Paused:  mcpSrv.SeatOwnerPaused,
+	})
+	srv.SetFleetPauseControl(server.FleetPauseControl{
+		Pause:  mcpSrv.PauseFleetOwner,
+		Resume: mcpSrv.ResumeFleetOwner,
+		Paused: mcpSrv.FleetOwnerPaused,
+	})
+	srv.SetWedgedReader(mcpSrv.WedgedSeat)                                       // 🎯T927
+	srv.SetEmptyTurnFaultReaders(mcpSrv.EmptyTurnFault, mcpSrv.EmptyTurnBackoff) // 🎯T1238
+	srv.SetInertReader(mcpSrv.InertSeat)                                         // 🎯T754
+	srv.SetQueuedPromptsReader(mcpSrv.QueuedPromptsForAPI)                       // 🎯T754
+	srv.SetDestinationModelValidator(mcpSrv.ValidateDestinationModel)            // 🎯T845
+	srv.SetProviderRequestFailureReader(mcpSrv.ProviderRequestFailure)           // 🎯T845
 	srv.SetDeadSeatNoter(mcpSrv.NoteDeadSeat)
 	srv.SetPlanAuthFailure(mcpSrv.PlanAuthFailed, mcpSrv.ClearPlanAuthFailures) // 🎯T905
 	srv.SetMassStopReader(mcpSrv.MassStopLine)
@@ -1076,6 +1112,8 @@ func main() {
 		slog.Error("listen failed", "err", err)
 		os.Exit(1)
 	}
+	slog.Info("jevonsd listening", "addr", listenAddr, "version", cli.Version,
+		"worker_model", cfg.Model)
 
 	// jevonsmcp: session-scoped MCPServers on the overseer row and every
 	// later mint (claudia 🎯T40). After bind, served port only (🎯T379).
@@ -1085,11 +1123,14 @@ func main() {
 	// 🎯T520: owner-map HTTP MCP → loopback proxy; OAuth refresh without
 	// the owner when a refresh token is stored. Advertised URLs go on
 	// MCPServers — Mount does not rewrite provider configs.
-	if up := mountHTTPUpstreamProxy(mux, cfg, watcher, srv, mcpHost, served, mcpAttach, srv.ObserveMCPToolCall); up != nil {
+	applyMCPAttach := func(a mcpattach.Args) {
+		fleetAdapter.SetMCP(a)
+		mcpSrv.SetMCP(a)
+	}
+	if up := mountHTTPUpstreamProxy(mux, cfg, watcher, srv, mcpHost, served, mcpAttach, srv.ObserveMCPToolCall, applyMCPAttach); up != nil {
 		mcpAttach.Proxied = up.Advertised()
 	}
-	fleetAdapter.SetMCP(mcpAttach)
-	mcpSrv.SetMCP(mcpAttach)
+	applyMCPAttach(mcpAttach)
 	jevonDef.MCPServers = mcpattach.SessionServers(mcpAttach, jevonDef.WorkDir)
 	jevonDef.MCPExclusive = mcpattach.Exclusive
 	stampRegistrySessionMCP(registry, mcpAttach, jevonDef)
@@ -1168,6 +1209,7 @@ func main() {
 		// this process exits. A later snapshot otherwise reads an uncertain
 		// row whose receipt is cancelled.
 		mcpSrv.SettleHeldReceipts()
+		mcpSrv.SettleStartFlightsOnShutdown()
 		cancel()
 		httpSrv.Close()
 	}()
@@ -1217,12 +1259,43 @@ func main() {
 	}
 
 	if jevonProc := registry.Get(cfg.OverseerName); jevonProc != nil {
+		if fresh, err := upgrade.ConfirmBrokerGrant(ctx, cfg.OverseerName, jevonProc); err != nil {
+			slog.Warn("overseer broker grant not reclaimed after bounce", "err", err)
+		} else if fresh != nil {
+			jevonProc = fresh
+		}
 		// AttachOverseer sets the process and subscribes its event stream
 		// (forward raw JSONL to chat WS clients; accumulate turn text +
 		// status; feed the Grok voice bridge). It is re-run after a rewind
 		// swaps the process, so all overseer references stay current.
 		srv.AttachOverseer(jevonProc)
 
+	} else {
+		// The overseer did not launch (StartAll logged "auto-start failed"),
+		// so the chat cannot respond. Fail LOUD and legible with
+		// provider-aware diagnosis (🎯T54, 🎯T214 J4) — do not blame a missing
+		// Grok CLI when the overseer provider is Claude/Cursor/other.
+		// A Cursor session/load fail-closed is the real cause (🎯T545.2),
+		// not a missing Grok binary. Cockpit converge (🎯T204) keeps
+		// retrying Launch+attach unless ResumeDenied is latched.
+		reason := overseerDownReason(jevonDef.Provider, registry.ResumeDenied(cfg.OverseerName))
+		slog.Error("OVERSEER NOT RUNNING — chat cannot respond until this is fixed",
+			"overseer", cfg.OverseerName, "provider", jevonDef.Provider, "likely_cause", reason)
+		srv.SetOverseerDownReason(reason)
+	}
+
+	// 🎯T794 / 🎯T778: cockpit converge before impatience and security-auditor wiring.
+	var fleetStarted atomic.Bool
+	srv.SetCockpitHooks(server.CockpitHooks{
+		Reconcile: func() { // 🎯T766.3: the one fleet pass
+			if fleetStarted.Load() {
+				mcpSrv.Reconcile()
+			}
+		},
+	})
+	srv.StartCockpitConverge(ctx, server.DefaultCockpitInterval)
+
+	if jevonProc := registry.Get(cfg.OverseerName); jevonProc != nil {
 		// Wire MCP worker-completion + agent-reply notifications into Jevon.
 		// Route through the server so a rewind swap is transparent.
 		send := func(text string) {
@@ -1262,20 +1335,7 @@ func main() {
 		// ð¯T58), so the model already has full context. The recap-on-boot
 		// hack â a lossy summary re-injected as a visible user turn every
 		// restart â is gone.
-	} else {
-		// The overseer did not launch (StartAll logged "auto-start failed"),
-		// so the chat cannot respond. Fail LOUD and legible with
-		// provider-aware diagnosis (🎯T54, 🎯T214 J4) — do not blame a missing
-		// Grok CLI when the overseer provider is Claude/Cursor/other.
-		// A Cursor session/load fail-closed is the real cause (🎯T545.2),
-		// not a missing Grok binary. Cockpit converge (🎯T204) keeps
-		// retrying Launch+attach unless ResumeDenied is latched.
-		reason := overseerDownReason(jevonDef.Provider, registry.ResumeDenied(cfg.OverseerName))
-		slog.Error("OVERSEER NOT RUNNING — chat cannot respond until this is fixed",
-			"overseer", cfg.OverseerName, "provider", jevonDef.Provider, "likely_cause", reason)
-		srv.SetOverseerDownReason(reason)
 	}
-
 	// ð¯T335: standing security auditor â always on; deliver via overseer when attached.
 	secInterest := mcpserver.NewSecurityInterest(mcpSrv, func(text string) error {
 		if err := srv.SendToOverseer(text); err != nil {
@@ -1329,6 +1389,46 @@ func main() {
 		OnMaxed: mcpSrv.OnConvergenceExhausted,
 	})
 
+	// 🎯T1253/T233: publish genuine parked/reaped intent and transient
+	// AutoSeatHold policy as separate complete files before fleet reattach.
+	// Neither edits Jevons' real intent; Claudia enforces both at boot/grant.
+	brokerIntent := brokerintent.New(cfg.StateDir)
+	var brokerIntentMu sync.Mutex
+	refreshBrokerIntent := func() error {
+		brokerIntentMu.Lock()
+		defer brokerIntentMu.Unlock()
+		return brokerIntent.Write(registry.List(), mcpSrv.FleetIntent(), mcpSrv.AutoSeatHold)
+	}
+	mcpSrv.SetBrokerIntentRefresh(refreshBrokerIntent)
+	refreshBrokerIntentForConfig = func(next config.Config) {
+		mcpSrv.SetAutoSpawnPaused(next.FrontierConsume.Disabled)
+		if err := refreshBrokerIntent(); err != nil {
+			slog.Error("broker consumer intent refresh failed on config change", "err", err)
+		}
+	}
+	if err := refreshBrokerIntent(); err != nil {
+		slog.Error("broker consumer intent initial publication failed", "err", err)
+		os.Exit(1)
+	}
+	// The bullseye ledger and registry can be edited by another process.
+	// There is no transactional hook for those external writers, so refresh
+	// their projection continuously; config and fleet-intent writes above
+	// publish synchronously in this daemon.
+	go func() {
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if err := refreshBrokerIntent(); err != nil {
+					slog.Error("broker consumer intent refresh failed", "err", err)
+				}
+			}
+		}
+	}()
+
 	// ð¯T415: the owner-notice path writes straight to the owner's journal.
 	// Deliberately NOT via the overseer, unlike every other fleet-health
 	// signal: any failure that stops the overseer would otherwise stop the
@@ -1350,6 +1450,14 @@ func main() {
 		DefaultPO:    "jevons-po",
 	})
 
+	// 🎯T1189: when the Claudia broker restarts under a running daemon,
+	// re-adopt every relaunched seat immediately instead of waiting for the
+	// owner to bounce jevonsd.
+	go mcpserver.StartBrokerReconnectWatch(ctx, mcpserver.BrokerReconnectWatchArgs{
+		Server:          mcpSrv,
+		OnAgentsChanged: srv.NotifyAgentsChanged,
+	})
+
 	// ð¯T254.1: unattended frontier consumption â every non-design-gated ready
 	// frontier leaf gets a worker under jevons-po (or an explicit park reason)
 	// without an owner spawn command. Conservative drip (default 1 spawn per
@@ -1365,6 +1473,7 @@ func main() {
 			Interval:           time.Duration(cfg.FrontierConsume.IntervalMinutes) * time.Minute,
 			MaxSpawnsPerCycle:  cfg.FrontierConsume.MaxSpawnsPerCycle,
 			MaxSpawnsPerTarget: cfg.FrontierConsume.MaxSpawnsPerTarget,
+			MaxLiveWorkers:     cfg.FrontierConsume.MaxLiveWorkers,
 		})
 	}
 
@@ -1373,16 +1482,6 @@ func main() {
 	// 🎯T778: the fleet pass repairs dead seats, so it waits until the fleet
 	// has finished its own start; otherwise it would Launch a seat the
 	// reattach below is still about to adopt.
-	var fleetStarted atomic.Bool
-	srv.SetCockpitHooks(server.CockpitHooks{
-		Reconcile: func() { // 🎯T766.3: the one fleet pass
-			if fleetStarted.Load() {
-				mcpSrv.Reconcile()
-			}
-		},
-	})
-	srv.StartCockpitConverge(ctx, server.DefaultCockpitInterval)
-
 	// 🎯T778: fleet seats start after, and independently of, the overseer
 	// and the converge loop. Bounded concurrency; a slow seat delays itself.
 	go func() {
@@ -1394,7 +1493,7 @@ func main() {
 		noteRemint(upgrade.ReattachSeatsContext(ctx, registry,
 			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl, heldAuto),
 			upgrade.DefaultReattachConcurrency))
-		adoptPausedAutoSeats(registry, heldAuto)
+		adoptPausedAutoSeats(registry, heldAuto, mcpSrv.AllowFleetControl)
 		// Workers started here never passed through handleAgentStart, so
 		// wire their completion-notify now (🎯T61); the standing sweep
 		// (🎯T426) would also catch them, later.
@@ -1417,19 +1516,35 @@ func main() {
 	// fires even when the overseer never launched: if no MCP client has
 	// listed our tools shortly after boot, the overseer is toolless or
 	// absent. Fail LOUD.
+	// Broker-held seats survive a daemon restart and never re-list tools, so
+	// "no tools/list since boot" alone fired on every restart. The fault is
+	// an overseer that was given work and has made no request of this MCP
+	// server at all since.
 	go func() {
-		time.Sleep(45 * time.Second)
-		if mcpSrv.ToolsListCount() == 0 {
+		const grace = 10 * time.Minute
+		tick := time.NewTicker(30 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+			if mcpSrv.MCPRequestsSinceBoot() > 0 {
+				return
+			}
+			first := mcpSrv.FirstOverseerDelivery()
+			if first.IsZero() || time.Since(first) < grace {
+				continue
+			}
 			slog.Error("OVERSEER TOOLLESS OR ABSENT â no MCP tools/list since boot; jevons tools are not attached (see ð¯T50/ð¯T54)")
 			srv.Broadcast(map[string]any{
 				"type":  "error",
 				"error": "overseer has no jevons tools (or failed to launch) â actions will not work",
 			})
+			return
 		}
 	}()
-
-	slog.Info("jevonsd starting", "addr", listenAddr, "version", cli.Version,
-		"worker_model", cfg.Model)
 
 	// Connect to relay if specified.
 	if *relayURL != "" {
@@ -1476,7 +1591,7 @@ func runOneShot(stateDir, pairInstance, addCredential, relayURL string) (int, er
 		if err := json.Unmarshal(data, &rec); err != nil {
 			return 1, fmt.Errorf("parse server record: %w", err)
 		}
-		if err := store.Save(&rec); err != nil {
+		if err := store.Add(&rec); err != nil {
 			return 1, fmt.Errorf("save credential: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "credential saved for peer %s\n", rec.PeerInstanceID)
@@ -1492,7 +1607,7 @@ func runOneShot(stateDir, pairInstance, addCredential, relayURL string) (int, er
 	if err != nil {
 		return 1, fmt.Errorf("mint: %w", err)
 	}
-	if err := store.Save(serverRec); err != nil {
+	if err := store.Add(serverRec); err != nil {
 		return 1, fmt.Errorf("save server record: %w", err)
 	}
 	text, err := artifact.MarshalText()
@@ -1642,103 +1757,6 @@ func repoSibling(bin string, elem ...string) string {
 		return abs
 	}
 	return dir
-}
-
-func runInstallDaemonAgent(workdir string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		slog.Error("daemon agent: home", "err", err)
-		os.Exit(1)
-	}
-	wd, _ := os.Getwd()
-	repo, err := supervise.DevelopmentRepoRoot(workdir, wd, supervise.RepoRoot())
-	if err != nil {
-		slog.Error("daemon agent: locate repo", "err", err)
-		os.Exit(1)
-	}
-	bin := supervise.DevelopmentDaemonBinary(repo)
-	pathEnv, _ := supervise.AgentPATH(exec.LookPath, supervise.RestartTools)
-	spec := supervise.DaemonSpec{
-		Binary:   bin,
-		Workdir:  repo,
-		Port:     config.DevelopmentPort,
-		StateDir: config.Default().StateDir,
-		PathEnv:  pathEnv,
-		LogPath:  supervise.DaemonLogPath(config.Default().StateDir),
-	}
-	path := supervise.DaemonPlistPath(home)
-	if err := supervise.WriteDaemonPlist(path, spec); err != nil {
-		slog.Error("write daemon KeepAlive plist", "err", err)
-		os.Exit(1)
-	}
-	slog.Info("wrote daemon KeepAlive plist", "path", path, "label", supervise.DaemonLabel)
-
-	if supervise.DaemonOwnsProcess() {
-		slog.Info("KeepAlive already loaded", "label", supervise.DaemonLabel)
-		os.Exit(0)
-	}
-	// Bootstrapping while a nohup daemon holds :13705 starts a second
-	// process that fail-to-bind and KeepAlive-loops. Write-only; the
-	// restart script bootstraps after SIGHUP frees the port.
-	if dailyPortHeld(spec.Port) {
-		slog.Info("port is held; not bootstrapping KeepAlive — bounce to adopt",
-			"port", spec.Port, "plist", path)
-		os.Exit(0)
-	}
-	if err := supervise.LoadAgent(path, supervise.DaemonLabel); err != nil {
-		slog.Error("load daemon KeepAlive", "err", err)
-		os.Exit(1)
-	}
-	slog.Info("loaded daemon KeepAlive (🎯T553.3)", "label", supervise.DaemonLabel)
-	os.Exit(0)
-}
-
-func dailyPortHeld(port int) bool {
-	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	_ = c.Close()
-	return true
-}
-
-func runInstallUIAgents() {
-	bin, err := filepath.Abs(os.Args[0])
-	if err != nil {
-		slog.Error("ui agents: binary path", "err", err)
-		os.Exit(1)
-	}
-	pathEnv, _ := supervise.AgentPATH(exec.LookPath, supervise.RestartTools)
-	spec := uidaemon.Spec{
-		Binary:   bin,
-		StateDir: config.Default().StateDir,
-		PathEnv:  pathEnv,
-	}
-	if err := uidaemon.Install(spec); err != nil {
-		slog.Error("install UI LaunchAgents", "err", err)
-		os.Exit(1)
-	}
-	slog.Info("installed React surface probe", "label", uidaemon.ReactLabel)
-	os.Exit(0)
-}
-
-func runUIProbe() {
-	got := uidaemon.ProbeReact(nil, uidaemon.DevelopmentReactURL())
-	if got.OK {
-		slog.Info("React surface ok (🎯T540.4)", "status", got.Status)
-		os.Exit(0)
-	}
-	slog.Error("React surface failed", "reason", got.Reason)
-	// 🎯T553.3: kick KeepAlive; do not invoke the fat restart script.
-	if supervise.DaemonOwnsProcess() {
-		if err := supervise.KickstartAgent(supervise.DaemonLabel); err != nil {
-			slog.Error("KeepAlive kickstart failed", "err", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-	slog.Error("React surface failed and KeepAlive is not loaded — not invoking restart-jevonsd (🎯T553.2)")
-	os.Exit(1)
 }
 
 func servedPort(addr net.Addr) int {
@@ -2032,6 +2050,54 @@ func startAmbientResearch(ctx context.Context, cfg config.Config, mcpSrv *mcpser
 	return agent
 }
 
+// startRepoWatch wires the 🎯T1022.2 standing PO repo-watch cycle: `gh issue
+// list` / `gh pr list` per PO workdir, tracked against a durable per-repo
+// watermark, delivered to the owning PO as a typed repo-watch brief. Repos
+// are discovered from the live fleet registry (product-owner seats with a
+// workdir) at startup; a PO minted after startup is picked up on daemon
+// restart (the same boundary research's related-repo scan lives with).
+//
+// Env:
+//
+//	JEVONS_REPOWATCH=0           disable the schedule (MCP tool stays registered)
+//	JEVONS_REPOWATCH_INTERVAL    duration (default 30m); "0" disables the ticker
+func startRepoWatch(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server, gate capacity.Gate) *repowatch.Agent {
+	interval := time.Duration(0) // 0 = follow durable config
+	if v := strings.TrimSpace(os.Getenv("JEVONS_REPOWATCH_INTERVAL")); v != "" {
+		if v == "0" {
+			interval = -1
+		} else if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		} else {
+			slog.Warn("JEVONS_REPOWATCH_INTERVAL invalid; using config", "value", v)
+		}
+	}
+	repos := mcpserver.DiscoverPORepos(mcpSrv.Registry())
+	agent, err := repowatch.New(repowatch.Args{
+		StateDir:  cfg.StateDir,
+		Repos:     repos,
+		Deliverer: mcpSrv.NewPODeliverer(),
+		Capacity:  gate,
+		Interval:  interval,
+	})
+	if err != nil {
+		slog.Warn("PO repo-watch disabled", "err", err)
+		return nil
+	}
+	if _, err := os.Stat(repowatch.ConfigPath(cfg.StateDir)); os.IsNotExist(err) {
+		_ = repowatch.SaveConfig(cfg.StateDir, repowatch.DefaultConfig())
+	}
+	mcpSrv.SetRepoWatchAgent(agent)
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("JEVONS_REPOWATCH"))) {
+	case "0", "false", "no", "off":
+		slog.Info("PO repo-watch schedule disabled by JEVONS_REPOWATCH (tool still registered)")
+		return agent
+	}
+	go agent.Run(ctx)
+	slog.Info("PO repo-watch ready", "repos", len(repos), "config", "state_dir/repowatch/config.json")
+	return agent
+}
+
 // startPeriodicAudit wires the ð¯T357 standing full-scan audit: a bounded,
 // scheduled pass that scopes product code, the skills trees, and agent
 // prompts, hands the manifest to an advanced-tier auditor, and folds the
@@ -2232,14 +2298,17 @@ func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetin
 
 // adoptPausedAutoSeats re-adopts the auto-spawned workers the frontier pause
 // kept out of the restart reattach, when their process is still running, so
-// a live seat stays observed. It never launches one (🎯T1067).
-func adoptPausedAutoSeats(reg *claudia.Registry, heldAuto func(string) string) {
+// a live seat stays observed. It never launches one (🎯T1067), and it never
+// adopts a seat whose own intent keeps it down: on 2026-10-22 a restart
+// re-adopted 40 workers parked minutes earlier, whose broker processes were
+// still up, and every one read intent_fault until the sentinel stopped it.
+func adoptPausedAutoSeats(reg *claudia.Registry, heldAuto func(string) string, allow func(string, fleetintent.Control) fleetintent.Decision) {
 	if reg == nil {
 		return
 	}
 	adopted, down := 0, 0
 	for _, d := range reg.List() {
-		if !d.AutoStart || heldAuto(d.Name) == "" {
+		if !adoptsHeldAutoSeat(d.Name, d.AutoStart, heldAuto, allow) {
 			continue
 		}
 		if _, err := reg.Adopt(d.Name); err != nil {
@@ -2252,4 +2321,13 @@ func adoptPausedAutoSeats(reg *claudia.Registry, heldAuto func(string) string) {
 	if adopted+down > 0 {
 		slog.Info("frontier pause: auto-spawned workers adopted, none launched (🎯T1067)", "adopted", adopted, "left_down", down)
 	}
+}
+
+// adoptsHeldAutoSeat is adoptPausedAutoSeats's choice for one seat: an
+// auto-spawned worker a hold names, not stood down by its own intent.
+func adoptsHeldAutoSeat(name string, autoStart bool, heldAuto func(string) string, allow func(string, fleetintent.Control) fleetintent.Decision) bool {
+	if !autoStart || heldAuto(name) == "" {
+		return false
+	}
+	return allow == nil || !fleetintent.StoodDown(allow(name, fleetintent.ControlRevive).Agent)
 }

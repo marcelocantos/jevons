@@ -65,4 +65,9 @@ func TestT1079EverySeatGetsTheStandardSet(t *testing.T) {
 	if byName["jevonsmcp"].URL != a.URL || byName["jevonsmcp"].Type != "http" {
 		t.Fatalf("jevonsmcp = %+v; want the live URL %s, not the stale map entry", byName["jevonsmcp"], a.URL)
 	}
+	// Claudia caps a Codex seat's host tools by leaving servers out from the
+	// end of this list; jevonsmcp must never be the one left out.
+	if list[0].Name != "jevonsmcp" {
+		t.Fatalf("SessionServers[0] = %s; want jevonsmcp first", list[0].Name)
+	}
 }

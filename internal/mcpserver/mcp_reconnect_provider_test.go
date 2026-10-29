@@ -66,9 +66,10 @@ func TestReconnectRefusesForClaudeOverseer(t *testing.T) {
 	}
 }
 
-// TestAgentSwitchRefusesTheOverseer: the overseer is the session answering
-// the tool call, so a switch from here would refuse or interrupt the very
-// turn asking; the owner switches it from the fleet tree.
+// TestAgentSwitchRefusesTheOverseer: when the overseer itself makes the call
+// (its seat header names it), a switch would refuse or interrupt the very
+// turn asking; the owner switches it from the fleet tree. Another caller is
+// not that turn and may switch it (an owner-session client, 2026-10-27).
 func TestAgentSwitchRefusesTheOverseer(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
@@ -85,18 +86,32 @@ func TestAgentSwitchRefusesTheOverseer(t *testing.T) {
 	sw := &fakeSwitcher{}
 	s := &Server{registry: reg, switcher: sw}
 
-	res, err := s.handleAgentSwitchModel(context.Background(), mcp.CallToolRequest{
+	req := mcp.CallToolRequest{
 		Params: mcp.CallToolParams{Arguments: map[string]any{
 			"name": "jevons", "provider": "claude", "owner_asked": true,
 		}},
-	})
+	}
+	self := withMCPOrigin(context.Background(), mcpOrigin{Seat: "jevons"})
+	res, err := s.handleAgentSwitchModel(self, req)
 	if err != nil {
 		t.Fatalf("handleAgentSwitchModel: %v", err)
 	}
 	if !res.IsError {
-		t.Fatal("switching the overseer from the tool was accepted")
+		t.Fatal("the overseer switching itself from inside its own call was accepted")
 	}
 	if switches, _ := sw.calls(); len(switches) != 0 {
 		t.Fatalf("the overseer was switched: %v", switches)
+	}
+
+	other := withMCPOrigin(context.Background(), mcpOrigin{Client: "curl"})
+	res, err = s.handleAgentSwitchModel(other, req)
+	if err != nil {
+		t.Fatalf("handleAgentSwitchModel: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("an owner-session caller was told it is the overseer: %s", toolText(res))
+	}
+	if switches, _ := sw.calls(); len(switches) != 1 {
+		t.Fatalf("owner-session switch of the overseer did not reach the switcher: %v", switches)
 	}
 }

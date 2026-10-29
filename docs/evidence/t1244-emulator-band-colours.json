@@ -1,0 +1,74 @@
+{
+ "note": "T1244 band-colour fixture served to the debug build on Jevons_Fold_37 (adb reverse localhost:18765); real 07:10Z reading with bands overridden",
+ "at": "2026-10-29T07:15:50Z",
+ "bands": [
+  {
+   "provider": "claude",
+   "windows": [
+    {
+     "name": "session",
+     "used_percent": 15,
+     "band": "ahead"
+    },
+    {
+     "name": "weekly",
+     "used_percent": 47,
+     "band": "hot"
+    },
+    {
+     "name": "weekly_model",
+     "used_percent": 33,
+     "band": "ok"
+    }
+   ]
+  },
+  {
+   "provider": "codex",
+   "windows": [
+    {
+     "name": "weekly",
+     "used_percent": 8,
+     "band": "under"
+    }
+   ]
+  },
+  {
+   "provider": "grok",
+   "windows": [
+    {
+     "name": "weekly",
+     "used_percent": 72,
+     "band": "hot"
+    }
+   ]
+  },
+  {
+   "provider": "cursor",
+   "windows": [
+    {
+     "name": "monthly",
+     "used_percent": 44.6332258064516,
+     "band": "ahead"
+    },
+    {
+     "name": "api",
+     "used_percent": 100,
+     "band": "exhausted"
+    }
+   ]
+  },
+  {
+   "provider": "bedrock",
+   "windows": []
+  }
+ ],
+ "rendered_left_to_right": [
+  "claude S amber",
+  "claude W red",
+  "claude F green",
+  "codex W amber",
+  "grok W red",
+  "cursor M amber",
+  "cursor A red exhausted border"
+ ]
+}

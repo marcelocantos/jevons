@@ -52,6 +52,7 @@
 package gate
 
 import (
+	"encoding/json"
 	"strings"
 )
 
@@ -168,6 +169,10 @@ func ScanOutput(out string) []Anomaly {
 	var found []Anomaly
 	seen := make(map[string]bool, len(anomalyMarkers))
 	for _, line := range strings.Split(out, "\n") {
+		line, ok := scannableLine(line)
+		if !ok {
+			continue
+		}
 		for _, m := range anomalyMarkers {
 			if seen[m] || !outputShapedMarker(line, m) {
 				continue
@@ -177,6 +182,34 @@ func ScanOutput(out string) []Anomaly {
 		}
 	}
 	return found
+}
+
+// scannableLine is the text ScanOutput judges for one output line. A `go test
+// -json` event is judged by its decoded Output. An Output that is itself a
+// test event is a child run that a test printed (integrate's own tests run a
+// deliberately failing inner suite), and the enclosing test's pass or fail
+// already accounts for it: on 2026-10-28 its nested `--- FAIL` graded four
+// passing post-merge gates SUSPECT, and integrate rolled each landing back.
+func scannableLine(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, `{"Time":`) {
+		return line, true
+	}
+	var ev struct {
+		Action string
+		Output string
+	}
+	if err := json.Unmarshal([]byte(trimmed), &ev); err != nil || ev.Action == "" {
+		return line, true
+	}
+	inner := strings.TrimSpace(ev.Output)
+	if strings.HasPrefix(inner, `{"Time":`) {
+		var nested struct{ Action string }
+		if json.Unmarshal([]byte(inner), &nested) == nil && nested.Action != "" {
+			return "", false
+		}
+	}
+	return ev.Output, true
 }
 
 // LooksLikeMarkerProse reports whether line names ScanOutput's failure

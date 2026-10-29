@@ -152,7 +152,8 @@ func runT883Case(t *testing.T, bin, python string, sig syscall.Signal) {
 			<-done
 		}
 	})
-	client := &http.Client{Timeout: 2 * time.Second}
+	// broker_absent probing can take slightly over 2s; a 2s client timeout flakes.
+	client := &http.Client{Timeout: 5 * time.Second}
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
 		if resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/agents", port)); err == nil {
 			resp.Body.Close()

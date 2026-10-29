@@ -8,7 +8,10 @@ export type MuxHandler = (env: MuxEnvelope) => void;
 
 /** Same payload vanilla web/scripts/transport.js sends on /ws/chat (🎯T537.2.1). */
 export const CHAT_PING = '{"type":"ping"}';
+export const CHAT_PONG = '{"type":"pong"}';
 export const HEARTBEAT_MS = 15000;
+/** Close a blackholed OPEN socket when no pong follows a ping (🎯T1224). */
+export const PONG_TIMEOUT_MS = HEARTBEAT_MS + 5_000;
 /** Reconnect backoff (🎯T798): base * 2^attempt, capped, scaled by jitter in [0.75, 1]. */
 export const RECONNECT_BASE_MS = 500;
 export const RECONNECT_CAP_MS = 10000;
@@ -101,6 +104,8 @@ export class MuxClient {
   private generation = 0;
   private reconnectTimer = 0;
   private heartbeatTimer = 0;
+  private pongTimer = 0;
+  private pingOutstanding = false;
   private everOpened = false;
   private closed = false;
   private attempts = 0;
@@ -135,7 +140,7 @@ export class MuxClient {
 
   /** Page requests must not become an invisible offline queue. */
   isOpen(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN;
+    return this.ws?.readyState === 1; // WebSocket.OPEN
   }
 
   connect(): void {
@@ -169,8 +174,11 @@ export class MuxClient {
       this.onOpen?.();
     };
     ws.onmessage = (ev) => {
-      if (typeof ev.data !== 'string') return;
-      if (ev.data === '{"type":"pong"}') return;
+      if (gen !== this.generation || typeof ev.data !== 'string') return;
+      if (ev.data === CHAT_PONG) {
+        this.notePong();
+        return;
+      }
       const env = decodeMux(ev.data);
       if (!env) return;
       if (env.t === 'hello' && env.ch === '') this.noteServerBuild(env);
@@ -178,21 +186,27 @@ export class MuxClient {
     };
     ws.onclose = () => {
       if (gen !== this.generation) return;
-      this.stopHeartbeat();
-      this.ws = null;
-      this.onClose?.();
-      if (this.closed) return;
-      clearTimeout(this.reconnectTimer);
-      if (!this.outageLogged) {
-        this.outageLogged = true;
-        console.error('mux: /ws/mux connection lost; retrying with backoff');
-      }
-      const delay = reconnectDelayMs(this.attempts++, this.rand);
-      this.reconnectTimer = setTimeout(() => {
-        this.reconnectTimer = 0;
-        this.connect();
-      }, delay);
+      this.retireConnection();
     };
+  }
+
+  /** Fence a dead socket before close-handshake completion; backoff is ours. */
+  private retireConnection(): void {
+    this.generation++;
+    this.stopHeartbeat();
+    this.ws = null;
+    this.onClose?.();
+    if (this.closed) return;
+    clearTimeout(this.reconnectTimer);
+    if (!this.outageLogged) {
+      this.outageLogged = true;
+      console.error('mux: /ws/mux connection lost; retrying with backoff');
+    }
+    const delay = reconnectDelayMs(this.attempts++, this.rand);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = 0;
+      this.connect();
+    }, delay);
   }
 
   /** Stop reconnect and heartbeat. Tests and a tab unload use this. */
@@ -285,9 +299,21 @@ export class MuxClient {
     return id;
   }
 
-  /** Retry a queued, undelivered owner message now; never re-sends the text (🎯T811). */
-  resendTranscript(name: string, msgId: string): void {
-    this.send(encodeMux(transcriptChannel(name), 'resend', { msg_id: msgId }));
+  /**
+   * Retry a queued, undelivered owner message now; never re-sends the text
+   * (🎯T811). With `mode` (steer | interrupt), escalates a message the
+   * daemon is holding behind a running turn (🎯T1130) instead: the daemon
+   * pulls it out of its own queue and delivers it under that mode — still
+   * never a second copy of the text.
+   */
+  resendTranscript(name: string, msgId: string, mode?: DeliveryMode): void {
+    const body: { msg_id: string; mode?: DeliveryMode } = { msg_id: msgId };
+    if (mode) body.mode = mode;
+    this.send(encodeMux(transcriptChannel(name), 'resend', body));
+  }
+
+  removeHeldTranscript(name: string, msgId: string): void {
+    this.send(encodeMux(transcriptChannel(name), 'remove_held', { msg_id: msgId }));
   }
 
   /** Empty Cmd+Enter: cancel the in-flight turn without sending (🎯T644). */
@@ -312,7 +338,7 @@ export class MuxClient {
 
   private send(raw: string): void {
     this.connect();
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.readyState === 1) {
       this.ws.send(raw);
       return;
     }
@@ -330,14 +356,47 @@ export class MuxClient {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = 0;
     }
+    this.clearPongTimer();
+    this.pingOutstanding = false;
   }
 
   private sendPing(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== 1) return;
     try {
       this.ws.send(CHAT_PING);
+      this.armPongWatchdog();
     } catch {
       /* ignore: next interval retries */
+    }
+  }
+
+  private armPongWatchdog(): void {
+    if (this.pingOutstanding && this.pongTimer) return;
+    this.pingOutstanding = true;
+    this.pongTimer = setTimeout(() => {
+      this.pongTimer = 0;
+      if (!this.pingOutstanding || this.closed) return;
+      const ws = this.ws;
+      if (!ws || ws.readyState !== 1) return;
+      console.error('mux: ping without pong; closing blackholed socket');
+      this.retireConnection();
+      try {
+        ws.close();
+      } catch {
+        /* ignore */
+      }
+    }, PONG_TIMEOUT_MS);
+  }
+
+  private notePong(): void {
+    this.pingOutstanding = false;
+    this.clearPongTimer();
+  }
+
+  private clearPongTimer(): void {
+    if (this.pongTimer) {
+      clearTimeout(this.pongTimer);
+      this.pongTimer = 0;
     }
   }
 

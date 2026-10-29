@@ -48,6 +48,11 @@ var ErrNoGateRecord = errors.New("no GREEN gate record names the worker branch t
 // measuring a different commit/tree.
 var ErrCitedGateMismatch = errors.New("cited gate record does not back the worker branch tip")
 
+// ErrNonPristineGate is returned when the gate store holds a GREEN record on
+// the tip that was not measured as a pristine checkout (bin/gate -clean /
+// GOWORK=off detached worktree, 🎯T1146).
+var ErrNonPristineGate = errors.New("no GREEN gate record measured the tip as a pristine checkout")
+
 // overrideLogName is the file, inside the shared clone's git common dir,
 // that records every landing that skipped the gate check and why.
 const overrideLogName = "jevons-integrate-overrides.log"
@@ -68,6 +73,9 @@ func RequireLandingGate(base, agentName, gateStoreRoot, overrideReason string) (
 	if err != nil {
 		return nil, fmt.Errorf("integrate: resolve %s: %w", workerBranch, err)
 	}
+	if err := refuseMarcelocantosReplaceInMod(base, workerTip, agentName); err != nil {
+		return nil, err
+	}
 
 	store, err := gate.OpenStore(gateStoreRoot)
 	if err != nil {
@@ -78,13 +86,22 @@ func RequireLandingGate(base, agentName, gateStoreRoot, overrideReason string) (
 		if cerr != nil {
 			return nil, fmt.Errorf("integrate: %s: HEAD %s: %w", agentName, short(workerTip), cerr)
 		}
+		if err := refuseLandingGatePackageCoverage(base, agentName, workerTip, cited); err != nil {
+			return nil, err
+		}
 		return cited, nil
 	}
 
-	if rec, err := latestGreenRecordForCommit(store, base, workerTip); err != nil {
+	if rec, err := latestGreenRecordForCommit(store, base, agentName, workerTip); err != nil {
 		return nil, fmt.Errorf("integrate: gate lookup: %w", err)
 	} else if rec != nil {
 		return rec, nil
+	}
+	if had, err := hadNonPristineGreenOnTip(store, base, workerTip); err != nil {
+		return nil, fmt.Errorf("integrate: gate lookup: %w", err)
+	} else if had {
+		return nil, fmt.Errorf("integrate: %s: GREEN gate on tip %s was not measured as a pristine checkout (use bin/gate -clean): %w",
+			agentName, short(workerTip), ErrNonPristineGate)
 	}
 
 	if strings.TrimSpace(overrideReason) != "" {
@@ -96,6 +113,35 @@ func RequireLandingGate(base, agentName, gateStoreRoot, overrideReason string) (
 
 	return nil, fmt.Errorf("integrate: %s: no GREEN gate record names tip %s (store %s): %w",
 		agentName, short(workerTip), store.Root, ErrNoGateRecord)
+}
+
+// refuseLandingGatePackageCoverage enforces 🎯T1180 on the GREEN record
+// integrate already accepted: its command must unfiltered-cover every Go
+// package the worker branch changed since the merge base with the shared tip.
+func refuseLandingGatePackageCoverage(base, agentName, workerTip string, rec *gate.Record) error {
+	if rec == nil {
+		return nil
+	}
+	baseBranch, err := gitOut(base, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return fmt.Errorf("integrate: %s: integration branch: %w", agentName, err)
+	}
+	baseTip, err := gitOut(base, "rev-parse", "--verify", "refs/heads/"+baseBranch)
+	if err != nil {
+		return fmt.Errorf("integrate: %s: resolve %s: %w", agentName, baseBranch, err)
+	}
+	mb, err := gitOut(base, "merge-base", baseTip, workerTip)
+	if err != nil {
+		return fmt.Errorf("integrate: %s: merge-base: %w", agentName, err)
+	}
+	required, err := gate.GitBranchGoPackageDirs(base, mb, workerTip)
+	if err != nil {
+		return fmt.Errorf("integrate: %s: %w", agentName, err)
+	}
+	if err := gate.CheckLandingGatePackageCoverage(rec, required); err != nil {
+		return fmt.Errorf("integrate: %s: %w", agentName, err)
+	}
+	return nil
 }
 
 // citedGateFor looks for a GATE attestation in the worker branch tip's own
@@ -122,6 +168,10 @@ func citedGateFor(base string, store *gate.Store, workerTip string) (rec *gate.R
 		return nil, false, fmt.Errorf("cites gate id %s, recorded verdict %s, not GREEN: %w",
 			c.ID, found.Verdict, ErrCitedGateMismatch)
 	}
+	if found.Tree == nil || !found.Tree.MeasuredAsPristineCheckout() {
+		return nil, false, fmt.Errorf("cites gate id %s, which did not measure a pristine checkout: %w",
+			c.ID, ErrNonPristineGate)
+	}
 	if sameOrTreeEqual(base, found, workerTip) {
 		return found, true, nil
 	}
@@ -133,28 +183,66 @@ func citedGateFor(base string, store *gate.Store, workerTip string) (rec *gate.R
 		c.ID, measured, short(workerTip), ErrCitedGateMismatch)
 }
 
-// latestGreenRecordForCommit scans the store for the most recent GREEN
-// record whose measured commit is commit, or shares commit's tree (a
-// tree-equal commit — the same change, committed under a different SHA).
-// nil, nil means none was found; it is not an error for there to be none.
-func latestGreenRecordForCommit(store *gate.Store, workdir, commit string) (*gate.Record, error) {
+// latestGreenRecordForCommit selects the most recent eligible record. Package
+// coverage is checked before selection: a later focused run cannot mask an
+// earlier pristine full-package pass on the same commit or tree (🎯T1205).
+// When only insufficient matching records exist, retain their coverage error.
+func latestGreenRecordForCommit(store *gate.Store, workdir, agentName, commit string) (*gate.Record, error) {
 	recs, err := store.Recent(0)
 	if err != nil {
 		return nil, err
 	}
 	tree, terr := gitOut(workdir, "rev-parse", commit+"^{tree}")
 	var best *gate.Record
+	var coverageErr error
 	for _, rec := range recs {
 		if !rec.Verdict.IsGreen() || rec.Tree == nil || rec.Tree.Commit == "" {
 			continue
 		}
+		if !rec.Tree.MeasuredAsPristineCheckout() {
+			continue
+		}
 		if sameOrTreeEqualTo(workdir, rec, commit, tree, terr) {
+			if err := refuseLandingGatePackageCoverage(workdir, agentName, commit, rec); err != nil {
+				if !errors.Is(err, gate.ErrLandingGateCoverage) {
+					return nil, err
+				}
+				if coverageErr == nil {
+					coverageErr = err
+				}
+				continue
+			}
 			if best == nil || rec.Started.After(best.Started) {
 				best = rec
 			}
 		}
 	}
+	if best == nil {
+		return nil, coverageErr
+	}
 	return best, nil
+}
+
+// hadNonPristineGreenOnTip reports whether the store has any GREEN record on
+// the tip commit (or tree-equal) that is not a pristine checkout measurement.
+func hadNonPristineGreenOnTip(store *gate.Store, workdir, commit string) (bool, error) {
+	recs, err := store.Recent(0)
+	if err != nil {
+		return false, err
+	}
+	tree, terr := gitOut(workdir, "rev-parse", commit+"^{tree}")
+	for _, rec := range recs {
+		if !rec.Verdict.IsGreen() || rec.Tree == nil || rec.Tree.Commit == "" {
+			continue
+		}
+		if rec.Tree.MeasuredAsPristineCheckout() {
+			continue
+		}
+		if sameOrTreeEqualTo(workdir, rec, commit, tree, terr) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // sameOrTreeEqual reports whether rec's measured commit is commit itself or

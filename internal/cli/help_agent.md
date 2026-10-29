@@ -329,6 +329,28 @@ allows it; until then this convention plus jevons MCP tools is the
 enforced path. Brief every new agent with target IDs and ownership —
 never bare "go".
 
+### Guard tests reach production call sites (🎯T419)
+
+A green unit test of a guard alone is not proof the guard runs in production.
+For any guard whose failure is silent (double-seed prevention, delivery
+evidence, exclusive claim, queue resolve, treeguard ledger discard), at least
+one test must drive it through its **real caller under the predicate that gates
+that caller** — not by invoking the guarded function directly.
+
+**Pinning instance (2026-08-10):** `handover.Store.MarkDelivered` had
+`TestStoreMarkDeliveredPreventsDoubleSeeding` green and was never reached:
+`migrate.go` called it only when `Claudia.Deliver` returned nil, and Deliver
+waited on reply completion inside a 10-minute timeout, not turn-begin. A
+delivered seed stayed pending. That path is retired (in-place switch, claudia
+🎯T195). The living successor is `delivery.RecordPayload` via
+`recordDeliveryEvidence` under `OutcomeBegun` —
+`TestT419DeliveryEvidenceReachedThroughBegunSend`.
+
+Standing catalogue and check: `internal/guardreach`. Doctrine ratchet:
+`scripts/docratchet` TestT419. Audit residuals:
+`docs/audits/guard-call-site-reachability-2026-10.md` (report, do not silently
+fix). Related: 🎯T416 / 🎯T417 / 🎯T418.
+
 ### Same-repo fan-out: worktrees and one integrator (🎯T254.2)
 
 A work agent started in a repo that already holds another work agent (in
@@ -354,6 +376,37 @@ are serialized by a lock in the git dir. Worker commits are kept (a
 fast-forward or a merge, never a rebase), so SHAs cited in finish reports
 stay reachable (🎯T427). A dirty worker tree is refused. Nothing is pushed
 (🎯T104).
+
+A landing that merges runs a post-merge gate (build, touched packages and
+`scripts/docratchet`) that can outlast a worker's 600-second shell call. Land
+detached and poll (🎯T1259):
+
+    go run ./cmd/integrate -repo <shared clone> -detach <worker-name>
+    go run ./cmd/integrate -result <worker-name>
+
+`-result` prints the outcome and the log tail and exits 0 landed, 1 refused,
+3 still running. Do not hand the landing to your product owner because the
+shell call timed out.
+
+**Never hand-resolve ledger merge conflicts (🎯T1145).** Do not edit or rewrite
+`bullseye.yaml` to fix a merge conflict (no sidecar edit/write from a truncated read).
+Land through `go run ./cmd/integrate`; when `bullseye.yaml` is the only conflict it
+unions the ledger mechanically. File targets via jevons_target_file / bullseye tools
+(🎯T546).
+
+**Sibling repos and go.mod replaces (🎯T1151.6).** Work that needs an unpublished
+change in a sibling repository sends a `needs-release` request to that repo's product
+owner via `jevons_agent_send` and parks with an `active-wait`. It does not edit that
+sibling's shared clone, bump its version, or add/change a `go.mod replace` for
+`github.com/marcelocantos/…` modules (🎯T448 publish-then-pin). `fleetgit` and
+treeguard refuse mutating git in another repository's shared checkout from a work seat.
+
+**Never stash or reset the shared checkout (🎯T1134).** Workers never run `git stash`,
+`git checkout -- <path>`, `git restore`, or `git reset` on the
+shared clone — not to “clean up” before a hand merge. Land only through
+`go run ./cmd/integrate`; it refuses overlapping dirty paths and never stashes. A pre-commit hook refuses a commit that
+drops more than a few bullseye target rows at once. Fleet seats: `bin/fleetgit`
+ahead of real git on PATH refuses `git stash push` and names dirty paths.
 
 ### Worker names: literal dots for hierarchical target ids (🎯T197)
 
@@ -495,6 +548,47 @@ no solo code/docs commits by the PO.
 POs stay **interruptible** so redirects from above are not blocked by a
 solo coding session. **Residual:** instructional doctrine, not a hard
 daemon spawn-gate, unless a later target adds enforcement.
+
+**Independent verification (🎯T1182):** before achieve, spawn an **auditor**
+seat under the PO (🎯T536.2; `role=auditor` on `jevons_agent_start`, provider
+cursor). The auditor runs `bin/gate -clean` through the heavy lease and returns
+a typed report; the PO achieves or bounces from that report. A PO never runs
+gates, `go test`, `sleep` polling, or process kills in its own turns — including
+for verification — so its queue stays responsive for overseer and owner directs.
+Never choose a non-clean gate to avoid the heavy lease.
+
+## PO Build-plane authority (🎯T1241)
+A PO proceeds on its own authority for test-only fixes, gate re-runs, and
+repair plans on a Build-plane target it owns; delegate execution and
+independent verification to workers and auditors rather than doing them in the
+PO turn. Do not park that Build work asking the owner to GO. Owner approval is
+reserved for waivers, scope changes, credential-touching steps, and Ship-plane
+actions the owner has not authorised. Specimen: claudia-po turns 221-224
+(2026-10-28) parked 🎯claudia/T228 for over an hour asking the owner to GO
+event-driven test waits and one clean gate; that is the bad shape.
+A build, Makefile, or test-harness change the target's own gate needs in
+order to pass is part of that Build work, not a scope change. Second
+specimen: claudia-po turns 234-241 parked the same target again, calling a
+Makefile target that installs the sidecar's frozen dependencies before the
+Go tests a scope change.
+
+## What reaches the overseer from a PO (🎯T1262)
+A product owner's reply reaches the overseer only when it answers something
+the overseer sent, or opens with a typed `jevons` envelope other than an ack
+(an escalation, an owner-reply, a finish-report), or carries a false-green
+flag. Any other reply is stored and readable with jevons_agent_report_read,
+but does not wake the overseer. To raise something, open with
+`jevons: kind escalation`; do not narrate acknowledgements upward.
+
+## PO provider reroute for environmental gate failure (🎯T1245)
+When a seat's provider cannot run a target's gate for an environmental reason
+(sandbox denial, provider outage or wedge, or exhausted plan window), the PO
+picks another provider itself, preferring one whose plan window is not exhausted
+per /api/plan-usage, and reports the choice. Do not park for the owner to name
+a provider. This is Build-plane execution placement, not a waiver or scope
+change. Specimen: claudia-po turns 250-253 (2026-10-28) held the Claudia
+release asking the owner to name Anthropic or Cursor after Codex's sandbox
+denied nested sandbox-exec; that is the bad shape.
 
 ### Overseer never parents product workers (🎯T129)
 
@@ -772,6 +866,9 @@ not a scheduled build and not a separately named cockpit. Do not mint
 another name for it.
 Speech for a bounce is "restart the development daemon"
 (`scripts/restart-jevonsd.sh`). `daily_token_budget` is a 24-hour spend key.
+Legacy code identifiers (`HasDailyPathEvidence`, `DailyPort`,
+`IsDailyStateDir`, `restart-daily-jevonsd.sh` as a historical script name)
+may remain; speech for the environment is **development**, not daily.
 Informal talk about preferring this orchestrator over other harnesses is
 not a product name and is not used in code.
 
@@ -849,6 +946,30 @@ fully confident) — never a 1-10 score or an integer rank. `confidence=4`
 or `confidence=7` is malformed (🎯T793); the daemon tells the author the
 exact field and range on its own channel before it is reaped, so a
 corrected resend is possible — see `envelope.CorrectionNotice`.
+
+**Owner-visible changes name their owner impact (🎯T1122).** A
+finish-report whose cited oracle commit touches owner-visible surface —
+non-test `ui/src`, `ui/index.html`, or the overseer/persona doctrine
+that shapes the owner's chat (`internal/roles/builtin/overseer.md`,
+`internal/config/persona.md`) — carries an `owner-impact` slot:
+`decision|fault|plan-change|none` (`envelope.OwnerImpact`). Absent
+or an explicit `none` on a report that DID touch that surface is flagged
+(`gate.FlagOwnerImpactMissingKind`) and the seat is **kept, not reaped**
+— the PO gets a typed notice naming the missing slot instead of a closed
+leaf whose owner impact nobody named:
+
+```jevons
+jevons: kind finish-report
+jevons: target T1122
+jevons: oracle sha=…
+jevons: owner-impact decision
+jevons: silent-ledger none
+```
+
+A backend-only commit (no diff under that surface) needs no slot and
+reaps normally either way. The check diffs the cited SHA against its own
+merge-base, not against the worktree's current HEAD, so it reads what
+that landing actually changed.
 
 A seat that cannot proceed until someone else acts — an owner go-ahead,
 a decision, a restart only the owner may do — ends with a finish-report
@@ -935,23 +1056,79 @@ this rule is that the artifact exists and the independent gate can read it
 terminal reports (role files under `internal/roles/builtin/` when spawned
 with a role; otherwise agents-guide + fleet standing brief).
 
+## Fleet agent roles (🎯T511)
+
+**Vocabulary:** a **role** is the type (worker, product-owner, overseer,
+boss, aside, auditor). An **agent** is a spawned instance with a durable
+name. Say “spawn with `role=`”, not “agent type” — **agent** stays reserved
+for instances. Legacy `purpose` (work / aside / overseer, 🎯T114) is
+subsumed by role for doctrine; `roles.DefaultForPurpose` /
+`roles.OfSeat` map purpose tokens when spawn omits an explicit role.
+
+**Where definitions live**
+
+| Layer | Path | Source label |
+|-------|------|----------------|
+| Built-in (embedded) | `internal/roles/builtin/<role>.md` | `builtin` |
+| Repo overlay (optional) | `<workdir>/internal/config/roles/<role>.md` | `repo` |
+| Owner override (wins) | `<state_dir>/roles/` or `$JEVONS_ROLES_DIR` (🎯T1090) | `owner` |
+
+Resolution order: **owner → repo → built-in**. Unknown roles fail loud at
+spawn. Malformed frontmatter in a winning file is a **hard error** naming
+the path (never a silent reset). There is no `jevons_role` MCP — roles are
+**files only**; add or edit markdown on disk.
+
+**File shape:** one `.md` per role with optional YAML frontmatter (`role`,
+`purpose`, `summary`, `readonly`, …) and an instruction body (Claude Code
+`.claude/agents/*.md` analogue). Built-ins at minimum: overseer,
+product-owner, boss, worker, aside, auditor.
+
+**Stipulate at spawn**
+
+```
+jevons_agent_start name=… workdir=… role=worker …
+jevons_agent_start name=… workdir=… role=product-owner …
+```
+
+Omitted `role=` defaults from **purpose**, never from the seat name — Build /
+`purpose=work` → `worker`. A product owner **must** use
+`role=product-owner`; `purpose=work` alone is still a worker (🎯T766.4.1).
+The registry records the role in `state_dir/agent_roles.json`;
+`jevons_agent_list` surfaces `role=` per seat.
+
+**Instruction assembly:** universal fleet standing brief, then
+`[Jevons role doctrine]` + the role file body, then the mission brief
+(`roles.Assemble` / `EnsureFleetBriefWithRole`). The 🎯T425 identity header
+names the role and points at the authoritative file (`ROLE DOCTRINE: …`).
+
+**Add / override / retire**
+
+- **Custom role:** write `<state_dir>/roles/<name>.md` that passes validation;
+  it resolves on the next spawn without rebuilding `jevonsd`.
+- **Override a built-in:** same directory — owner file wins; built-ins cannot
+  be deleted, only overridden.
+- **Remove a custom owner role:** delete the file when no live seats use it;
+  `roles.Catalog.Delete` refuses built-ins and refuses in-use roles unless
+  `force=true` (library guard — discover live seats via `jevons_agent_list`).
+
+Role-conditional doctrine lives in role files — not restated here and not as
+“if you are a …” prose in `FleetStandingBrief`. Bucket map:
+`docs/design/t511-fleet-brief-buckets.md`. Overseer seat: `persona.md` shell +
+`overseer.md` role body via `config.Config.Persona()` (🎯T44 compose path).
+
 ## Auditor role (🎯T536.2)
 
-Spawn a read-only challenger of the silent-decision ledger:
+Spawn a read-only challenger of the silent-decision ledger (see **Fleet agent
+roles (🎯T511)** for resolution and assembly):
 
 ```
 jevons_agent_start name=… workdir=… role=auditor parent=jevons-po …
 ```
 
-Built-in role files live in `internal/roles/` (`builtin/auditor.md` and
-siblings). Owner overrides: `<state_dir>/roles/` — `~/.jevons/roles/` on the
-development daemon (or `$JEVONS_ROLES_DIR`; 🎯T1090).
-Override wins; built-ins cannot be deleted. The registry records
-`role=` (AgentDef + `state_dir/agent_roles.json`); `jevons_agent_list`
-surfaces it. Instruction assembly is universal fleet brief + role body +
-mission — auditor doctrine is in the role file, not as if-you-are-X in the
-shared brief. Residual: hard daemon git-write block may follow; first slice
-is role + doctrine + a different seat from the implementer.
+`role=auditor` on `jevons_agent_start`; built-in doctrine is
+`internal/roles/builtin/auditor.md` (`readonly: true` — overrides cannot drop
+read-only). Residual: hard daemon git-write block may follow; first slice is
+role + doctrine + a different seat from the implementer.
 
 
 ### Fog-of-war scout (🎯T536.3)
@@ -1016,9 +1193,27 @@ overseer) and seats with live descendants always park — kill those with
 Residual: POs and overseer stay; multi-target agents without a matching
 TargetID stay; 🎯T90 deep anomaly supervisor is separate.
 
+**Never park or reap a seat with undelivered owner messages (🎯T1257):**
+before either disposition proceeds, `jevons_agent_stop` checks the seat's
+sendq for owner-origin entries it has not yet received (queued while the
+seat was busy, a tool call was in flight, or fleet intent held the turn).
+If any are still there, the stop is **refused**, naming each message —
+whatever the caller's own judgement about "nothing left to do" says.
+Deliver them first, or wait for the next turn boundary to drain them, or
+pass `override_owner_messages=true` with a `reason`: the override is
+**logged and surfaced to the overseer**, never silent. The **same guard
+runs on the finished-work auto-reap sweep** (`maybeReapDoneWorkAgent` →
+`ShouldAutoReapDoneWorkAgent`): a seat whose report classifies done is
+kept, not killed, while its sendq still holds an owner-origin entry — that
+path has no caller to refuse, so the seat's parent is notified instead
+(default `jevons-po`). Specimen: 2026-10-28 13:38, jevons-po parked
+jv-t1244-widget-implement as "all code/docs landed and gated" while two
+owner notes had waited an hour in its queue, unacted on; the owner found
+it by inspection and restarted the seat itself.
+
 Do **not** re-expand a local merge order into continuous origin/PR
 shipping because a PO already opened remotes. Remote delivery only when
-the owner **explicitly** asks to ship/push/PR.
+the owner **explicitly** asks to ship/push/PR or the exact repository and release action has an active owner grant in `jevons_release_authorization`. Before a gated release, check the tool with the absolute repository path and exact action (`minor-release`, `patch-release`, `major-release`). An active minor-release grant covers tag/push/publish after gates without a new chat GO; absent/revoked grants, different actions and unavailable tool are denials: file `jevons_owner_questions` and wait, not a silent refusal. The overseer records or revokes only on explicit owner instruction with an evidence citation. This does not authorize arbitrary PRs.
 
 ## Daemon activation (🎯T188 / 🎯T191 / 🎯T553)
 
@@ -1037,19 +1232,52 @@ nohup scripts/restart-jevonsd.sh >>"$HOME/.jevons/restart-jevonsd.log" 2>&1 &
 ```
 
 The script detaches (🎯T405), builds a committed HEAD snapshot and requests
-SIGHUP upgrade exit through the supervisor that owns the development daemon.
-Current development uses supervisord program `jevonsd`. Legacy launchd
-KeepAlive installations remain supported; obsolete arguments are reloaded
-before adoption. The script then waits for `/health` and `/api/frontier`.
-React changes require a rebuilt and activated daemon; hard reload observes that bundle.
+SIGHUP upgrade exit through supervisord program `jevonsd`
+(`supervisor/jevonsd.ini`), which owns the development daemon and
+relaunches it. Where nothing supervises the port (an isolate, a hand-run
+daemon) it starts a detached daemon of its own. The script then waits for
+`/health` and `/api/frontier`. React changes require a rebuilt and
+activated daemon; hard reload observes that bundle.
 
-**Supervision (🎯T405 / 🎯T553.3).** On 2026-08-10 a worker's restart
-killed the daemon and the script died with its invoker. The historical fix
-was KeepAlive on `jevonsd` itself; current development uses supervisord. The interval job
-**`com.marcelocantos.jevons-watchdog`** (`make watchdog-install` /
-`make watchdog-status`) is not the product path and must not call the
-fat script when KeepAlive owns the process. An upgrade bounce still
+
+**Control-plane scheduling (🎯T779).** supervisord and everything it starts — jevonsd, the Claudia broker, bullseye, mnemo, and their children — must run at least at the scheduling priority of fleet work. Homebrew's stock homebrew.mxcl.supervisor LaunchAgent omits ProcessType; launchd then runs supervisord as a background daemon and its children fall below interactive shells. The owner path is ProcessType=Interactive on that LaunchAgent: tracked supervisor/homebrew.mxcl.supervisor.plist plus supervisor/install-launchagent.sh, invoked from make supervisor-install. Lowering fleet work CPU priority is an optional alternative (see 🎯T781); do not starve the control plane either way.
+**Supervision (🎯T405 / 🎯T1111).** On 2026-08-10 a worker's restart
+killed the daemon and the script died with its invoker. supervisord is the
+only supervisor of the development process; launchd is not a way of
+supervising Jevons (no KeepAlive job, no watchdog plist, no UI-probe
+LaunchAgent — 🎯T1111 removed them). `bin/jevons-watchdog` remains as an
+interval probe (`make watchdog-status`) that calls the script when a bounce
+did not take and tells the owner through blurter. An upgrade bounce still
 re-execs through `bin/detach` into its own session.
+
+## Owner-visible means owner-relevant (🎯T1122)
+
+Anything the cockpit shows the owner — a fleet-tree row, a chat bubble, a
+badge, a notice, a status line — earns its place by being one of three
+things: a **decision** the owner must make, a **fault** they must know
+about, or a **change in what they would do next**. Before you add or keep
+something owner-visible, name which of the three it is. If you cannot, it
+does not ship.
+
+This binds both how the product is built and what it says at runtime:
+
+- **Build time — which surfaces exist.** A reaped or finished seat has no
+  owner-facing form (🎯T1121); a parked seat is one line naming the
+  external thing it waits on (🎯T1059); a status line has a settled state.
+- **Runtime — which instances reach the owner now.** A routine worker
+  report is not narrated into the owner's chat (🎯T1053): a "no action
+  needed" message is, by its own words, not one of the three. One owner
+  question gets one answer (🎯T1120).
+
+The system showing what it knows is not the owner seeing what they need.
+When in doubt, keep it off the owner's surface and reachable on demand
+(history, transcript, event log).
+
+## Only the owner speaks in the owner's chat (🎯T1129)
+
+Workers may **observe** the development cockpit (read, screenshot, hard reload) for a 🎯T493.1 prose verdict. They **never** type into or submit its composer, answer its questions, or click controls that act. Interactive verification runs on an **isolate** (`make test-ui-live`, `UI_HOST` on a throwaway port, 🎯T572) — never the real :13705 development instance.
+
+The daemon accepts owner-origin sends from a browser only when it holds a real owner cockpit session cookie minted at `GET /api/owner-cockpit/session`. Fleet Playwright / browser MCP sessions are stamped (`JevonsFleetBrowser` user-agent / `X-Jevons-Fleet-Browser`) and cannot mint that cookie or send as the owner.
 
 ## Run gates so the status survives (🎯T386 / 🎯T396)
 

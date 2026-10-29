@@ -245,6 +245,39 @@ args = ["mcp"]
 	}
 }
 
+func TestT871OmitsServersOnlyInGrokOrCursorMaps(t *testing.T) {
+	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
+	a.CursorJSON = filepath.Join(filepath.Dir(a.ClaudeJSON), "cursor.json")
+	if err := os.WriteFile(a.ClaudeJSON, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	grokOnly := "[mcp_servers.grok-only-plugin]\ncommand = \"./grok-plugin\"\n"
+	if err := os.WriteFile(a.GrokTOML, []byte(grokOnly), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cursorDoc := map[string]any{
+		"mcpServers": map[string]any{
+			"cursor-only": map[string]any{"type": "http", "url": "http://127.0.0.1:9999/mcp"},
+		},
+	}
+	raw, err := json.Marshal(cursorDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.CursorJSON, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list := SessionServers(a, "")
+	for _, s := range list {
+		if s.Name == "grok-only-plugin" || s.Name == "cursor-only" {
+			t.Fatalf("non-Claude map server leaked into standard set: %+v", list)
+		}
+	}
+	if len(list) != 1 || list[0].Name != "jevonsmcp" {
+		t.Fatalf("want jevonsmcp only from empty Claude map, got %+v", list)
+	}
+}
+
 func TestT871DropsComputerUseFromClaudeMap(t *testing.T) {
 	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
 	doc := map[string]any{
@@ -338,9 +371,10 @@ func TestT430SessionServersIsolatesPlaywrightByDefault(t *testing.T) {
 
 func TestT430PlaywrightIsolatedArgsIdempotentAndDropsEqualsForm(t *testing.T) {
 	already := []string{"@playwright/mcp@latest", "--sandbox", "--isolated"}
+	want := append(already, "--user-agent", "JevonsFleetBrowser/1 (Playwright MCP; not the owner)")
 	got := playwrightIsolatedArgs(already)
-	if strings.Join(got, " ") != strings.Join(already, " ") {
-		t.Fatalf("idempotent rewrite changed args: got %v want %v", got, already)
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("idempotent rewrite changed args: got %v want %v", got, want)
 	}
 
 	equals := []string{"@playwright/mcp@latest", "--user-data-dir=/tmp/shared-profile"}
@@ -377,7 +411,7 @@ func TestT430EnsurePlaywrightIsolatedTwoProbesBothObtainBrowser(t *testing.T) {
 		args     []string
 	}
 	probe := func(list []claudia.MCPServer) verdict {
-		out := ensurePlaywrightIsolated(list)
+		out := ensurePlaywrightIsolated(list, "")
 		if len(out) != 1 {
 			t.Fatalf("want 1 server, got %+v", out)
 		}
@@ -407,11 +441,11 @@ func TestT430ServersEqualSeesArgsDrift(t *testing.T) {
 		Name: "playwright", Type: "stdio", Command: "npx",
 		Args: []string{"@playwright/mcp@latest", "--user-data-dir", "/tmp/p"},
 	}}
-	isolated := ensurePlaywrightIsolated(shared)
+	isolated := ensurePlaywrightIsolated(shared, "")
 	if ServersEqual(shared, isolated) {
 		t.Fatal("ServersEqual must see Args drift so restamp rewrites a shared-profile seat")
 	}
-	if !ServersEqual(isolated, ensurePlaywrightIsolated(isolated)) {
+	if !ServersEqual(isolated, ensurePlaywrightIsolated(isolated, "")) {
 		t.Fatal("idempotent isolation must compare equal")
 	}
 }

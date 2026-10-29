@@ -26,6 +26,16 @@ import (
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
+// frontierDepSatisfied reports whether a depends_on edge is satisfied for
+// readiness (same rule as targetfile.FrontierLeaves / frontier consume).
+func frontierDepSatisfied(statusOf map[string]string, dep string) bool {
+	st, ok := statusOf[dep]
+	if !ok {
+		return false
+	}
+	return targetfile.IsClosedStatus(st)
+}
+
 // 🎯T131: live bullseye frontier for the RHS bottom pane.
 //
 // Path discovery always goes through the bullseye CLI (`open`) — never a
@@ -64,6 +74,11 @@ type FrontierRow struct {
 	Achieved    string              `json:"achieved,omitempty"`
 	// Extra carries non-canonical ledger keys as stringified values (🎯T184).
 	Extra map[string]string `json:"extra,omitempty"`
+	// Ready / Blocked mirror targetfile.FrontierLeaves readiness (🎯T1119).
+	// Active targets with satisfied depends_on are ready; active but blocked
+	// deps are blocked. Achieved / set_aside rows are omitted from the table.
+	Ready   bool `json:"ready"`
+	Blocked bool `json:"blocked"`
 }
 
 // FrontierResponse is GET /api/frontier JSON.
@@ -263,7 +278,48 @@ func normalizeLedgerTargetID(raw string) string {
 	return s
 }
 
+// ledgerParse memoizes readBullseyeLedger by file identity. The ledger is
+// about 5 MB of YAML parsed twice per read, and GET /api/reviews read it once
+// per question: nine questions took 2.27 s on 2026-10-22. Callers treat the
+// result as read-only.
+type ledgerParse struct {
+	info  os.FileInfo
+	doc   bullseyeLedger
+	extra map[string]map[string]string
+}
+
+var ledgerParseCache struct {
+	sync.Mutex
+	byPath map[string]ledgerParse
+}
+
+func sameLedgerFile(a ledgerParse, fi os.FileInfo) bool {
+	return os.SameFile(a.info, fi) && a.info.Size() == fi.Size() && a.info.ModTime().Equal(fi.ModTime())
+}
+
 func readBullseyeLedger(ledgerPath string) (bullseyeLedger, map[string]map[string]string, error) {
+	fi, statErr := os.Stat(ledgerPath)
+	if statErr == nil {
+		ledgerParseCache.Lock()
+		hit, ok := ledgerParseCache.byPath[ledgerPath]
+		ledgerParseCache.Unlock()
+		if ok && sameLedgerFile(hit, fi) {
+			return hit.doc, hit.extra, nil
+		}
+	}
+	doc, extra, err := parseBullseyeLedger(ledgerPath)
+	if err == nil && statErr == nil {
+		ledgerParseCache.Lock()
+		if ledgerParseCache.byPath == nil {
+			ledgerParseCache.byPath = make(map[string]ledgerParse)
+		}
+		ledgerParseCache.byPath[ledgerPath] = ledgerParse{info: fi, doc: doc, extra: extra}
+		ledgerParseCache.Unlock()
+	}
+	return doc, extra, err
+}
+
+func parseBullseyeLedger(ledgerPath string) (bullseyeLedger, map[string]map[string]string, error) {
 	data, err := os.ReadFile(ledgerPath)
 	if err != nil {
 		return bullseyeLedger{}, nil, err
@@ -454,35 +510,32 @@ func computeFrontierFromLedger(ledgerPath string) ([]FrontierRow, error) {
 		if !active[id] {
 			continue
 		}
-		// All depends_on must be done (or missing = treat as blocking if unknown).
 		ready := true
 		for _, dep := range t.DependsOn {
 			dep = strings.TrimSpace(dep)
 			if dep == "" {
 				continue
 			}
-			st, ok := statusOf[dep]
-			if !ok {
-				// Unknown dep: treat as not done (conservative).
+			if !frontierDepSatisfied(statusOf, dep) {
 				ready = false
 				break
 			}
-			if !isDoneStatus(st) {
-				ready = false
-				break
-			}
-		}
-		if !ready {
-			continue
 		}
 		deps := dependents[id]
 		if deps == nil {
 			deps = []FrontierDependent{}
 		}
-		rows = append(rows, frontierRowFromTarget(id, t, extraByID[id], nameOf, deps))
+		row := frontierRowFromTarget(id, t, extraByID[id], nameOf, deps)
+		row.Ready = ready
+		row.Blocked = !ready
+		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].Fanout != rows[j].Fanout {
+		// Ready leaves first (fanout desc), then blocked (id order).
+		if rows[i].Ready != rows[j].Ready {
+			return rows[i].Ready
+		}
+		if rows[i].Ready && rows[j].Ready && rows[i].Fanout != rows[j].Fanout {
 			return rows[i].Fanout > rows[j].Fanout
 		}
 		return targetIDLess(rows[i].ID, rows[j].ID)
@@ -1503,30 +1556,64 @@ func (s *Server) NotifyFrontierChanged() {
 	s.broadcastChatLive(string(payload))
 }
 
-// ensureFrontierWatch starts (or rebinds) fsnotify on the ledger file path.
+// frontierWatchObserved is a test hook (🎯T1219): invoked when a new ledger
+// watch goroutine is started. Nil in production.
+var frontierWatchObserved func(ledger string)
+
+// ensureFrontierWatch starts (or retains) fsnotify on the ledger file path.
+// Each ledger path gets its own watcher; polling another workdir must not
+// cancel an existing watch (🎯T1219).
 func (s *Server) ensureFrontierWatch(ledger string) {
 	ledger = filepath.Clean(ledger)
 	s.mu.Lock()
-	if s.frontierWatchPath == ledger && s.frontierWatchCancel != nil {
+	if cancel, ok := s.frontierWatches[ledger]; ok && cancel != nil {
 		s.mu.Unlock()
 		return
 	}
-	if s.frontierWatchCancel != nil {
-		s.frontierWatchCancel()
-		s.frontierWatchCancel = nil
-	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s.frontierWatchCancel = cancel
-	s.frontierWatchPath = ledger
+	if s.frontierWatches == nil {
+		s.frontierWatches = make(map[string]context.CancelFunc)
+	}
+	s.frontierWatches[ledger] = cancel
 	s.mu.Unlock()
 	// 🎯T195: seed achieved set before watching so historical achieves do not
 	// mass-reap engaged agents on first ledger event after bind.
 	s.seedAchievedFromLedger(ledger)
-	go s.runFrontierWatch(ctx, ledger)
+	if frontierWatchObserved != nil {
+		frontierWatchObserved(ledger)
+	}
+	// Add the watch before returning: a ledger write right after the first
+	// poll used to land before the goroutine's w.Add and was never seen
+	// (TestT1219BothLedgersReceiveFsnotifyNotifications, 2026-10-28).
+	w := openFrontierWatcher(ledger)
+	if w == nil {
+		return
+	}
+	go s.runFrontierWatch(ctx, ledger, w)
+}
+
+func openFrontierWatcher(path string) *fsnotify.Watcher {
+	if path == "" {
+		return nil
+	}
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		slog.Warn("frontier watch: fsnotify unavailable", "err", err)
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if err := w.Add(dir); err != nil {
+		slog.Warn("frontier watch: add dir failed", "dir", dir, "err", err)
+		_ = w.Close()
+		return nil
+	}
+	slog.Info("frontier watch started", "path", path)
+	return w
 }
 
 // WatchFrontierFile watches a known ledger path (optional explicit start).
 func (s *Server) WatchFrontierFile(path string) (stop func()) {
+	path = filepath.Clean(path)
 	if path == "" {
 		return func() {}
 	}
@@ -1534,32 +1621,16 @@ func (s *Server) WatchFrontierFile(path string) (stop func()) {
 	return func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.frontierWatchCancel != nil {
-			s.frontierWatchCancel()
-			s.frontierWatchCancel = nil
-			s.frontierWatchPath = ""
+		if cancel, ok := s.frontierWatches[path]; ok {
+			cancel()
+			delete(s.frontierWatches, path)
 		}
 	}
 }
 
-func (s *Server) runFrontierWatch(ctx context.Context, path string) {
-	if path == "" {
-		return
-	}
-	w, err := fsnotify.NewWatcher()
-	if err != nil {
-		slog.Warn("frontier watch: fsnotify unavailable", "err", err)
-		return
-	}
+func (s *Server) runFrontierWatch(ctx context.Context, path string, w *fsnotify.Watcher) {
 	defer w.Close()
-
-	dir := filepath.Dir(path)
 	base := filepath.Base(path)
-	if err := w.Add(dir); err != nil {
-		slog.Warn("frontier watch: add dir failed", "dir", dir, "err", err)
-		return
-	}
-	slog.Info("frontier watch started", "path", path)
 
 	var (
 		timer *time.Timer

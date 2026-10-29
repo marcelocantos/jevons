@@ -3,9 +3,6 @@
 package ownerquestion
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -32,31 +29,7 @@ func FromExplicitBlocker(text, workdir, asker string) (Question, bool, error) {
 	if err != nil {
 		return Question{}, false, err
 	}
-	match := ownerAsk.FindStringSubmatch(strings.TrimSpace(m.Blocker))
-	if len(match) != 2 || !ownerVerb.MatchString(match[1]) {
-		return Question{}, false, nil
-	}
-	ask := strings.TrimSpace(match[1])
-	// An actionable question is not inferred from a missing device. It must
-	// name what the owner can actually answer, even if a prerequisite remains.
-	if len(ask) < 12 || (strings.Contains(strings.ToLower(ask), "when device") || strings.Contains(strings.ToLower(ask), "once device")) {
-		return Question{}, false, nil
-	}
-	link := evidenceURL.FindString(m.Payload)
-	if link == "" && m.SHA == "" {
-		return Question{}, false, nil
-	}
-	repo, err := SharedRepo(workdir)
-	if err != nil {
-		return Question{}, false, err
-	}
-	evidence := link
-	if evidence == "" {
-		evidence = "commit " + m.SHA
-	}
-	hash := sha256.Sum256([]byte(ask))
-	q := Question{Identity: Identity{Repo: repo, Target: m.Target, ID: "explicit-owner-blocker", Version: hex.EncodeToString(hash[:8])}, Text: fmt.Sprintf("%s/%s — owner action: %s. Evidence: %s. Answer via jevons-po for %s.", repoName(repo), m.Target, ask, evidence, m.Target), Asker: asker, AnswerRoute: "reply to jevons-po with target " + m.Target, Link: link, State: Open}
-	return q, true, q.Validate()
+	return explicitBlockerFields(m.Target, m.Blocker, m.Payload, m.SHA, workdir, asker)
 }
 
 func repoName(repo string) string {

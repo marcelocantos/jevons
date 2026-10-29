@@ -155,12 +155,13 @@ func TestT1043IsolatedPersistedParkedCensusAfterTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = now.Add(3 * time.Minute) // beyond seatstate.DefaultStale
+	authority.Observe(seatstate.Observation{Name: "working", Alive: seatstate.Yes, Source: "fixture", At: now, QueueDepth: seatstate.QueueUnknown})
 	reloaded, err := fleetintent.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := &Server{registry: reg, intent: reloaded}
-	load := map[string]int(server.harnessLoadCounts())
+	load := map[string]int(server.harnessLiveSeatCensus().Load)
 	if len(reg.List()) != 131 || load[string(claudia.ProviderClaude)] != 1 {
 		t.Fatalf("registered=%d active load=%v, want 131/1 after TTL", len(reg.List()), load)
 	}

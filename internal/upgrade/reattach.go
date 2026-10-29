@@ -11,6 +11,8 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/fleet"
+
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
@@ -72,7 +74,7 @@ func ReattachSeatsContext(ctx context.Context, reg *claudia.Registry, include fu
 			if def == nil || !def.AutoStart || ctx.Err() != nil {
 				return
 			}
-			if _, err := reg.AdoptOrLaunchContext(ctx, name); err != nil {
+			if _, err := fleet.AutoStartSeat(ctx, reg, name); err != nil {
 				slog.Error("auto-start failed", "agent", name, "err", err)
 				return
 			}

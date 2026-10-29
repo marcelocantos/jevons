@@ -111,6 +111,7 @@ every run today; live is the default truth.
 4b. **J19-root-history-paint** — seed ≥12 distinct sealed owner turns into the isolate journal (not the owner's history) → hard-load the **React** cockpit (packaged isolate `GET /`; a missing React root fails rather than starting Vite) → Playwright census of the React transcript plus T493 gates (`checkVisibility`, centre hit-test, Vision OCR of a pinned 1280×800 viewport). Empty pane with model rows is a fail (🎯T494). Portguard still refuses `:13705` and `:13706`.
 4c. **J20-plan-dest** — fixture weekly remaining (not live vendor) → omit-provider mint refuses when dest empty; sweep parks an explicit-hot worker (🎯T390.1.5). Overseer chat turn proves isolate agent interaction.
 4d. **J22–J28 chrome pack** (🎯T540.1 census) — packaged React journeys that re-prove retired owner-visible contracts (send-once, fold/mermaid/silent, composer Home/End, fleet tree, aside `target:`, frontier table+Graph, plan ticker). Referent is the ledger + vanilla chrome (`#input`, `.msg.user`, `.msg-clipped`), not today’s React tree. A miss is a gap, not a reason to relax the check. Shared helper: `react_surface.go` + `react_paint.js`.
+4e. **J52-t1120-one-answer** — isolate `/ws/mux` (never :13705): one owner send yields exactly one assistant bubble; after it seals the mux phase is idle and stays idle for 20s (🎯T1120).
 
 ### Orchestration (MCP-direct on the isolate)
 5. **J6-mcp-tool-surface** — agent + thread tools registered
@@ -122,6 +123,7 @@ every run today; live is the default truth.
 11. **J6b-mcp-reconnect** — live `jevons_mcp_reconnect` (T60/T105.1)
 11b. **J21-goal-continue-all-backends** — work mint on Claude, Grok, and Codex; after the first terminal the host starts a second user turn with no `jevons_agent_send` (🎯T510). Missing CLI is OUTAGE, not skip-and-green.
 11c. **J39-t952-hold** — a parked backlog stays readable status across 20 simulated minutes and a restart, with no model submission. The working stall's alert is the open notice, plus the 15-minute band while that queue is still pending. A live overseer may resolve the stall; the transcript then holds one or two notices, never one per sweep (🎯T952).
+11d. **J50-t1183-trust-journey** — Cursor isolate with a throwaway git clone (`pkg/calc`, in-repo bullseye). One owner chat message routes to `jevons-po` → worktree worker → `cmd/integrate` + GREEN `bin/gate -clean` on `pkg/calc`; owner chat gets one sealed reply citing the landed SHA with no routine machine chatter (🎯T1183). Missing `cursor-agent` is OUTAGE (exit 2), not skip.
 
 ### Teardown oracle
 12. **J5-isolation** — sandbox journal under temp state; journey MCP gone; daily MCP intact

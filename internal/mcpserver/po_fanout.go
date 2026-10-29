@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/capacity"
+	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/pofanout"
@@ -290,7 +291,7 @@ func (s *Server) poFanoutProviderGate() (blocked bool, reason, detail string) {
 	if !ok || len(cands) == 0 {
 		return false, "", ""
 	}
-	if _, picked := planusage.PickPlanDest(cands, now, th); picked {
+	if _, picked := planusage.PickPlanDest(cands, now, th, s.effectivePortfolio().TieBreakProviders(cost.TaskCEO)); picked {
 		return false, "", ""
 	}
 	return true, "no_eligible_plan_dest",

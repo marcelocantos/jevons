@@ -32,6 +32,14 @@ const (
 	OutcomeSetAside = "set_aside"
 )
 
+// Compression values score whether high-level load actually compressed after a
+// judgment was filed or acted on (🎯T333.1) — distinct from disposition counts.
+const (
+	CompressionUseful          = "useful"           // implemented-and-stayed-useful
+	CompressionEscalationDown  = "escalation_down"  // downward shift in escalations
+	CompressionNoEffect        = "no_effect"        // performative — no later compression
+)
+
 // DispositionEntry is the durable record of one judgment's product loop.
 type DispositionEntry struct {
 	Fingerprint   string    `json:"fingerprint"`
@@ -50,6 +58,10 @@ type DispositionEntry struct {
 	Mode      string    `json:"mode,omitempty"`
 	Outcome   string    `json:"outcome,omitempty"`
 	OutcomeAt time.Time `json:"outcome_at,omitzero"`
+	// Compression is the usefulness signal (🎯T333.1): did owner/agent load shrink?
+	Compression     string    `json:"compression,omitempty"`
+	CompressionAt   time.Time `json:"compression_at,omitzero"`
+	CompressionNote string    `json:"compression_note,omitempty"`
 }
 
 // DispositionStore is the durable judgment→disposition ledger (🎯T333).
@@ -117,11 +129,14 @@ func (s *DispositionStore) RecordDelivered(js []Judgment, now time.Time) error {
 			if entries[i].Evidence == "" {
 				entries[i].Evidence = SummarizeEvidence(j.Evidence)
 			}
-			if entries[i].Outcome != "" {
+			if entries[i].Outcome != "" || entries[i].Compression != "" {
 				entries[i].Disposition = DispositionPending
 				entries[i].DispositionAt = time.Time{}
 				entries[i].Outcome = ""
 				entries[i].OutcomeAt = time.Time{}
+				entries[i].Compression = ""
+				entries[i].CompressionAt = time.Time{}
+				entries[i].CompressionNote = ""
 			}
 			continue
 		}
@@ -254,6 +269,63 @@ func (s *DispositionStore) SetDisposition(args SetDispositionArgs) (DispositionE
 	return out, s.save(entries)
 }
 
+// SetCompressionArgs records whether a judgment compressed high-level load (🎯T333.1).
+type SetCompressionArgs struct {
+	Fingerprint string
+	Compression string // useful | escalation_down | no_effect
+	Note        string
+	Now         time.Time
+}
+
+// SetCompression records the usefulness outcome for a filed or acted judgment.
+func (s *DispositionStore) SetCompression(args SetCompressionArgs) (DispositionEntry, error) {
+	if s == nil {
+		return DispositionEntry{}, fmt.Errorf("rsi dispositions: nil store")
+	}
+	fp := strings.TrimSpace(args.Fingerprint)
+	if fp == "" {
+		return DispositionEntry{}, fmt.Errorf("rsi dispositions: fingerprint required")
+	}
+	c := strings.TrimSpace(args.Compression)
+	switch c {
+	case CompressionUseful, CompressionEscalationDown, CompressionNoEffect:
+	default:
+		return DispositionEntry{}, fmt.Errorf(
+			"rsi dispositions: compression must be one of useful|escalation_down|no_effect, got %q", c)
+	}
+	now := args.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.load()
+	if err != nil {
+		return DispositionEntry{}, err
+	}
+	idx := -1
+	for i, e := range entries {
+		if e.Fingerprint == fp {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return DispositionEntry{}, fmt.Errorf("rsi dispositions: unknown fingerprint %q", fp)
+	}
+	e := &entries[idx]
+	if e.Disposition == "" || e.Disposition == DispositionPending {
+		return DispositionEntry{}, fmt.Errorf("rsi dispositions: compression requires a terminal disposition (got %q)", e.Disposition)
+	}
+	e.Compression = c
+	e.CompressionAt = now
+	if note := strings.TrimSpace(args.Note); note != "" {
+		e.CompressionNote = note
+	}
+	out := *e
+	return out, s.save(entries)
+}
+
 // Entries returns all disposition entries, most recently delivered first.
 func (s *DispositionStore) Entries() ([]DispositionEntry, error) {
 	if s == nil {
@@ -331,6 +403,75 @@ func (s *DispositionStore) Metrics(now time.Time, window time.Duration) (Disposi
 		case OutcomeSetAside:
 			m.SetAside++
 		}
+	}
+	return m, nil
+}
+
+// CompressionMetrics reports usefulness rates over a window (🎯T333.1).
+// Only terminal dispositions (not pending) count toward Acted; Unevaluated is
+// acted-but-not-yet-scored. UsefulRate is useful / scored when scored > 0.
+type CompressionMetrics struct {
+	Window         time.Duration
+	Acted          int
+	Useful         int
+	EscalationDown int
+	NoEffect       int
+	Unevaluated    int
+	Scored         int
+	UsefulRate     float64
+}
+
+// CompressionMetrics counts compression labels for judgments acted on in the window.
+func (s *DispositionStore) CompressionMetrics(now time.Time, window time.Duration) (CompressionMetrics, error) {
+	if s == nil {
+		return CompressionMetrics{}, fmt.Errorf("rsi dispositions: nil store")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if window <= 0 {
+		window = 14 * 24 * time.Hour
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.load()
+	if err != nil {
+		return CompressionMetrics{}, err
+	}
+	m := CompressionMetrics{Window: window}
+	cutoff := now.Add(-window)
+	for _, e := range entries {
+		disp := e.Disposition
+		if disp == "" || disp == DispositionPending {
+			continue
+		}
+		latest := e.DispositionAt
+		if latest.IsZero() {
+			latest = e.DeliveredAt
+		}
+		if e.CompressionAt.After(latest) {
+			latest = e.CompressionAt
+		}
+		if latest.Before(cutoff) {
+			continue
+		}
+		m.Acted++
+		switch e.Compression {
+		case CompressionUseful:
+			m.Useful++
+			m.Scored++
+		case CompressionEscalationDown:
+			m.EscalationDown++
+			m.Scored++
+		case CompressionNoEffect:
+			m.NoEffect++
+			m.Scored++
+		default:
+			m.Unevaluated++
+		}
+	}
+	if m.Scored > 0 {
+		m.UsefulRate = float64(m.Useful) / float64(m.Scored)
 	}
 	return m, nil
 }
@@ -426,8 +567,16 @@ func (s *DispositionStore) SyncOutcomes(read func(cwd, id string) (string, error
 		switch strings.TrimSpace(status) {
 		case OutcomeAchieved:
 			e.Outcome = OutcomeAchieved
+			if e.Compression == "" {
+				e.Compression = CompressionUseful
+				e.CompressionAt = now
+			}
 		case OutcomeSetAside:
 			e.Outcome = OutcomeSetAside
+			if e.Compression == "" {
+				e.Compression = CompressionNoEffect
+				e.CompressionAt = now
+			}
 		default:
 			continue
 		}

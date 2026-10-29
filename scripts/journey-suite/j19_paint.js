@@ -75,7 +75,9 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
       const st = document.getElementById('status-text');
       const txt = st ? String(st.textContent || '') : '';
       const users = document.querySelectorAll('#messages-canvas > .msg.user').length;
-      return txt === 'connected' || users > 0;
+      // 🎯T1303: "connecting" until the socket is up, then the overseer
+      // phase; the word "connected" is never shown.
+      return (txt !== '' && txt !== 'connecting') || users > 0;
     }, null, { timeout: 25000 }).catch(() => {});
     await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 400)));
     await page.evaluate(() => new Promise((resolve) => {

@@ -176,11 +176,12 @@ func TestReviewAnswerCSRFGuardAndHandlerDenial(t *testing.T) {
 	for _, tc := range []struct {
 		name, origin, referer string
 		guard                 bool
+		wantHandlerBody       string // when the guard allowed the request through
 	}{
 		{name: "foreign Origin", origin: foreignOrigin, guard: true},
 		{name: "foreign Referer", referer: foreignOrigin + "/page", guard: true},
-		{name: "same origin", origin: "http://" + daemonHost},
-		{name: "header-less client"},
+		{name: "same origin", origin: "http://" + daemonHost, wantHandlerBody: "denied: owner cockpit session required (🎯T1129)"},
+		{name: "header-less client", wantHandlerBody: "owner-authenticated review answers are not configured"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/reviews/probe/answer", strings.NewReader(`{"action":"approve"}`))
@@ -197,8 +198,8 @@ func TestReviewAnswerCSRFGuardAndHandlerDenial(t *testing.T) {
 			if rr.Code != http.StatusForbidden || guardRefused(rr) != tc.guard {
 				t.Fatalf("status=%d body=%q; want 403 with guard refusal=%t", rr.Code, rr.Body.String(), tc.guard)
 			}
-			if !tc.guard && !strings.Contains(rr.Body.String(), "owner-authenticated review answers are not configured") {
-				t.Fatalf("handler fail-closed response missing: %q", rr.Body.String())
+			if !tc.guard && tc.wantHandlerBody != "" && !strings.Contains(rr.Body.String(), tc.wantHandlerBody) {
+				t.Fatalf("handler fail-closed response missing %q: %q", tc.wantHandlerBody, rr.Body.String())
 			}
 		})
 	}

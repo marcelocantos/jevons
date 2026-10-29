@@ -4,6 +4,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,11 +15,9 @@ import (
 	"time"
 )
 
-// jOwnerPauseResume is the owner-pause slice: blocked_owner refuses a new
-// spawn, keeps the overseer session, and holds an overseer send. A send that
-// comes back without both "NOT delivered" and "fleet intent" is a failure —
-// that is the 2026-10-18 drain to delivered_unconfirmed. The lift restores
-// working and the same session. A post-lift turn is not this assertion.
+// jOwnerPauseResume is the 🎯T966 journey oracle: cockpit fleet-pause toggles
+// durable blocked_owner intent; a running seat must not begin a new
+// provider turn while paused; a held owner turn must be answered after resume.
 func (s *suite) jOwnerPauseResume() error {
 	const overseer = "jevons"
 	session, err := s.waitOverseerSession(overseer, 45*time.Second)
@@ -25,16 +25,34 @@ func (s *suite) jOwnerPauseResume() error {
 		return err
 	}
 
-	pause, err := s.MCPToolCall("jevons_fleet_intent", map[string]any{
-		"state":  "blocked_owner",
-		"actor":  "owner",
-		"reason": "owner pause probe",
-	})
-	if err != nil {
-		return fmt.Errorf("set blocked_owner: %w", err)
+	// J40 runs alone as well as in the full suite. Seed its own live seat
+	// rather than relying on an earlier journey having left one behind.
+	active := "j40-pause-seat-" + strconv.FormatInt(time.Now().UnixNano()%100000, 10)
+	if _, err := s.MCPToolCall("jevons_agent_start", map[string]any{
+		"name": active, "workdir": s.stateDir, "actor": overseer,
+		"provider": s.provider, "owner_asked": true,
+	}); err != nil {
+		return fmt.Errorf("start pause witness: %w", err)
 	}
-	if !strings.Contains(pause, "blocked on the owner") {
-		return fmt.Errorf("pause reply: %s", trim(pause, 400))
+	defer func() {
+		_, _ = s.MCPToolCall("jevons_agent_kill", map[string]any{
+			"name": active, "actor": overseer, "force": true,
+		})
+	}()
+	agents, err := s.ListAgentsHTTP()
+	if err != nil {
+		return err
+	}
+	if pickRunningSeat(agents, overseer) == "" {
+		return fmt.Errorf("pause witness %s not running", active)
+	}
+	asstBefore, err := assistantTurnCount(s.agentTranscriptHTTP(active))
+	if err != nil {
+		return fmt.Errorf("active seat %s transcript: %w", active, err)
+	}
+
+	if err := s.postFleetPause(true); err != nil {
+		return fmt.Errorf("cockpit pause: %w", err)
 	}
 	body, err := s.getPath("/api/fleet-intent")
 	if err != nil {
@@ -62,7 +80,7 @@ func (s *suite) jOwnerPauseResume() error {
 	if !strings.Contains(refusal, "refusing to start") || !strings.Contains(refusal, "blocked on the owner") {
 		return fmt.Errorf("spawn refusal: %s", trim(refusal, 400))
 	}
-	agents, err := s.ListAgentsHTTP()
+	agents, err = s.ListAgentsHTTP()
 	if err != nil {
 		return err
 	}
@@ -76,16 +94,13 @@ func (s *suite) jOwnerPauseResume() error {
 	}
 
 	token := "pause-hold-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	sendText, sendErr := s.MCPToolCall("jevons_agent_send", map[string]any{
-		"name":  overseer,
-		"text":  token,
-		"actor": "owner",
-	})
-	if !strings.Contains(sendText, "NOT delivered") || !strings.Contains(sendText, "fleet intent") {
-		return fmt.Errorf("paused send was not held: err=%v text=%s", sendErr, trim(sendText, 400))
-	}
-	if strings.Contains(sendText, "delivered_unconfirmed") {
-		return fmt.Errorf("paused send reported delivered_unconfirmed: %s", trim(sendText, 400))
+	ownerPrompt := "Reply with exactly " + token
+	// 🎯T1129: MCP agent_send is *agent* origin even with actor=owner.
+	// The pause contract concerns owner words, so use the owner-origin HTTP
+	// admission path rather than asserting an agent note is an owner turn.
+	send, sendErr := s.ownerSurfaceSend(overseer, ownerPrompt, "owner")
+	if sendErr != nil || send.Status != "queued" {
+		return fmt.Errorf("paused owner send was not held: err=%v result=%+v", sendErr, send)
 	}
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -94,9 +109,15 @@ func (s *suite) jOwnerPauseResume() error {
 		if terr != nil {
 			return terr
 		}
-		journal, _ := tr["journal"].(string)
-		if strings.Contains(journal, token) {
-			return fmt.Errorf("token reached the overseer transcript during pause")
+		if assistantContains(tr, token) {
+			return fmt.Errorf("overseer answered the held owner turn during pause")
+		}
+		asstNow, aerr := assistantTurnCount(s.agentTranscriptHTTP(active))
+		if aerr != nil {
+			return aerr
+		}
+		if asstNow > asstBefore {
+			return fmt.Errorf("seat %s gained assistant turns during fleet pause (%d -> %d)", active, asstBefore, asstNow)
 		}
 		span, serr := s.logSince(logAt)
 		if serr != nil {
@@ -111,19 +132,72 @@ func (s *suite) jOwnerPauseResume() error {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	lift, err := s.MCPToolCall("jevons_fleet_intent", map[string]any{
-		"state":  "working",
-		"actor":  "owner",
-		"reason": "owner pause lift",
-	})
-	if err != nil {
-		return fmt.Errorf("lift: %w", err)
-	}
-	if !strings.Contains(lift, "now working") {
-		return fmt.Errorf("lift reply: %s", trim(lift, 400))
+	if err := s.postFleetPause(false); err != nil {
+		return fmt.Errorf("cockpit resume: %w", err)
 	}
 	if err := s.requireOverseerSession(overseer, session); err != nil {
 		return fmt.Errorf("after lift: %w", err)
+	}
+	deliverBy := time.Now().Add(45 * time.Second)
+	for {
+		tr, terr := s.agentTranscriptHTTP(overseer)
+		if terr != nil {
+			return terr
+		}
+		if assistantContains(tr, token) {
+			return nil
+		}
+		if time.Now().After(deliverBy) {
+			return fmt.Errorf("overseer did not answer the queued owner turn after resume")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func pickRunningSeat(agents []AgentInfo, skip string) string {
+	for _, a := range agents {
+		if a.Name == skip || a.Status != "running" {
+			continue
+		}
+		return a.Name
+	}
+	return ""
+}
+
+func assistantTurnCount(tr map[string]any, err error) (int, error) {
+	if err != nil {
+		return 0, err
+	}
+	turns, _ := tr["turns"].([]any)
+	n := 0
+	for _, t := range turns {
+		m, _ := t.(map[string]any)
+		if m["role"] == "assistant" {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s *suite) postFleetPause(pause bool) error {
+	payload, _ := json.Marshal(map[string]any{"pause": pause})
+	resp, err := http.Post("http://"+s.host+"/api/fleet-pause", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("POST /api/fleet-pause HTTP %d: %s", resp.StatusCode, trim(string(raw), 300))
+	}
+	var out struct {
+		Paused bool `json:"paused"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return err
+	}
+	if out.Paused != pause {
+		return fmt.Errorf("fleet-pause response paused=%v want %v", out.Paused, pause)
 	}
 	return nil
 }
@@ -200,4 +274,23 @@ func (s *suite) logSince(offset int64) (string, error) {
 		return "", err
 	}
 	return string(body), nil
+}
+
+// assistantContains reads authored assistant rows only. 🎯T806 journals the
+// owner's bubble on queue acceptance, before the paused provider sees it;
+// searching the whole journal would falsely count that bubble as delivery.
+func assistantContains(tr map[string]any, token string) bool {
+	turns, _ := tr["turns"].([]any)
+	for _, turn := range turns {
+		row, _ := turn.(map[string]any)
+		if row["role"] != "assistant" {
+			continue
+		}
+		raw, _ := row["raw"].(map[string]any)
+		body, _ := json.Marshal(raw)
+		if strings.Contains(string(body), token) {
+			return true
+		}
+	}
+	return false
 }

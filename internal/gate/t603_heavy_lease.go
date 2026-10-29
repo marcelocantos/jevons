@@ -40,6 +40,8 @@ func HeavyCommand(argv []string) bool {
 			}
 		}
 		return false
+	case "gotest":
+		return true
 	case "make", "gmake":
 		for _, a := range argv[1:] {
 			if strings.Contains(a, "test") {
@@ -48,7 +50,7 @@ func HeavyCommand(argv []string) bool {
 		}
 		return false
 	default:
-		return false
+		return strings.HasSuffix(filepath.Base(argv[0]), ".test")
 	}
 }
 
@@ -95,6 +97,23 @@ func acquireHeavyLeaseCommand(storeRoot, inherited string, command []string, cwd
 	if err != nil {
 		return nil, "", err
 	}
+	waitRegistered := false
+	if inherited == "" && len(command) > 0 {
+		self := heavyLeaseSelfWaiter(command, cwd)
+		if dup := findDuplicateWaiter(storeRoot, self); dup != nil {
+			_ = f.Close()
+			return nil, "", duplicateWaitError(*dup)
+		}
+		registerHeavyWaiter(storeRoot, self)
+		waitRegistered = true
+	}
+	defer func() {
+		if waitRegistered {
+			unregisterHeavyWaiter(storeRoot, os.Getpid())
+		}
+	}()
+	waitSince := time.Now()
+	var lastReport time.Time
 	// First try the real lock: an old token never resurrects a released lease.
 	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	for err == syscall.EWOULDBLOCK || err == syscall.EAGAIN {
@@ -109,11 +128,17 @@ func acquireHeavyLeaseCommand(storeRoot, inherited string, command []string, cwd
 			// not release its lease while the outer command is still running.
 			return func() {}, inherited, nil
 		}
+		if heavyLeaseWaitTick(storeRoot, command, time.Since(waitSince), &lastReport) {
+			_ = f.Close()
+			return func() {}, "", nil
+		}
 		// Retry the live capability as well as the kernel lock: a delayed
 		// responder must not turn valid nesting into a permanent deadlock.
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(heavyWaitPoll)
 		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	}
+	waitRegistered = false
+	unregisterHeavyWaiter(storeRoot, os.Getpid())
 	if err != nil {
 		_ = f.Close()
 		return nil, "", err

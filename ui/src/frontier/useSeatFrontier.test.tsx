@@ -19,34 +19,44 @@ it('T996 isolates selected repos, late responses, errors, and deselection', asyn
     const query = useSeatFrontier(cwd);
     return { data: query.data, isError: query.isError };
   }, { initialProps: { cwd: '' }, wrapper });
-  const answer = (name: string) => ({ ok: true, json: async () => ({ ledger_key: '/' + name + '/bullseye.yaml', targets: [{ id: 'T1', name, status: 'identified' }] }) });
-  expect(fetcher).not.toHaveBeenCalled();
-  rerender({ cwd: '/repo A' });
+  const answer = (name: string) => ({
+    ok: true,
+    json: async () => ({
+      ledger_key: '/' + name + '/bullseye.yaml',
+      targets: [{ id: 'T1', name, status: 'identified', ready: true, blocked: false }],
+    }),
+  });
   await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
-  expect(fetcher.mock.calls[0]).toEqual(['/api/frontier?cwd=%2Frepo%20A', { signal: expect.any(AbortSignal) }]);
-  await act(async () => pending[0](answer('A')));
+  expect(fetcher.mock.calls[0]).toEqual(['/api/frontier', { signal: expect.any(AbortSignal) }]);
+  await act(async () => pending[0](answer('default')));
+  await waitFor(() => expect(result.current.data?.rows[0].name).toBe('default'));
+
+  rerender({ cwd: '/repo A' });
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+  expect(fetcher.mock.calls[1]).toEqual(['/api/frontier?cwd=%2Frepo%20A', { signal: expect.any(AbortSignal) }]);
+  await act(async () => pending[1](answer('A')));
   await waitFor(() => expect(result.current.data?.rows[0].name).toBe('A'));
 
   rerender({ cwd: '/repo B' });
   expect(result.current.data).toBeUndefined();
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
-  rerender({ cwd: '/repo C' });
   await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
-  await act(async () => pending[2](answer('C')));
+  rerender({ cwd: '/repo C' });
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(4));
+  await act(async () => pending[3](answer('C')));
   await waitFor(() => expect(result.current.data?.rows[0].name).toBe('C'));
-  await act(async () => pending[1](answer('B')));
+  await act(async () => pending[2](answer('B')));
   expect(result.current.data?.ledgerKey).toBe('/C/bullseye.yaml');
 
   rerender({ cwd: '/broken' });
   expect(result.current.data).toBeUndefined();
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(4));
-  await act(async () => pending[3]({ ok: false, status: 503 }));
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(5));
+  await act(async () => pending[4]({ ok: false, status: 503 }));
   await waitFor(() => expect(result.current.isError).toBe(true));
   expect(result.current.data).toBeUndefined();
 
   rerender({ cwd: '' });
-  expect(result.current.data).toBeUndefined();
-  await act(async () => { await client.invalidateQueries({ queryKey: ['frontier'] }); });
-  expect(fetcher).toHaveBeenCalledTimes(4);
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(6));
+  await act(async () => pending[5](answer('default-again')));
+  await waitFor(() => expect(result.current.data?.rows[0].name).toBe('default-again'));
   client.clear();
 });

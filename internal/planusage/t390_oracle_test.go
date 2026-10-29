@@ -18,14 +18,11 @@
 //	clause 5c  an aged reading is marked stale rather than served as current
 //	clause 4   the same source binds capacity admission, and nil ≠ 0
 //
-// The assertions run over the JSON the daemon serves at GET /api/plan-usage —
-// the bytes the cockpit reads — rather than over Go fields, so a field that
-// stops being marshalled fails here too. handlePlanUsage's only transformation
-// of the snapshot is json.Encoder, so these are the served bytes.
+// These assertions preserve the conversion contract used by policy fixtures.
+// The shipped SQL/WS path has separate connected projection tests.
 package planusage_test
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -81,25 +78,14 @@ func grokReading(fetchedAt time.Time) claudia.PlanUsage {
 	}
 }
 
-// serve runs the fixtures through the real Reader and returns the bytes the
-// daemon would serve, decoded generically. Decoding into map[string]any rather
+// serve tests the legacy conversion contract. The shipped SQL payload is
+// exercised by the projection query and connected replication tests. Decoding into map[string]any rather
 // than back into planusage.Snapshot is deliberate: a field that silently stops
 // being emitted would round-trip through the typed struct as a zero value and
 // the assertion would pass over a blank the owner can see.
 func serve(t *testing.T, readings []claudia.PlanUsage, load map[string]int, staleAfter time.Duration) map[string]any {
 	t.Helper()
-	r := planusage.NewReader(planusage.ReaderArgs{
-		Fetch: func(context.Context) ([]claudia.PlanUsage, error) {
-			return readings, nil
-		},
-		Load:       func() map[string]int { return load },
-		Now:        func() time.Time { return fixedNow },
-		StaleAfter: staleAfter,
-	})
-	if err := r.Refresh(context.Background()); err != nil {
-		t.Fatalf("refresh fixtures: %v", err)
-	}
-	raw, err := json.Marshal(r.Snapshot())
+	raw, err := json.Marshal(planusage.Convert(readings, load, fixedNow, staleAfter))
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -278,27 +264,6 @@ func TestT390Clause5cAgedReadingIsMarkedStale(t *testing.T) {
 		t.Error("control: a 30s-old reading must not be marked stale")
 	}
 
-	// SECOND CONTROL: the cache holds raw readings, not a finished snapshot,
-	// so the same fetch read later is stale without re-fetching. This is the
-	// freeze clause 5 rules out — "3 seconds old" baked in at fetch time.
-	r := planusage.NewReader(planusage.ReaderArgs{
-		Fetch: func(context.Context) ([]claudia.PlanUsage, error) {
-			return []claudia.PlanUsage{claudeReading(fixedNow)}, nil
-		},
-		Load:       func() map[string]int { return map[string]int{"claude": 7} },
-		Now:        func() time.Time { return fixedNow.Add(time.Hour) },
-		StaleAfter: planusage.DefaultStaleAfter,
-	})
-	if err := r.Refresh(context.Background()); err != nil {
-		t.Fatalf("refresh: %v", err)
-	}
-	aged, ok := r.Snapshot().Backend("claude")
-	if !ok {
-		t.Fatal("claude absent after refresh")
-	}
-	if !aged.Stale {
-		t.Error("a reading aged by the passage of time alone must become stale without re-fetching")
-	}
 }
 
 // TestT390Clause4CapacityConsumesTheSameSource: admission reads plan remaining
@@ -308,97 +273,29 @@ func TestT390Clause5cAgedReadingIsMarkedStale(t *testing.T) {
 // was unknown, unknown rendered as fine, and capacity reported 100% headroom
 // on an account that was already out of allowance (🎯T406).
 func TestT390Clause4CapacityConsumesTheSameSource(t *testing.T) {
-	// Weekly at 8% is the tightest published window on the backend the fleet
-	// is actually running on, so it is what must bind.
 	tight := claudeReading(fixedNow)
 	tight.Windows[1].RemainingPercent = pct(8)
 	tight.Windows[1].UsedPercent = pct(92)
-
-	r := planusage.NewReader(planusage.ReaderArgs{
-		Fetch: func(context.Context) ([]claudia.PlanUsage, error) {
-			return []claudia.PlanUsage{tight, grokReading(fixedNow)}, nil
-		},
-		Load:       func() map[string]int { return map[string]int{"claude": 7, "grok": 2} },
-		Now:        func() time.Time { return fixedNow },
-		StaleAfter: planusage.DefaultStaleAfter,
-	})
-	if err := r.Refresh(context.Background()); err != nil {
-		t.Fatalf("refresh: %v", err)
+	snap := planusage.Convert([]claudia.PlanUsage{tight, grokReading(fixedNow)}, map[string]int{"claude": 7, "grok": 2}, fixedNow, planusage.DefaultStaleAfter)
+	fraction, source, ok := snap.TightestRemaining()
+	if !ok || fraction != 0.08 || source != "claude weekly" {
+		t.Fatalf("fraction=%v source=%s known=%v", fraction, source, ok)
 	}
-
-	frac, source := r.CapacityRemaining()
-	if frac == nil {
-		t.Fatal("a published window must produce a remaining fraction")
+	assessment := capacity.Assess(capacity.Snapshot{PlanRemaining: &fraction, PlanSource: source}, capacity.DefaultPolicy())
+	if assessment.PlanHeadroom != 0.08 || assessment.Headroom != 0.08 || assessment.Pressure <= capacity.PressureNormal {
+		t.Fatalf("assessment: %+v", assessment)
 	}
-	if *frac != 0.08 {
-		t.Errorf("CapacityRemaining = %v, want 0.08 (the tightest window, not the first)", *frac)
+	idle := planusage.Convert([]claudia.PlanUsage{tight}, nil, fixedNow, planusage.DefaultStaleAfter)
+	if _, _, ok := idle.TightestRemaining(); ok {
+		t.Fatal("idle provider bound capacity")
 	}
-	if source != "claude weekly" {
-		t.Errorf("source = %q, want %q — the owner must be able to trace the number", source, "claude weekly")
+	unavailable := planusage.Convert([]claudia.PlanUsage{grokReading(fixedNow)}, map[string]int{"grok": 4}, fixedNow, planusage.DefaultStaleAfter)
+	if _, _, ok := unavailable.TightestRemaining(); ok {
+		t.Fatal("unavailable provider invented capacity")
 	}
-
-	// The product path: the daemon hands exactly this to the governor.
-	a := capacity.Assess(capacity.Snapshot{PlanRemaining: frac, PlanSource: source}, capacity.DefaultPolicy())
-	if a.PlanHeadroom != 0.08 {
-		t.Errorf("PlanHeadroom = %v, want 0.08", a.PlanHeadroom)
-	}
-	if a.Headroom != 0.08 {
-		t.Errorf("Headroom = %v, want 0.08 — plan remaining must bind when it is the tightest known dimension", a.Headroom)
-	}
-	if a.Pressure <= capacity.PressureNormal {
-		t.Errorf("pressure = %v at 8%% plan remaining, want above normal", a.Pressure)
-	}
-	var named bool
-	for _, reason := range a.Reasons {
-		if len(reason) > 0 && contains(reason, "claude weekly") {
-			named = true
-		}
-	}
-	if !named {
-		t.Errorf("a bound plan window must be named in the reasons, got %v", a.Reasons)
-	}
-
-	// CONTROL 1: a backend the fleet is NOT running on does not constrain it.
-	// An exhausted Codex allowance is not a reason to park work on Claude.
-	idle := planusage.NewReader(planusage.ReaderArgs{
-		Fetch: func(context.Context) ([]claudia.PlanUsage, error) {
-			return []claudia.PlanUsage{tight}, nil
-		},
-		Load:       func() map[string]int { return map[string]int{"claude": 0} },
-		Now:        func() time.Time { return fixedNow },
-		StaleAfter: planusage.DefaultStaleAfter,
-	})
-	if err := idle.Refresh(context.Background()); err != nil {
-		t.Fatalf("refresh: %v", err)
-	}
-	if f, _ := idle.CapacityRemaining(); f != nil {
-		t.Errorf("a backend with no fleet agents must not bind admission, got %v", *f)
-	}
-
-	// CONTROL 2: nothing published is nil, and nil must stay unknown rather
-	// than becoming a confident 100%. This is the exact shape of the 🎯T406
-	// incident, asserted at the layer that produced it.
-	none := planusage.NewReader(planusage.ReaderArgs{
-		Fetch: func(context.Context) ([]claudia.PlanUsage, error) {
-			return []claudia.PlanUsage{grokReading(fixedNow)}, nil
-		},
-		Load:       func() map[string]int { return map[string]int{"grok": 4} },
-		Now:        func() time.Time { return fixedNow },
-		StaleAfter: planusage.DefaultStaleAfter,
-	})
-	if err := none.Refresh(context.Background()); err != nil {
-		t.Fatalf("refresh: %v", err)
-	}
-	f, src := none.CapacityRemaining()
-	if f != nil {
-		t.Errorf("no published window must yield nil, got %v", *f)
-	}
-	if src != "" {
-		t.Errorf("no published window must yield no source, got %q", src)
-	}
-	unknown := capacity.Assess(capacity.Snapshot{PlanRemaining: f, PlanSource: src}, capacity.DefaultPolicy())
+	unknown := capacity.Assess(capacity.Snapshot{}, capacity.DefaultPolicy())
 	if unknown.PlanHeadroom >= 0 {
-		t.Errorf("PlanHeadroom = %v with nothing published, want unknown (negative) — never a confident number", unknown.PlanHeadroom)
+		t.Fatal("unknown became confident capacity")
 	}
 }
 

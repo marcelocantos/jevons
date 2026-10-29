@@ -36,14 +36,12 @@ var t1090HomeJevonsJoins = map[string]string{
 	"internal/attrib/attrib.go:DefaultRoot":        "host-wide attribution store; JEVONS_ATTRIB_DIR overrides",
 	"internal/gate/record.go:DefaultStoreRoot":     "host-wide gate record store (🎯T1027 one namespace); env override",
 	"internal/treeguard/store.go:DefaultStoreRoot": "host-wide treeguard store; env override",
-	"internal/spool/spool.go:Dir":                  "host-wide claudia spool; JEVONS_SPOOL_DIR overrides (🎯T1085 owns spool reads)",
+	// internal/spool/spool.go:Dir retired: follows omp.SpoolDir (🎯T866), not ~/.jevons/spool.
+	// jevonsStateDir derives from config.Default().StateDir (🎯T781), not a direct home join.
 	// The attribution hook runs per tool call in every worker, outside any
 	// daemon, and reads the development registry to name the session.
 	"internal/attrib/attrib.go:DefaultRosterPaths": "attribution CLI/hook reads the development registry; not a daemon state path",
 	"internal/attrib/hook.go:LookupAgent":          "attribution hook reads the development registry; not a daemon state path",
-	// Owner-run one-shot modes of the jevonsd binary that exit before the
-	// daemon starts.
-	"internal/uidaemon/install.go:Install": "-install-ui-agents owner install; Spec.StateDir overrides the default",
 }
 
 func TestT1090NoNewHomeJevonsJoinsInDaemonCode(t *testing.T) {

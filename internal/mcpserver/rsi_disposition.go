@@ -20,8 +20,8 @@ import (
 func (s *Server) registerRSIDispositionTool() {
 	s.addTool(
 		mcp.NewTool("jevons_rsi_disposition",
-			mcp.WithDescription("RSI coach judgment dispositions (🎯T333). action=record stores the overseer's decision for a judgment fingerprint (file|park|ignore_with_reason|act_other; file needs target_id — prefer jevons_target_file with fingerprint=, which records automatically). action=list shows the ledger; action=metrics reports filed/parked/ignored/pending rates over a window. Outcomes (achieve/set_aside) sync automatically and suppress re-propose without new evidence."),
-			mcp.WithString("action", mcp.Description("record | list | metrics (default list)")),
+			mcp.WithDescription("RSI coach judgment dispositions (🎯T333) and usefulness compression (🎯T333.1). action=record stores the overseer's decision for a judgment fingerprint (file|park|ignore_with_reason|act_other; file needs target_id — prefer jevons_target_file with fingerprint=, which records automatically). action=record_compression stores whether load compressed (useful|escalation_down|no_effect) after a terminal disposition. action=list shows the ledger; action=metrics reports disposition rates and usefulness/compression rates over a window. Ledger outcomes (achieve/set_aside) sync automatically, infer useful/no_effect when unset, and suppress re-propose without new evidence."),
+			mcp.WithString("action", mcp.Description("record | record_compression | list | metrics (default list)")),
 			mcp.WithString("fingerprint", mcp.Description("Judgment fingerprint (from the coach wire text). Required for record.")),
 			mcp.WithString("disposition", mcp.Description("record: file | park | ignore_with_reason | act_other")),
 			mcp.WithString("reason", mcp.Description("record: why (required for ignore_with_reason)")),
@@ -29,6 +29,8 @@ func (s *Server) registerRSIDispositionTool() {
 			mcp.WithString("cwd", mcp.Description("record disposition=file: repo the target was filed in (outcome sync)")),
 			mcp.WithString("evidence", mcp.Description("record: evidence pointer (session/event id)")),
 			mcp.WithNumber("window_days", mcp.Description("metrics: window in days (default 14)")),
+			mcp.WithString("compression", mcp.Description("record_compression: useful | escalation_down | no_effect")),
+			mcp.WithString("compression_note", mcp.Description("record_compression: optional evidence pointer")),
 		),
 		s.handleRSIDisposition,
 	)
@@ -78,6 +80,23 @@ func (s *Server) handleRSIDisposition(_ context.Context, req mcp.CallToolRequest
 		}
 		return mcp.NewToolResultText(txt + "\n"), nil
 
+	case "record_compression":
+		entry, err := store.SetCompression(rsi.SetCompressionArgs{
+			Fingerprint: str(args["fingerprint"]),
+			Compression: str(args["compression"]),
+			Note:        str(args["compression_note"]),
+			Now:         now,
+		})
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("rsi compression record failed: %v", err)), nil
+		}
+		s.logLifecycle("rsi_disposition", "record_compression", "ok", map[string]any{
+			"fingerprint": entry.Fingerprint,
+			"compression": entry.Compression,
+		})
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"Compression recorded: fp=%s compression=%s\n", entry.Fingerprint, entry.Compression)), nil
+
 	case "metrics":
 		window := 14 * 24 * time.Hour
 		if v, ok := args["window_days"].(float64); ok && v > 0 {
@@ -87,10 +106,20 @@ func (s *Server) handleRSIDisposition(_ context.Context, req mcp.CallToolRequest
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("rsi disposition metrics failed: %v", err)), nil
 		}
+		cm, err := store.CompressionMetrics(now, window)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("rsi compression metrics failed: %v", err)), nil
+		}
+		usefulPct := ""
+		if cm.Scored > 0 {
+			usefulPct = fmt.Sprintf(" useful_rate=%.0f%%", cm.UsefulRate*100)
+		}
 		return mcp.NewToolResultText(fmt.Sprintf(
-			"RSI disposition metrics (🎯T333, window=%dd)\n  total=%d pending=%d filed=%d parked=%d ignored=%d act_other=%d\n  outcomes: achieved=%d set_aside=%d\n",
+			"RSI disposition metrics (🎯T333, window=%dd)\n  total=%d pending=%d filed=%d parked=%d ignored=%d act_other=%d\n  outcomes: achieved=%d set_aside=%d\n"+
+				"RSI usefulness metrics (🎯T333.1, window=%dd)\n  acted=%d scored=%d useful=%d escalation_down=%d no_effect=%d unevaluated=%d%s\n",
 			int(m.Window.Hours()/24), m.Total, m.Pending, m.Filed, m.Parked, m.Ignored, m.ActOther,
 			m.Achieved, m.SetAside,
+			int(cm.Window.Hours()/24), cm.Acted, cm.Scored, cm.Useful, cm.EscalationDown, cm.NoEffect, cm.Unevaluated, usefulPct,
 		)), nil
 
 	case "list":
@@ -114,6 +143,9 @@ func (s *Server) handleRSIDisposition(_ context.Context, req mcp.CallToolRequest
 			if e.Outcome != "" {
 				line += " outcome=" + e.Outcome
 			}
+			if e.Compression != "" {
+				line += " compression=" + e.Compression
+			}
 			if e.Reason != "" {
 				line += fmt.Sprintf(" reason=%q", e.Reason)
 			}
@@ -126,6 +158,6 @@ func (s *Server) handleRSIDisposition(_ context.Context, req mcp.CallToolRequest
 		return mcp.NewToolResultText(b.String()), nil
 
 	default:
-		return mcp.NewToolResultError(fmt.Sprintf("unknown action %q (record|list|metrics)", action)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("unknown action %q (record|record_compression|list|metrics)", action)), nil
 	}
 }

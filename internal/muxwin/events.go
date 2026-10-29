@@ -369,7 +369,7 @@ func applyStamp(prev []Event, st ToolStamp) ([]Event, []LiveFold) {
 		return prev, nil
 	}
 	prev = cloneEvents(prev)
-	prev[i] = enrichToolUse(prev[i], name, st.Input)
+	prev[i] = enrichToolUse(prev[i], name, st.Input, "")
 	return prev, []LiveFold{{Event: prev[i], Op: "append"}}
 }
 
@@ -397,10 +397,13 @@ func eventToolName(ev Event) string {
 // mergeProgress applies a lossless ACP tool_call_update onto an existing
 // KindSteps row (same toolCallId). Status-only updates do not mint a
 // second step (🎯T63). Cursor MCP rows often have no id — pair onto the
-// oldest generic "MCP: tool" step (🎯T64.2).
+// oldest generic "MCP: tool" step (🎯T64.2). Named native provider tools
+// (Bash, Shell, …) with no generic row yet mint a step on the first active
+// progress frame (🎯T1218).
 func mergeProgress(prev []Event, line string, byID map[string]int) ([]Event, []LiveFold) {
 	var wrap struct {
-		Raw json.RawMessage `json:"raw"`
+		Raw       json.RawMessage `json:"raw"`
+		Timestamp string          `json:"timestamp"`
 	}
 	if json.Unmarshal([]byte(line), &wrap) != nil || len(wrap.Raw) == 0 {
 		return prev, nil
@@ -409,6 +412,7 @@ func mergeProgress(prev []Event, line string, byID map[string]int) ([]Event, []L
 		SessionUpdate string          `json:"sessionUpdate"`
 		Title         string          `json:"title"`
 		Name          string          `json:"name"`
+		Status        string          `json:"status"`
 		ToolCallID    string          `json:"toolCallId"`
 		RawInput      json.RawMessage `json:"rawInput"`
 		Arguments     json.RawMessage `json:"arguments"`
@@ -416,6 +420,7 @@ func mergeProgress(prev []Event, line string, byID map[string]int) ([]Event, []L
 			SessionUpdate string          `json:"sessionUpdate"`
 			Title         string          `json:"title"`
 			Name          string          `json:"name"`
+			Status        string          `json:"status"`
 			ToolCallID    string          `json:"toolCallId"`
 			RawInput      json.RawMessage `json:"rawInput"`
 			Arguments     json.RawMessage `json:"arguments"`
@@ -461,10 +466,14 @@ func mergeProgress(prev []Event, line string, byID map[string]int) ([]Event, []L
 	if genericToolName(label) && len(input) == 0 {
 		return prev, nil
 	}
+	status := strings.TrimSpace(probe.Update.Status)
+	if status == "" {
+		status = strings.TrimSpace(probe.Status)
+	}
 	if id != "" {
 		if byID != nil {
 			if i, ok := byID[id]; ok && i >= 0 && i < len(prev) {
-				prev[i] = enrichToolUse(prev[i], label, input)
+				prev[i] = enrichToolUse(prev[i], label, input, status)
 				return prev, []LiveFold{{Event: prev[i], Op: "append"}}
 			}
 		} else {
@@ -475,21 +484,57 @@ func mergeProgress(prev []Event, line string, byID map[string]int) ([]Event, []L
 				if eventToolID(prev[i]) != id {
 					continue
 				}
-				prev[i] = enrichToolUse(prev[i], label, input)
+				prev[i] = enrichToolUse(prev[i], label, input, status)
 				return prev, []LiveFold{{Event: prev[i], Op: "append"}}
 			}
 		}
 	}
 	if i, ok := oldestGenericSteps(prev); ok {
-		prev[i] = enrichToolUse(prev[i], label, input)
+		prev[i] = enrichToolUse(prev[i], label, input, status)
 		return prev, []LiveFold{{Event: prev[i], Op: "append"}}
 	}
-	return prev, nil
+	su := strings.TrimSpace(probe.Update.SessionUpdate)
+	if su == "" {
+		su = strings.TrimSpace(probe.SessionUpdate)
+	}
+	// MCP name stamps are tool_call_update rows with no execution status;
+	// minting there would stack orphan steps (🎯T64.2 / 🎯T1089). Native
+	// visibility mints only on an initiating call or an active status
+	// (🎯T1218).
+	if su == "tool_call_update" && !toolExecutionActive(status) {
+		return prev, nil
+	}
+	blk := map[string]any{"name": label}
+	if id != "" {
+		blk["id"] = id
+	}
+	if len(input) > 0 {
+		blk["input"] = input
+	}
+	if status != "" {
+		blk["execution_status"] = status
+	}
+	ev := toolUseEvent(nextIndex(prev), blk, strings.TrimSpace(wrap.Timestamp))
+	prev = append(prev, ev)
+	return prev, []LiveFold{{Event: ev, Op: "put"}}
 }
 
 func genericToolName(s string) bool {
 	t := strings.ToLower(strings.Join(strings.Fields(s), " "))
 	return t == "" || t == "tool" || t == "tool_use" || t == "mcp: tool" || t == "mcp:tool"
+}
+
+func toolExecutionActive(status string) bool {
+	s := strings.ToLower(strings.TrimSpace(status))
+	if s == "" {
+		return false
+	}
+	switch s {
+	case "completed", "complete", "succeeded", "success", "failed", "error", "cancelled", "canceled":
+		return false
+	default:
+		return true
+	}
 }
 
 func decodeJSONObject(raw json.RawMessage) map[string]any {
@@ -517,7 +562,7 @@ func eventToolID(ev Event) string {
 	return strings.TrimSpace(h.ID)
 }
 
-func enrichToolUse(ev Event, name string, input map[string]any) Event {
+func enrichToolUse(ev Event, name string, input map[string]any, status string) Event {
 	var m map[string]any
 	if json.Unmarshal(ev.Body, &m) != nil {
 		return ev
@@ -529,6 +574,9 @@ func enrichToolUse(ev Event, name string, input map[string]any) Event {
 		if cur, _ := m["input"].(map[string]any); len(cur) == 0 {
 			m["input"] = input
 		}
+	}
+	if s := strings.TrimSpace(status); s != "" {
+		m["execution_status"] = s
 	}
 	b, err := json.Marshal(m)
 	if err == nil {
@@ -656,7 +704,7 @@ func assistantTextEvent(index int, sid, text, stop, ts string) Event {
 
 func toolUseEvent(index int, blk map[string]any, ts string) Event {
 	m := map[string]any{"type": "tool_use"}
-	for _, k := range []string{"name", "input", "id", "kind"} {
+	for _, k := range []string{"name", "input", "id", "kind", "execution_status"} {
 		if v, ok := blk[k]; ok {
 			m[k] = v
 		}

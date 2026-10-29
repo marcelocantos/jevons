@@ -29,6 +29,10 @@ android {
         versionName = flutter.versionName
     }
 
+    testOptions { unitTests.isReturnDefaultValues = true }
+
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt") } }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.
@@ -46,4 +50,9 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

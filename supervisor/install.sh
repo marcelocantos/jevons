@@ -3,19 +3,37 @@
 # and make supervisord the owner of the development daemon's lifecycle (🎯T594).
 #
 # Exactly one thing may own :13705. This installer therefore evicts the
-# other two claimants before starting its own: the launchd KeepAlive job,
-# and Homebrew's brew-services copy. Leaving either loaded is how the
-# program ends up FATAL "exited too quickly" — supervisord starts a second
-# daemon, the bind fails, it exits inside startsecs, and after startretries
-# supervisord gives up FOR GOOD. That state looks like a warning and is
-# actually an unsupervised daemon (observed 2026-08-29 to 08-31).
+# other claimant before starting its own: Homebrew's brew-services copy.
+# Leaving it loaded is how the program ends up FATAL "exited too quickly" —
+# supervisord starts a second daemon, the bind fails, it exits inside
+# startsecs, and after startretries supervisord gives up FOR GOOD. That
+# state looks like a warning and is actually an unsupervised daemon
+# (observed 2026-08-29 to 08-31). launchd is not a claimant any more:
+# 🎯T1111 retired the KeepAlive job and the UI-probe LaunchAgents.
 #
 # SUPERVISOR_NO_TAKEOVER=1 renders the programs without taking the port,
-# for a machine that still wants launchd to own it.
+# for a machine where something else still holds it.
+# SUPERVISOR_SKIP_LAUNCHAGENT=1 skips the 🎯T779 Interactive LaunchAgent
+# install (hermetic tests and render-only runs).
 set -e
 
 REPO="$(CDPATH= cd "$(dirname "$0")/.." && pwd)"
 CONF_DIR="${SUPERVISOR_CONF_DIR:-/opt/homebrew/etc/supervisor.d}"
+
+# 🎯T1184: the production configs always name the shared clone. Run from a
+# linked worktree, this installer rendered jevonsd.ini around the worker's
+# tree (2026-10-22 15:46, jv-t779-auto), and every development restart then
+# launched that worker's build. Hand the production render to the main
+# working tree's installer; a test SUPERVISOR_CONF_DIR renders locally.
+if [ -z "${SUPERVISOR_CONF_DIR:-}" ]; then
+  git_dir="$(git -C "$REPO" rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+  common_dir="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -n "$git_dir" ] && [ -n "$common_dir" ] && [ "$git_dir" != "$common_dir" ]; then
+    main_root="$(dirname "$common_dir")"
+    echo "supervisor/install.sh: invoked from linked worktree $REPO; rendering production configs from the shared clone $main_root (🎯T1184)" >&2
+    exec "$main_root/supervisor/install.sh" "$@"
+  fi
+fi
 
 if [ -z "${HOME:-}" ]; then
   HOME="$(eval echo ~"$(id -un)")"
@@ -59,6 +77,12 @@ if [ "${SUPERVISOR_RETIRE_VANILLA_ONLY:-}" != 1 ]; then
     exit 1
   fi
   render jevonsd
+  # Phone access (jevons.canticode.com, owner-only Google sign-in at the edge).
+  # Rendered only where the edge policy exists: without it the tunnel would
+  # either refuse to start or, worse, be configured by hand without it.
+  if [ -f "$HOME/.config/ngrok/jevons-policy.yml" ]; then
+    render jevons-tunnel
+  fi
   # Claudia owns the host broker socket. Retire the Jevons broker
   # definition so a later supervisord reload cannot reclaim it.
   rm -f "$CONF_DIR/jevons-broker.ini"
@@ -75,12 +99,6 @@ if ! command -v supervisorctl >/dev/null 2>&1; then
   echo "supervisorctl not on PATH — ini written; start Homebrew supervisor to load it" >&2
   exit 1
 fi
-
-# Retire the older launchd comparison job as well as its login-time plist.
-if command -v launchctl >/dev/null 2>&1; then
-  launchctl bootout "gui/$(id -u)/com.marcelocantos.jevons-ui-vanilla" 2>/dev/null || true
-fi
-rm -f "$HOME/Library/LaunchAgents/com.marcelocantos.jevons-ui-vanilla.plist"
 
 changes="$(supervisorctl reread)"
 printf '%s\n' "$changes"
@@ -102,12 +120,6 @@ if [ "${SUPERVISOR_NO_TAKEOVER:-}" = 1 ]; then
   echo "jevonsd: rendered, not started (SUPERVISOR_NO_TAKEOVER=1)."
   echo "jevonsd: free :13705 before supervisord reloads, or the program goes FATAL."
 else
-  # Evict the launchd KeepAlive job. bootout on an absent job is not an
-  # error worth stopping for — the job may already be gone, which is the
-  # state we want.
-  if command -v launchctl >/dev/null 2>&1; then
-    launchctl bootout "gui/$(id -u)/com.marcelocantos.jevonsd" 2>/dev/null || true
-  fi
   supervisorctl stop jevons-broker 2>/dev/null || true
   supervisorctl update jevons-broker 2>/dev/null || true
   # Both brokers speak the same status protocol, so a successful status
@@ -166,3 +178,7 @@ fi
 
 supervisorctl status jevonsd || true
 claudia broker status
+
+if [ "${SUPERVISOR_SKIP_LAUNCHAGENT:-}" != "1" ]; then
+  "$REPO/supervisor/install-launchagent.sh"
+fi

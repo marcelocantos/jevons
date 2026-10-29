@@ -115,6 +115,11 @@ export async function renderMermaidIn(container: ParentNode | null): Promise<voi
     const host = code.closest('pre') || code;
     const src = code.textContent || '';
     if (!src.trim()) continue;
+    // T484: do not re-render a diagram that already painted for this source.
+    const msg = code.closest('.msg');
+    const cached = msg?.getAttribute('data-mermaid-src');
+    if (cached === src && msg?.querySelector('.mermaid-diagram svg')) continue;
+    code.setAttribute('data-mermaid-pending', '1');
     const id = 'mmd-' + ++seq;
     try {
       const { svg } = await api.render(id, src);
@@ -128,9 +133,12 @@ export async function renderMermaidIn(container: ParentNode | null): Promise<voi
       host.parentNode.replaceChild(wrap, host);
       const painted = wrap.querySelector('svg');
       if (painted instanceof SVGSVGElement) keepWidePackLegible(painted);
+      msg?.setAttribute('data-mermaid-src', src);
     } catch (err) {
       rememberErr(err);
       [id, 'd' + id].forEach((x) => document.getElementById(x)?.remove());
+    } finally {
+      code.removeAttribute('data-mermaid-pending');
     }
   }
 }

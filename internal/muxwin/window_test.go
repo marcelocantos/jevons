@@ -194,3 +194,15 @@ func TestDilateOlderDoesNotPullNewer(t *testing.T) {
 		t.Fatalf("got %+v want Lo=1 Hi=3 frozen", got)
 	}
 }
+
+func TestFloorLoToOwnerAfterConnectCap(t *testing.T) {
+	n := 137200
+	capped := CapFollowingLo(1, n, MaxConnectEvents)
+	owner := 137063
+	if got := FloorLoToOwner(capped, owner); got != owner {
+		t.Fatalf("FloorLoToOwner(%d, %d)=%d want owner included", capped, owner, got)
+	}
+	if FloorLoToOwner(owner, owner+10) != owner {
+		t.Fatal("owner already in window")
+	}
+}

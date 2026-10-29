@@ -274,8 +274,12 @@ func formatSeatBinding(snap Snapshot, b SeatBinding, headroom float64) string {
 		if snap.MaxSessions > 0 {
 			census = fmt.Sprintf("session census %d of %d", snap.ActiveSessions, snap.MaxSessions)
 		}
-		return fmt.Sprintf("seat-count runaway: provider %s at %d of its %s %d (🎯T566.2 / T325.2; %s)",
+		msg := fmt.Sprintf("seat-count runaway: provider %s at %d of its %s %d (🎯T566.2 / T325.2; %s)",
 			b.Provider, b.Used, cap, b.Limit, census)
+		if names := snap.ProviderLoadSeats[b.Provider]; len(names) > 0 {
+			msg += "; counted: " + strings.Join(names, ", ")
+		}
+		return msg
 	}
 	if snap.MaxSessions > 0 {
 		return fmt.Sprintf("seat-count runaway: %d live seats of %d (🎯T566.2)", snap.ActiveSessions, snap.MaxSessions)

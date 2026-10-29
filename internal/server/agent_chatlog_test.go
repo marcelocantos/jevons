@@ -68,6 +68,10 @@ func (f *sidebarFixture) send(t *testing.T, text string) *httptest.ResponseRecor
 	body, _ := json.Marshal(agentSendRequest{Text: text})
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/agents/"+f.name+"/send", strings.NewReader(string(body)))
+	req.Header.Set("Sec-Fetch-Site", "same-origin") // the cockpit is browser-shaped
+	if f.srv.ownerCockpit != nil {
+		req.AddCookie(f.srv.ownerCockpit.TestCookie())
+	}
 	req.SetPathValue("name", f.name)
 	rr := httptest.NewRecorder()
 	f.srv.handleAgentSend(rr, req)

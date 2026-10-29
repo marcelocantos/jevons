@@ -1,0 +1,99 @@
+{
+ "captured": {
+  "fold_screenshot_utc": "2026-10-29T05:59:58Z",
+  "api_read_utc": "2026-10-29T05:59:59Z",
+  "cockpit_tooltip_utc": "2026-10-29T05:59:48Z",
+  "cockpit_tooltip_usage": "claude 5% 45% 31%; codex 7%; grok 70%; cursor 44% 100%",
+  "widget_measured_fill_pct": {
+   "claude S": 4.9,
+   "claude W": 45.1,
+   "claude F": 31.2,
+   "codex W": 7.1,
+   "grok W": 70.1,
+   "cursor M": 44.2,
+   "cursor A": 0.0
+  },
+  "widget_note": "fills measured from screenshot pixels (track 224px); cursor A empty with red exhausted border"
+ },
+ "at": "2026-10-29T05:59:48.716316Z",
+ "backends": [
+  {
+   "provider": "claude",
+   "status": "available",
+   "windows": [
+    {
+     "name": "session",
+     "model": "",
+     "used_percent": 5,
+     "remaining_percent": 95,
+     "band": "ok"
+    },
+    {
+     "name": "weekly",
+     "model": "",
+     "used_percent": 45,
+     "remaining_percent": 55,
+     "band": "ok"
+    },
+    {
+     "name": "weekly_model",
+     "model": "Fable",
+     "used_percent": 31,
+     "remaining_percent": 69,
+     "band": "ok"
+    }
+   ]
+  },
+  {
+   "provider": "codex",
+   "status": "available",
+   "windows": [
+    {
+     "name": "weekly",
+     "model": "",
+     "used_percent": 7,
+     "remaining_percent": 93,
+     "band": "ok"
+    }
+   ]
+  },
+  {
+   "provider": "grok",
+   "status": "available",
+   "windows": [
+    {
+     "name": "weekly",
+     "model": "",
+     "used_percent": 70,
+     "remaining_percent": 30,
+     "band": "ok"
+    }
+   ]
+  },
+  {
+   "provider": "cursor",
+   "status": "available",
+   "windows": [
+    {
+     "name": "monthly",
+     "model": "",
+     "used_percent": 44.1483870967742,
+     "remaining_percent": 55.8516129032258,
+     "band": "ok"
+    },
+    {
+     "name": "api",
+     "model": "API",
+     "used_percent": 100,
+     "remaining_percent": 0,
+     "band": "exhausted"
+    }
+   ]
+  },
+  {
+   "provider": "bedrock",
+   "status": "unavailable",
+   "windows": []
+  }
+ ]
+}

@@ -73,6 +73,16 @@ func (s *Server) handleSwitchModel(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("forced overseer switch: ending the owner turn first", "to", provider, "model", model)
 		s.interruptOwnerTurn()
 	}
+	s.mu.RLock()
+	validate := s.destinationModelValidator
+	s.mu.RUnlock()
+	if validate != nil {
+		explicitPin := model != ""
+		if err := validate(provider, model, explicitPin); err != nil {
+			writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
+	}
 	got, err := sw.SwitchModel(name, claudia.Provider(provider), model, body.Force)
 	if err != nil {
 		writeJSONError(w, http.StatusConflict, err.Error())
@@ -84,6 +94,19 @@ func (s *Server) handleSwitchModel(w http.ResponseWriter, r *http.Request) {
 		"from_model": got.FromModel, "model": got.Model,
 	})
 	if got.Changed {
+		// 🎯T1301: an in-place switch starts no process, so without this
+		// line the log's last word on the seat's backend was its launch.
+		slog.Info("agent switched", "name", name, "provider", string(got.To),
+			"from_provider", string(got.From), "live", got.Live, "model", got.Model)
 		s.NotifyAgentsChanged()
 	}
+}
+
+// handleOverseerMigrate is POST /api/overseer/migrate (🎯T845 alias).
+func (s *Server) handleOverseerMigrate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	s.handleSwitchModel(w, r)
 }

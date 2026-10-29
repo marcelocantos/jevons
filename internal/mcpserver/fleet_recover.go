@@ -139,6 +139,9 @@ type FleetRecoverObs struct {
 	TurnInFlight bool
 	// HasStoredTerminal: daemon stored finish-report or scout-report (🎯T761).
 	HasStoredTerminal bool
+	// ProviderRequestFailed: seat latched a provider request error that must
+	// not be recovered/repressured until cleared (🎯T845 / 🎯T1052).
+	ProviderRequestFailed bool
 }
 
 // ClassifyFleetRecover decides skip | unstick | rebrief | maxed for one agent.
@@ -159,6 +162,9 @@ func ClassifyFleetRecover(o FleetRecoverObs) (FleetRecoverAction, string) {
 	}
 	if strings.TrimSpace(o.BlockedOnOwner) != "" {
 		return FleetRecoverSkip, IdleSkipBlockedOnOwner
+	}
+	if o.ProviderRequestFailed {
+		return FleetRecoverSkip, IdleSkipProviderRequestFailed
 	}
 	if o.LooksFinished {
 		return FleetRecoverSkip, "achieved_should_reap"
@@ -333,6 +339,8 @@ type FleetRecoverSweepArgs struct {
 	// Production wires Server.seatRoleOf (the role recorded at spawn). Nil
 	// reads the row alone (AgentDef.Role, else its purpose).
 	SeatRole func(d claudia.AgentDef) string
+	// OwnerPaused optional: seat paused from the cockpit (🎯T981). Nil = not paused.
+	OwnerPaused func(name string) bool
 }
 
 // SweepFleetRecover classifies every registered work agent and unsticks /
@@ -380,7 +388,8 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 	} else if proc := args.Reg.Get(d.Name); proc != nil {
 		running = (seatstate.ReadRegistry(args.Reg, d.Name).Alive == seatstate.Yes)
 	}
-	deliberateStop := !running && !d.AutoStart
+	ownerPaused := args.OwnerPaused != nil && args.OwnerPaused(d.Name)
+	deliberateStop := ownerPauseDeliberateStop(running, d.AutoStart, ownerPaused)
 
 	act := IdleActivity{}
 	if args.Activity != nil {
@@ -454,36 +463,37 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		provider, model = st.Provider, st.Model
 	}
 	obs := FleetRecoverObs{
-		Name:              d.Name,
-		Purpose:           purpose,
-		ProcessRunning:    running,
-		DeliberateStop:    deliberateStop,
-		HasOpenMission:    hasMission,
-		DesignGated:       designGated,
-		LooksFinished:     looksFinished,
-		PromptInFlight:    inFlight,
-		SinceProgress:     since,
-		NeverProgressed:   never,
-		Phase:             act.Phase,
-		FailureClass:      act.FailureClass,
-		NeedsRecover:      act.NeedsRecover,
-		TerminalEmpty:     act.TerminalEmpty,
-		StuckTimeout:      args.StuckTimeout,
-		BriefPresent:      briefPresent,
-		RecoverCount:      count,
-		SinceLastRecov:    sinceRecov,
-		EverRecovered:     ever,
-		Backoffs:          DefaultFleetRecoverBackoffs,
-		SpawnClass:        isSpawnClassSeat(d.Name, roles.OfSeat(d.Role, purpose)),
-		SameToolID:        act.ToolCallID,
-		SameToolSince:     sameToolSince,
-		SessionReminted:   args.SessionReminted != nil && args.SessionReminted(d.Name),
-		Model:             strings.TrimSpace(model),
-		RateLimitStrikes:  act.RateLimitStrikes,
-		FallbackModel:     modelladder.Next(provider, model),
-		TurnInFlight:      args.TurnInFlight != nil && args.TurnInFlight(d.Name),
-		HasStoredTerminal: hasStoredTerminal,
-		BlockedOnOwner:    blockedOn,
+		Name:                  d.Name,
+		Purpose:               purpose,
+		ProcessRunning:        running,
+		DeliberateStop:        deliberateStop,
+		HasOpenMission:        hasMission,
+		DesignGated:           designGated,
+		LooksFinished:         looksFinished,
+		PromptInFlight:        inFlight,
+		SinceProgress:         since,
+		NeverProgressed:       never,
+		Phase:                 act.Phase,
+		FailureClass:          act.FailureClass,
+		NeedsRecover:          act.NeedsRecover,
+		TerminalEmpty:         act.TerminalEmpty,
+		StuckTimeout:          args.StuckTimeout,
+		BriefPresent:          briefPresent,
+		RecoverCount:          count,
+		SinceLastRecov:        sinceRecov,
+		EverRecovered:         ever,
+		Backoffs:              DefaultFleetRecoverBackoffs,
+		SpawnClass:            isSpawnClassSeat(d.Name, roles.OfSeat(d.Role, purpose)),
+		SameToolID:            act.ToolCallID,
+		SameToolSince:         sameToolSince,
+		SessionReminted:       args.SessionReminted != nil && args.SessionReminted(d.Name),
+		Model:                 strings.TrimSpace(model),
+		RateLimitStrikes:      act.RateLimitStrikes,
+		FallbackModel:         modelladder.Next(provider, model),
+		TurnInFlight:          args.TurnInFlight != nil && args.TurnInFlight(d.Name),
+		HasStoredTerminal:     hasStoredTerminal,
+		BlockedOnOwner:        blockedOn,
+		ProviderRequestFailed: act.ProviderRequestFailed,
 	}
 	action, reason := ClassifyFleetRecover(obs)
 	kind := ClassifyIdleNudgeKind(briefPresent)
@@ -693,12 +703,19 @@ func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	prev.ToolCallID = ""
 	prev.ToolCallSince = time.Time{}
 	prev.FailureClass = agenterr.ClassNone
-	if !empty {
-		// A sentence is not a rate-limit strike. A typed cause, applied
-		// after this call, is what increments the counter.
-		prev.RateLimitStrikes = 0
-	}
+	// RateLimitStrikes is owned by ApplyTerminalCause. A non-empty sentence
+	// used to zero the counter here, which made consecutive typed
+	// rate_limit terminals (Cursor Connect error resource_exhausted, which
+	// always carries wrapper text) never reach FallbackAfterStrikes (🎯T1230).
 	prev.TerminalEmpty = empty
+	if empty {
+		prev.EmptyStreak++
+	} else {
+		prev.EmptyStreak = 0
+		prev.RecoverAfterEmpty = false
+		prev.EmptyFaultNotified = false
+		prev.EmptyCause = ""
+	}
 	prev.NeedsRecover = empty
 	prev.LastTerminal = truncate(text, 400)
 	if kind == agenterr.TurnSubstantive {
@@ -716,7 +733,7 @@ func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 // substantive sentence can clear a hold before a hard-block cause re-latches.
 func (t *IdleActivityTracker) ApplyTerminalCause(name, cause string) agenterr.Class {
 	class := agenterr.ClassFromCause(cause)
-	if t == nil || name == "" || !class.IsFailure() {
+	if t == nil || name == "" {
 		return class
 	}
 	t.mu.Lock()
@@ -725,9 +742,20 @@ func (t *IdleActivityTracker) ApplyTerminalCause(name, cause string) agenterr.Cl
 		t.by = make(map[string]IdleActivity)
 	}
 	prev := t.by[name]
+	if !class.IsFailure() {
+		// Empty/unknown reason: a sentence is not a strike. Real progress
+		// (SubstantivePulse) clears the consecutive rate_limit counter.
+		if prev.SubstantivePulse {
+			prev.RateLimitStrikes = 0
+		}
+		t.by[name] = prev
+		return class
+	}
 	prev.FailureClass = class
 	if class == agenterr.ClassRateLimit {
 		prev.RateLimitStrikes++
+	} else {
+		prev.RateLimitStrikes = 0
 	}
 	prev.NeedsRecover = prev.TerminalEmpty || fleetRecoverWorthy(class)
 	if agenterr.HardBlock(class, "") {
@@ -851,6 +879,9 @@ func (t *IdleActivityTracker) ClearRecover(name string, at time.Time) {
 	prev.Updated = at
 	prev.NeedsRecover = false
 	prev.TerminalEmpty = false
+	if prev.EmptyStreak > 0 {
+		prev.RecoverAfterEmpty = true
+	}
 	// Keep FailureClass for structured logs on subsequent cycles.
 	t.by[name] = prev
 }
@@ -872,4 +903,30 @@ func (t *IdleActivityTracker) TouchProgress(name string) {
 		prev.Phase = "working"
 	}
 	t.by[name] = prev
+}
+
+// NoteEmptyTurnCause distinguishes a genuinely exhausted output/context from
+// an empty intermediate stop. Codex omp writes stop + toolUse for the same
+// tool step; neither is a silent finished turn. Only length/max_tokens is
+// counted toward the repeated-empty fault (🎯T1238).
+func (t *IdleActivityTracker) NoteEmptyTurnCause(name, stopReason string) {
+	if t == nil || name == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	a := t.by[name]
+	if !a.TerminalEmpty {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(stopReason)) {
+	case "length", "max_tokens":
+		a.EmptyCause = strings.ToLower(strings.TrimSpace(stopReason))
+	default:
+		a.EmptyStreak = 0
+		a.RecoverAfterEmpty = false
+		a.EmptyFaultNotified = false
+		a.EmptyCause = ""
+	}
+	t.by[name] = a
 }

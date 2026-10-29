@@ -64,7 +64,7 @@ func TestT1039FreshMintGrantsDirectBullseyeURL(t *testing.T) {
 		Isolate:    true,
 	}
 	mux := http.NewServeMux()
-	up := mountHTTPUpstreamProxy(mux, cfg, nil, nil, "127.0.0.1", 13705, attach, nil)
+	up := mountHTTPUpstreamProxy(mux, cfg, nil, nil, "127.0.0.1", 13705, attach, nil, nil)
 	if up == nil {
 		t.Fatal("mountHTTPUpstreamProxy returned nil")
 	}

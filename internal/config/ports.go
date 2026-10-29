@@ -12,6 +12,9 @@ import (
 // After 🎯T540.2 this port serves the React cockpit from ui/dist.
 const DevelopmentPort = 13705
 
+// DailyPort is a legacy alias for DevelopmentPort (🎯T572). Speech is development.
+const DailyPort = DevelopmentPort
+
 // VanillaPort is the vanilla web/ supervisor program (🎯T540.4).
 // Reference-only; journeys must not bind or adopt it. The in-process
 // sidecar is opt-in (`-vanilla-port`) so it cannot fight the agent.

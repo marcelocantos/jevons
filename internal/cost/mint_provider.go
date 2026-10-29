@@ -63,6 +63,11 @@ type MintProviderPick struct {
 	TaskType       string
 	// Detail is the knob's owner-visible figure.
 	Detail string
+	// AskedProvider is an explicit pin that T652/T791 dropped before the
+	// omit path chose Provider (🎯T743). Empty when no pin was dropped.
+	AskedProvider string
+	// DropReason names why AskedProvider was dropped (e.g. "ineligible").
+	DropReason string
 }
 
 // PickMintProvider chooses the harness for a mint/resume.
@@ -141,7 +146,8 @@ func (p *MintProviderPick) noteLoser(a MintProviderArgs) {
 
 // Cite is the start-result fragment that names the winning knob,
 // the portfolio task class (🎯T475), and — when they disagree — the
-// leftover file or compiled seed that lost.
+// leftover file or compiled seed that lost. When an explicit pin was
+// dropped under T652/T791, the substitution is named too (🎯T743).
 func (p MintProviderPick) Cite() string {
 	s := "provider_knob: " + p.Knob
 	if d := strings.TrimSpace(p.Detail); d != "" {
@@ -149,6 +155,9 @@ func (p MintProviderPick) Cite() string {
 	}
 	if tt := strings.TrimSpace(p.TaskType); tt != "" {
 		s += ", task_type: " + tt
+	}
+	if sub := p.SubstitutionCite(); sub != "" {
+		s += ", " + sub
 	}
 	if p.LosingKnob == "" || p.LosingProvider == "" {
 		return s
@@ -159,6 +168,39 @@ func (p MintProviderPick) Cite() string {
 	}
 	s += ")"
 	return s
+}
+
+// SubstitutionCite is the owner-visible record of a dropped explicit pin
+// (🎯T743): asked=X minted=Y because X was <reason>. Empty when no pin
+// was dropped or the minted dest equals the asked one.
+func (p MintProviderPick) SubstitutionCite() string {
+	asked := strings.ToLower(strings.TrimSpace(p.AskedProvider))
+	if asked == "" {
+		return ""
+	}
+	minted := strings.ToLower(strings.TrimSpace(p.Provider))
+	reason := strings.TrimSpace(p.DropReason)
+	if reason == "" {
+		reason = "ineligible"
+	}
+	if minted == "" {
+		return fmt.Sprintf("substituted: asked=%s minted=(none) because %s was %s", asked, asked, reason)
+	}
+	if minted == asked {
+		return ""
+	}
+	return fmt.Sprintf("substituted: asked=%s minted=%s because %s was %s", asked, minted, asked, reason)
+}
+
+// WithSubstitution attaches a dropped-pin record without clobbering an
+// existing one (the first drop is the caller's decision).
+func (p MintProviderPick) WithSubstitution(asked, reason string) MintProviderPick {
+	if strings.TrimSpace(p.AskedProvider) != "" {
+		return p
+	}
+	p.AskedProvider = strings.ToLower(strings.TrimSpace(asked))
+	p.DropReason = strings.TrimSpace(reason)
+	return p
 }
 
 // WorkMintPortfolioProvider is what T325.2 would pick for a default

@@ -90,7 +90,7 @@ func (r *rejectedFactRig) close(t *testing.T) {
 // fact rather than passing clean.
 func (r *rejectedFactRig) catchUpRejecting(t *testing.T, calls, incomplete, in, out int64) {
 	t.Helper()
-	err := r.collector.CatchUpReplicas(context.Background())
+	_, err := r.collector.CatchUpReplicas(context.Background())
 	now := time.Date(2026, 10, 19, 1, 2, 0, 0, time.UTC)
 	mon := NewMonitor(&MonitorArgs{Store: r.store, Config: DefaultBudgetConfig,
 		CollectorHealth: r.collector.Health, Now: func() time.Time { return now }})
@@ -125,7 +125,7 @@ func TestReplicaCatchUpRecordsRejectedFactAndContinues(t *testing.T) {
 	deliverUsageRows(t, rig.src,
 		rejectedFactAt(1, "call-A", "started", 0, 0),
 		rejectedFactAt(2, "call-B", "started", 0, 0))
-	if err := rig.collector.CatchUpReplicas(context.Background()); err != nil {
+	if _, err := rig.collector.CatchUpReplicas(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 

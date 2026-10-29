@@ -48,11 +48,12 @@ func main() {
 
 // event is one `go test -json` record. Package-level records carry no Test.
 type event struct {
-	Action  string  `json:"Action"`
-	Package string  `json:"Package"`
-	Test    string  `json:"Test"`
-	Output  string  `json:"Output"`
-	Elapsed float64 `json:"Elapsed"`
+	Action     string  `json:"Action"`
+	Package    string  `json:"Package"`
+	ImportPath string  `json:"ImportPath"`
+	Test       string  `json:"Test"`
+	Output     string  `json:"Output"`
+	Elapsed    float64 `json:"Elapsed"`
 }
 
 // result accumulates a run. Everything the verdict needs is counted here;
@@ -154,6 +155,14 @@ func (r *result) consume(line []byte) {
 		return
 	}
 	switch ev.Action {
+	case "build-output":
+		// 🎯T1308: `go test -json` reports the compiler's own message as
+		// build-output events. Dropping them left a gate's build failure
+		// as a bare "[build failed]" with no reason to read.
+		fmt.Fprint(r.transcript, ev.Output)
+		if line := strings.TrimSpace(ev.Output); line != "" && !strings.HasPrefix(line, "# ") {
+			r.BuildErrors = append(r.BuildErrors, ev.ImportPath+": "+line)
+		}
 	case "output":
 		fmt.Fprint(r.transcript, ev.Output)
 		if strings.Contains(ev.Output, "[build failed]") ||

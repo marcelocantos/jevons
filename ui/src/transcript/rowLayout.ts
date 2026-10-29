@@ -35,11 +35,60 @@ export function rowLayoutHeight(borderBoxHeight: number, opts?: RowLayoutOpts): 
   return h + Math.max(overflow, bottom) + Math.max(above, top);
 }
 
+const ROW_SNAP_EPS_PX = 1 / 128;
+
 /** T351: lock the natural border-box on the pixel grid before chrome. */
 export function snappedNaturalBox(borderBoxHeight: number): number {
   const h = Number(borderBoxHeight);
   if (!Number.isFinite(h) || h <= 0) return 0;
   return Math.ceil(h);
+}
+
+/** Whole-pixel row lock with float fuzz tolerance (vanilla VirtualList). */
+export function snappedRowLockPx(height: number): number {
+  const h = Number(height);
+  if (!Number.isFinite(h) || h <= 0) return 0;
+  const snapped = Math.ceil(h - ROW_SNAP_EPS_PX);
+  return snapped > 0 ? snapped : 0;
+}
+
+/** T482: second snap on the same natural must not write minHeight again. */
+export function nextSnappedMinHeightCss(
+  prevCss: string | null | undefined,
+  naturalPx: number,
+): { lock: number; css: string; changed: boolean } {
+  const lock = snappedRowLockPx(naturalPx);
+  const css = lock > 0 ? `${lock}px` : '';
+  const prev = prevCss == null ? '' : String(prevCss);
+  return { lock, css, changed: css !== prev };
+}
+
+/** T484/T486: natural box only — never a minHeight-held rect. */
+export function alreadySnappedLock(lockPx: number, boxPx: number): boolean {
+  const lock = Number(lockPx);
+  const box = Number(boxPx);
+  if (!Number.isFinite(lock) || lock <= 0) return false;
+  if (!Number.isFinite(box) || box <= 0) return false;
+  return Math.abs(box - lock) < 0.51;
+}
+
+/**
+ * T532: skip the T486 clear-measure cycle when the locked box already matches
+ * the snap and inner content has not shrunk.
+ */
+export function idleSnapShouldSkipClear(
+  lockPx: number,
+  lockedBoxPx: number,
+  innerNowPx: number,
+  innerPrevPx: number,
+): boolean {
+  if (!alreadySnappedLock(lockPx, lockedBoxPx)) return false;
+  const inner = Number(innerNowPx);
+  const prev = Number(innerPrevPx);
+  if (!Number.isFinite(inner) || inner <= 0) return false;
+  if (!Number.isFinite(prev) || prev <= 0) return false;
+  if (prev - inner > 0.51) return false;
+  return true;
 }
 
 export function measureTranscriptRow(el: Element): number {

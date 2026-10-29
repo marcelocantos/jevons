@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // reconcileFirst logs the first pass once, so the running daemon can be
@@ -58,13 +59,16 @@ func (s *Server) Reconcile() {
 		slog.Info("reconcile: fleet health", "report", FormatDeadAgentReport(reps))
 	}
 	s.ReapLostSeats()
-	s.sweepStoodDownSeats() // 🎯T984
+	s.sweepStoodDownSeats()         // 🎯T984
+	s.sweepUnownedWhileAliveSeats() // 🎯T1110
 	s.SweepSeatLoad()
 	s.SweepPostReapCommits()
 	s.sweepBornStuck()
+	s.sweepInert() // 🎯T754
 	s.sweepSeatMCP() // 🎯T797
 
 	s.runFleetRecoverSweep(false)
 	s.TriggerIdlePressureSweep()
 	s.FlushWakeBatches()
+	s.sweepOwnerQuestionSilence(time.Now()) // 🎯T404.2
 }

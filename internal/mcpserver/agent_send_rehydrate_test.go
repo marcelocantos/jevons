@@ -5,12 +5,16 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
 )
+
+var errT756HermeticLaunch = errors.New("hermetic launch seam (T756)")
 
 // 🎯T409: ensureAgentProcess must perform the same lost-session recovery
 // agent_start does (🎯T313), because THIS is the path the impatience
@@ -26,16 +30,33 @@ import (
 // Missing JSONL is not canonical generation loss. The send path must
 // return the launch error and keep the session id. It must not mint a
 // replacement on the strength of a missing vendor file.
+//
+// 🎯T756: the launch seam is stubbed (as in TestEnsureAgentProcessRemintsCursorResumeDenial)
+// so this path cannot mint a live Claude seat on the production claudia socket.
+// A mutation that bypasses SetLaunchers and hits the real Start path fails
+// here because the error will not carry errT756HermeticLaunch.
 func TestEnsureAgentProcessRotatesPhantomSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // Claude JSONL under HOME never sees the lost id.
+
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	reg.SetDirect(true)
+	var starts int
+	reg.SetLaunchers(&claudia.RegistryLaunchers{
+		Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+			starts++
+			return nil, errT756HermeticLaunch
+		},
+	})
+
 	s := New(t.TempDir(), nil, nil)
 	s.SetRegistry(reg)
+	t.Cleanup(reg.StopAll)
 
 	// A row that claims a resumable conversation which does not exist.
-	phantom := "jv-t372-auto"
+	phantom := "jv-t756-phantom"
 	lost := "22fb41fb-29cc-4b70-8b83-8290d757c84f"
 	if err := reg.Register(claudia.AgentDef{
 		Name:         phantom,
@@ -48,10 +69,15 @@ func TestEnsureAgentProcessRotatesPhantomSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	defer reg.Stop(phantom)
 	_, _, err = s.ensureAgentProcess(phantom)
 	if err == nil {
 		t.Fatal("phantom resume returned success; a missing vendor file must not launch a replacement")
+	}
+	if starts != 1 {
+		t.Fatalf("starts=%d, want exactly one stub launch (no live Claude mint)", starts)
+	}
+	if !strings.Contains(err.Error(), errT756HermeticLaunch.Error()) {
+		t.Fatalf("launch did not use hermetic seam: %v", err)
 	}
 
 	def := reg.Def(phantom)

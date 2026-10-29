@@ -2,7 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { installErrorReport, MAX_REPORTS_PER_PAGE, type ErrorReport } from './errorReport';
+import {
+  BENIGN_RESIZE_OBSERVER_LOOP,
+  installErrorReport,
+  isBenignWindowErrorMessage,
+  MAX_REPORTS_PER_PAGE,
+  type ErrorReport,
+} from './errorReport';
 
 const ASSET = 'http://127.0.0.1:13705/assets/index-abc123.js';
 
@@ -83,6 +89,17 @@ describe('🎯T505 cockpit error sensor', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('does not journal the benign ResizeObserver loop browser quirk (🎯T1194)', () => {
+    const posts: ErrorReport[] = [];
+    uninstall = installErrorReport(win, (r) => posts.push(r), ASSET);
+    win.dispatchEvent(
+      new ErrorEvent('error', { message: BENIGN_RESIZE_OBSERVER_LOOP, filename: ASSET, lineno: 0, colno: 0 }),
+    );
+    expect(posts).toHaveLength(0);
+    expect(isBenignWindowErrorMessage(BENIGN_RESIZE_OBSERVER_LOOP)).toBe(true);
+    expect(isBenignWindowErrorMessage('ReferenceError: boom')).toBe(false);
   });
 
   it('stops reporting once uninstalled', () => {

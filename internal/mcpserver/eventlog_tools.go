@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/spawnorder"
 )
 
 // EventLogTailFunc returns newest-first events and the journal path.
@@ -55,12 +57,21 @@ func (s *Server) LogEvent(component, decision string, fields map[string]any) {
 	}
 	if s.eventLogger != nil {
 		s.eventLogger(component, decision, fields)
-		return
+	} else {
+		s.mu.Lock()
+		j := s.eventJournal
+		s.mu.Unlock()
+		_ = eventlog.Log(j, component, decision, fields)
 	}
-	s.mu.Lock()
-	j := s.eventJournal
-	s.mu.Unlock()
-	_ = eventlog.Log(j, component, decision, fields)
+	if (component == compAgentLifecycle && decision == "start") ||
+		(component == spawnorder.JournalComponent && decision == spawnorder.JournalStart) {
+		// Invalidate after the journal write, including uncorrelated starts.
+		// A scan already in flight must not publish pre-event evidence as fresh.
+		s.spawnOrderMu.Lock()
+		s.spawnOrderRevision++
+		s.spawnOrderReadAt = time.Time{}
+		s.spawnOrderMu.Unlock()
+	}
 }
 
 func (s *Server) registerEventLogTools() {

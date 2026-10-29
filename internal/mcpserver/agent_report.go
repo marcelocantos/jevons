@@ -105,25 +105,7 @@ func (s *Server) storeAgentReport(agentName, text string) agentreport.Handle {
 	if qerr != nil {
 		slog.Warn("owner question intake rejected", "agent", agentName, "err", qerr)
 	} else if ok {
-		shouldNotify := true
-		if s.ownerQuestionsDir != "" {
-			if err := s.recordOwnerQuestionWithReview(q, reviewEvent); err != nil {
-				slog.Error("owner question view intake failed", "agent", agentName, "err", err)
-				shouldNotify = false
-			} else {
-				open, err := ownerquestionview.New(s.ownerQuestionsDir).OpenVersion(ownerquestionview.Identity{Repo: q.Identity.Repo, Target: q.Identity.Target, ID: q.Identity.ID, Version: q.Identity.Version})
-				if err != nil {
-					slog.Error("owner question view read failed", "err", err)
-				}
-				shouldNotify = err == nil && open
-			}
-		}
-		if shouldNotify {
-			key := q.Identity.Repo + "#" + q.Identity.Target + "#" + q.Identity.ID
-			if _, err := ownerquestions.New(dir).Observe(ownerquestions.Question{Key: key, Text: q.NoticeBody(), Link: q.Link}, now); err != nil {
-				slog.Error("owner question spool failed (retry retained)", "agent", agentName, "key", key, "err", err)
-			}
-		}
+		s.emitOwnerQuestionNotification(q, reviewEvent)
 	}
 	// A valid later finish-report from the same reporter that no longer
 	// requests this review moots its exact open version. Other seats cannot
@@ -133,7 +115,18 @@ func (s *Server) storeAgentReport(agentName, text string) agentreport.Handle {
 	}
 	// 🎯T938: the seat's newest word supersedes any blocker clear.
 	s.forgetSeatBlockerClear(agentName)
-	return rec.Handle()
+	handle := rec.Handle()
+	// 🎯T1186: reap from the store once the turn is not in flight. Mid-turn
+	// store defers to noteTurnEnded / maybeReapDoneWorkAgent (🎯T1190).
+	if envelope.ClassifyDone(text) == envelope.DoneYes && s.flightState(agentName) != FlightInFlight {
+		s.maybeReapStoredDoneWorkAgent(agentName)
+	}
+	if s.registry != nil {
+		if def := s.registry.Def(agentName); def != nil && purposeIsProductOwner(s.seatRoleOf(*def)) {
+			s.closePOOwnerMissionIfTerminal(agentName, text)
+		}
+	}
+	return handle
 }
 
 // recordTerminalNotice extracts a structured 🎯T254.4 terminal-outcome notice

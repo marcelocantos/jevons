@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/roles"
 )
 
 // 🎯T425 — the brief that carries role doctrine names its own reader.
@@ -100,6 +101,15 @@ func t425Fixture(t *testing.T, defs ...claudia.AgentDef) (*Server, *t425Sender) 
 // with the identity header and all five registry fields are present with a
 // value. Returned as a reason so the control arm can report WHICH part the
 // pre-fix message lacked rather than merely that it lacked something.
+func t425BuiltinRoleBody(t *testing.T, role string) string {
+	t.Helper()
+	d, err := roles.Builtin(role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d.Body
+}
+
 func namesItsRecipient(msg string, want AgentIdentity) string {
 	body := strings.TrimSpace(msg)
 	nl := strings.IndexByte(body, '\n')
@@ -208,17 +218,20 @@ func TestT425SpawnOpeningPromptNamesItsRecipient(t *testing.T) {
 				return
 			}
 
-			// Acceptance 4: the role rules are addressed to this reader, not
-			// tabulated for it to self-match against. bullseye-po carries
-			// purpose=work in the registry, so a header that trusted Purpose
-			// would hand it the work-agent paragraph — the same wrong answer
-			// it gave itself.
-			if !strings.Contains(msg, "You are "+name+", a product owner") {
-				t.Fatalf("role doctrine is not addressed to the recipient:\n%s", msg)
+			// Acceptance 4 (🎯T511): role rules come from the role file injected
+			// after the standing brief, not duplicated in the identity header.
+			if !strings.Contains(msg, roles.DoctrineMarker) {
+				t.Fatalf("spawn prompt missing role doctrine injection:\n%s", msg)
+			}
+			if strings.Contains(msg, "You are "+name+", a product owner") {
+				t.Fatalf("role doctrine duplicated in identity header (🎯T511):\n%s", msg)
+			}
+			if !strings.Contains(msg, "ROLE DOCTRINE:") {
+				t.Fatalf("identity header missing role file pointer:\n%s", msg)
 			}
 			for _, rule := range []string{"🎯T125", "🎯T129", "🎯T155", "🎯T193", "🎯T325.1"} {
 				if !strings.Contains(msg, rule) {
-					t.Fatalf("PO header omits %s:\n%s", rule, msg)
+					t.Fatalf("PO role doctrine omits %s:\n%s", rule, msg)
 				}
 			}
 			// The header precedes the brief: a reader who stops early still
@@ -237,9 +250,10 @@ func TestT425FirstSendInjectionNamesItsRecipient(t *testing.T) {
 	def := claudia.AgentDef{Name: name, Parent: "jevons-po", Purpose: claudia.PurposeWork, TargetID: "T425"}
 	s, sender := t425Fixture(t, def)
 
-	// The composition handleAgentSend performs on first send.
+	// The composition handleAgentSend performs on first send (with role body).
+	roleBody := t425BuiltinRoleBody(t, roles.Worker)
 	s.mu.Lock()
-	text, injected := EnsureFleetBrief(s.fleetBriefed, name, "status?")
+	text, injected := EnsureFleetBriefWithRole(s.fleetBriefed, name, "status?", roleBody)
 	s.mu.Unlock()
 	if !injected {
 		t.Fatal("first send did not inject the standing brief")
@@ -259,11 +273,11 @@ func TestT425FirstSendInjectionNamesItsRecipient(t *testing.T) {
 	// A work agent must be told that 🎯T125 is NOT its rule: the inverse error
 	// (a worker refusing to implement because the brief said owners don't) is
 	// the same defect read the other way.
-	if !strings.Contains(got[0], "You are "+name+", a work agent") {
-		t.Fatalf("work agent not addressed as one:\n%s", got[0])
+	if !strings.Contains(got[0], roles.DoctrineMarker) {
+		t.Fatalf("first send missing role doctrine injection:\n%s", got[0])
 	}
-	if !strings.Contains(got[0], "🎯T125 is NOT yours") {
-		t.Fatalf("work agent not told which rules are not its own:\n%s", got[0])
+	if !strings.Contains(got[0], "🎯T125 is **not** yours") && !strings.Contains(got[0], "🎯T125 is NOT yours") {
+		t.Fatalf("work agent role file not injected:\n%s", got[0])
 	}
 }
 
@@ -343,7 +357,12 @@ func TestT425HeaderIsReadFromTheRegistryAtSendTime(t *testing.T) {
 // Acceptance 5, second clause: a row with no parent and no target renders
 // coherently rather than emitting a label with nothing after it.
 func TestT425SparseRowRendersCoherently(t *testing.T) {
-	h := FormatIdentityHeader(AgentIdentity{Name: "jevons", Role: RoleOverseer, Purpose: claudia.PurposeOverseer})
+	h := FormatIdentityHeader(AgentIdentity{
+		Name:    "jevons",
+		Role:    RoleOverseer,
+		Purpose: claudia.PurposeOverseer,
+		RoleDoc: "internal/roles/builtin/overseer.md",
+	})
 	if h == "" {
 		t.Fatal("no header for a valid sparse row")
 	}
@@ -361,8 +380,8 @@ func TestT425SparseRowRendersCoherently(t *testing.T) {
 	if strings.Contains(h, "- WORKDIR:") {
 		t.Fatalf("workdir label emitted with no workdir:\n%s", h)
 	}
-	if !strings.Contains(h, "You are jevons, the overseer") {
-		t.Fatalf("overseer not addressed as one:\n%s", h)
+	if !strings.Contains(h, "ROLE DOCTRINE: internal/roles/builtin/overseer.md") {
+		t.Fatalf("overseer header missing role file pointer:\n%s", h)
 	}
 
 	// A name is the one field the header cannot do without: it is the answer
@@ -373,13 +392,15 @@ func TestT425SparseRowRendersCoherently(t *testing.T) {
 	}
 }
 
-// 🎯T692: identity header (brief-inject path) binds overseer, PO, and
-// worker to live-list-then-fact narration.
-func TestIdentityHeaderCarriesT692LifecycleNarration(t *testing.T) {
-	for _, role := range []string{RoleOverseer, RoleProductOwner, RoleWork} {
-		h := FormatIdentityHeader(AgentIdentity{Name: "seat", Role: role})
-		if !strings.Contains(h, "🎯T692") {
-			t.Errorf("role %s header missing 🎯T692:\n%s", role, h)
+// 🎯T511: T692 lifecycle narration lives in role files, not the identity header.
+func TestT511RoleFilesCarryT692LifecycleNarration(t *testing.T) {
+	for _, role := range []string{roles.Overseer, roles.ProductOwner, roles.Worker} {
+		d, err := roles.Builtin(role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(d.Body, "🎯T692") {
+			t.Errorf("role %s file missing 🎯T692:\n%s", role, d.Body)
 		}
 	}
 }

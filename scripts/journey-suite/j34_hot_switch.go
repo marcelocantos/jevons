@@ -22,10 +22,10 @@ import (
 // A live seat on a hot provider must follow Claudia's placement verdict once,
 // switching in place (claudia 🎯T195): same session, same conversation, and
 // it stays on the chosen destination after the daemon restarts. The worker
-// starts on Claude, which the fixture makes hot. The destination is the
+// starts on Claude, which the T234 override makes hot. The destination is the
 // isolate's own subscription provider (Grok or Codex), which stays healthy
 // so the overseer does not move.
-// Run it on whichever of the two has real allowance left: the fixture only
+// Run it on whichever of the two has real allowance left: the override only
 // shapes Claudia's placement, and the switched seat's turns spend the
 // destination plan for real.
 func (s *suite) jHotProviderSwitch() error {
@@ -74,18 +74,12 @@ func (s *suite) hotProviderSwitchWithBroker() error {
 		return fmt.Errorf("worker did not start on Claude: %+v", source)
 	}
 
-	// The isolate already reads this file on each placement check. Only
-	// Claude becomes hot; the isolate provider remains an eligible destination for this
-	// worker and the healthy overseer does not need to move.
-	hot := planFixtureSnapshot("claude", 0, 100)
-	green := planFixtureSnapshot(string(dest), defaultPlanRemaining, defaultPlanUsed)
-	hot.Backends = append(hot.Backends, green.Backends...)
-	raw, err := json.Marshal(hot)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(s.stateDir, planFixtureFile), raw, 0o600); err != nil {
-		return err
+	// Only Claude becomes hot; the isolate provider remains an eligible
+	// destination for this worker and the healthy overseer does not need
+	// to move. Seeded through Claudia T234 — not a fixture file the
+	// production daemon refuses.
+	if err := s.pushAndAwait(hotSwitchOverrideReadings(string(dest))); err != nil {
+		return fmt.Errorf("seed hot-switch usage: %w", err)
 	}
 	resp, err := http.Get("http://" + s.host + "/api/plan-usage/decisions")
 	if err != nil {
@@ -104,8 +98,23 @@ func (s *suite) hotProviderSwitchWithBroker() error {
 			break
 		}
 	}
-	if choice == nil || choice.Author != claudia.DecisionAuthor || choice.Action != planusage.SeatMigrate ||
-		seatprovider.Resolve(claudia.Provider(choice.To)).Plan.AsProvider() != dest || choice.Reason == "" {
+	// The cockpit's periodic sweep can carry the move out between the
+	// readings landing and this read (gate 72e58bfb, 2026-10-29: the worker
+	// read From:codex, Action:stay — already on the destination). Then the
+	// evidence is the move itself: the daemon's own policy-switch line for
+	// this seat and the same session on the destination plan.
+	movedAlready := false
+	if choice != nil && choice.Action != planusage.SeatMigrate &&
+		seatprovider.Resolve(claudia.Provider(choice.From)).Plan.AsProvider() == dest {
+		if now, err := bounceRegistrySnapshot(s.agentsPath()); err == nil && switchedInPlace(source, now[id], dest) == nil {
+			if logs, err := os.ReadFile(s.logPath); err == nil &&
+				strings.Contains(string(logs), `msg="plan policy switched" name=`+id+" ") {
+				movedAlready = true
+			}
+		}
+	}
+	if !movedAlready && (choice == nil || choice.Author != claudia.DecisionAuthor || choice.Action != planusage.SeatMigrate ||
+		seatprovider.Resolve(claudia.Provider(choice.To)).Plan.AsProvider() != dest || choice.Reason == "") {
 		return fmt.Errorf("Claudia did not explain an eligible move: choice=%+v decisions=%+v", choice, decisions)
 	}
 	resp, err = http.Post("http://"+s.host+"/api/plan-usage/sweep", "application/json", bytes.NewReader([]byte("{}")))
@@ -118,22 +127,18 @@ func (s *suite) hotProviderSwitchWithBroker() error {
 	if resp.StatusCode != http.StatusOK || decodeErr != nil {
 		return fmt.Errorf("placement sweep: HTTP %d: %v", resp.StatusCode, decodeErr)
 	}
-	moved := false
-	for _, a := range actions {
-		if a.Name == id && a.Execution == "switched" && a.Author == claudia.DecisionAuthor {
-			moved = true
-		}
-	}
-	if !moved {
-		return fmt.Errorf("hot worker did not switch: %+v", actions)
-	}
+	// The cockpit's periodic SweepPlanPolicy can win the planSweepMu
+	// race and execute the move before this POST returns the action
+	// list (live 2026-10-28: sweep HTTP [] while the isolate log
+	// already had plan policy switched / fleet_switch.switched).
+	// The registry is the product outcome.
 	after, err := bounceRegistrySnapshot(s.agentsPath())
 	if err != nil {
 		return err
 	}
 	destination := after[id]
 	if err := switchedInPlace(source, destination, dest); err != nil {
-		return fmt.Errorf("hot worker: %w", err)
+		return fmt.Errorf("hot worker did not switch: sweep=%+v: %w", actions, err)
 	}
 	probe := "What is the mission codeword? Reply with the codeword only."
 	// A probe sent while a turn is open is steered into it and answered as

@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
@@ -178,12 +179,18 @@ func (s *Server) setBirthStoreDir(stateDir string) {
 	defer s.mu.Unlock()
 	if stateDir == "" {
 		s.birthStore = newBirthLedger("")
+		s.startFlightStore = newStartFlightLedger("")
 		return
 	}
 	s.birthStore = newBirthLedger(filepath.Join(stateDir, bornStuckFileName))
 	if s.birthStore.loadErr != nil {
 		slog.Error("born-stuck ledger unreadable; notices will not be recorded until it is repaired",
 			"path", s.birthStore.path, "err", s.birthStore.loadErr)
+	}
+	s.startFlightStore = newStartFlightLedger(filepath.Join(stateDir, startFlightsFile))
+	if s.startFlightStore.loadErr != nil {
+		slog.Error("start-flight ledger unreadable; bounce-interrupted mint cleanup disabled",
+			"path", s.startFlightStore.path, "err", s.startFlightStore.loadErr)
 	}
 }
 
@@ -247,6 +254,9 @@ func (s *Server) transcriptRoots() discovery.Roots {
 // leak into what the cockpit believes about a name it never saw.
 func (s *Server) seatAlive(name string) bool {
 	if s == nil {
+		return false
+	}
+	if fleet.GrantHeldRelaunchBlocked(name) {
 		return false
 	}
 	st, _ := s.Seats().Get(name)
@@ -424,6 +434,13 @@ func (s *Server) sweepBornStuck() {
 		}
 		if !s.seatAlive(d.Name) {
 			continue
+		}
+		if s.seatState(d.Name).BornStuck == seatstate.Yes {
+			key := bornStuckNoticeKey(d.Name, d.SessionID)
+			if s.noticeAlreadySubmitted(key) {
+				s.reapBornStuckSeat(d)
+				continue
+			}
 		}
 		s.notifyBornStuckIfDue(d, now)
 	}

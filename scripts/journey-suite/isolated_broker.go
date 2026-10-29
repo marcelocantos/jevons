@@ -17,6 +17,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/omp"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
@@ -31,15 +32,13 @@ type isolatedBroker struct {
 	socket string
 }
 
+// Plan ids (codex, claude, grok) and launch ids (openai-codex, anthropic,
+// xai-oauth) both reach the Oh My Pi sidecar. A -provider codex isolate
+// without a broker cannot read the Keychain (omp: keychain was not read
+// at startup) and the overseer never starts — the 2026-10-28 J20/J34
+// live-oracle outage on 🎯T1234.
 func journeyNeedsBroker(provider claudia.Provider) bool {
-	switch provider {
-	case claudia.ProviderGrok, claudia.ProviderCursor,
-		claudia.Provider(omp.Anthropic), claudia.Provider(omp.OpenAICodex),
-		claudia.Provider(omp.XAIOAuth):
-		return true
-	default:
-		return false
-	}
+	return seatprovider.Resolve(provider).Sidecar
 }
 
 func (s *suite) withIsolatedBroker(run func(*suite) error) (result error) {
@@ -72,6 +71,10 @@ func (s *suite) withIsolatedBroker(run func(*suite) error) (result error) {
 	}
 	configText = strings.Replace(configText, oldPort, fmt.Sprintf("port: %d\n", port), 1)
 	if err := os.WriteFile(filepath.Join(state, "config.yaml"), []byte(configText), 0o600); err != nil {
+		_ = os.RemoveAll(state)
+		return err
+	}
+	if err := quietAmbient(state); err != nil {
 		_ = os.RemoveAll(state)
 		return err
 	}
@@ -117,8 +120,78 @@ func (s *suite) withIsolatedBroker(run func(*suite) error) (result error) {
 	return run(child)
 }
 
+// darwinUnixPathMax is Darwin's sun_path bound. The isolated broker's
+// control socket is <state>/broker.sock.control; a TMPDIR under
+// /var/folders/... overflows it (bind: invalid argument).
+const darwinUnixPathMax = 104
+
+// isolatedBrokerParent is a short, non-symlink directory. /tmp is a
+// symlink to /private/tmp on macOS, and Claudia T234 refuses any
+// symlink ancestor of --state-dir, so the path we pass must already
+// be the real one.
+func isolatedBrokerParent() (string, error) {
+	for _, cand := range []string{"/private/tmp", "/tmp"} {
+		st, err := os.Lstat(cand)
+		if err != nil || !st.IsDir() {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(cand)
+		if err != nil {
+			continue
+		}
+		if symlinkInAncestry(real) {
+			continue
+		}
+		return real, nil
+	}
+	return "", fmt.Errorf("no short non-symlink temp dir for isolated broker")
+}
+
+func symlinkInAncestry(dir string) bool {
+	for p := dir; ; p = filepath.Dir(p) {
+		st, err := os.Lstat(p)
+		if err != nil {
+			return true
+		}
+		if st.Mode()&os.ModeSymlink != 0 {
+			return true
+		}
+		if p == filepath.Dir(p) {
+			return false
+		}
+	}
+}
+
+// newIsolatedBrokerRoot is a 0700 directory whose ancestor chain has no
+// symlink and whose control-socket path fits Darwin's unix bound.
+func newIsolatedBrokerRoot() (string, error) {
+	parent, err := isolatedBrokerParent()
+	if err != nil {
+		return "", err
+	}
+	root, err := os.MkdirTemp(parent, "jv-brk-")
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		_ = os.RemoveAll(root)
+		return "", err
+	}
+	if err := os.Chmod(real, 0o700); err != nil {
+		_ = os.RemoveAll(real)
+		return "", err
+	}
+	control := isolatedBrokerSocketPath(real) + ".control"
+	if len(control) >= darwinUnixPathMax {
+		_ = os.RemoveAll(real)
+		return "", fmt.Errorf("isolated broker control socket path is %d bytes (max %d): %s", len(control), darwinUnixPathMax-1, control)
+	}
+	return real, nil
+}
+
 func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
-	root, err := os.MkdirTemp("/tmp", "jevons-broker-")
+	root, err := newIsolatedBrokerRoot()
 	if err != nil {
 		return nil, err
 	}
@@ -132,22 +205,32 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 	bin := filepath.Join(s.stateDir, "claudia-broker")
 	buildCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	moduleRoot, err := jevonsRepoRoot()
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
 	build := exec.CommandContext(buildCtx, "go", "build", "-o", bin, "github.com/marcelocantos/claudia/cmd/claudia")
+	build.Dir = moduleRoot
+	build.Env = append(os.Environ(), "GOWORK=off")
 	output, err := build.CombinedOutput()
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("build isolated Claudia broker: %w: %s", err, trim(string(output), 500))
+	}
+	if err := prepareIsolatedBrokerState(root); err != nil {
+		cleanup()
+		return nil, err
 	}
 	logFile, err := os.Create(filepath.Join(s.stateDir, "claudia-broker.log"))
 	if err != nil {
 		cleanup()
 		return nil, err
 	}
-	socket := filepath.Join(root, "broker.sock")
-	// The broker creates and owns its control file (🎯T1074.9). The
-	// isolate daemon keeps its own control-replica.db in its own state
-	// directory and links to claudia.ControlSocketPath(socket); nothing
-	// here opens, creates or links the broker's file.
+	socket := isolatedBrokerSocketPath(root)
+	// Topology B (claudia 🎯T234): socket and MCP seed live inside the
+	// private 0700 --state-dir so --usage-fixture-override can host live
+	// seats. The broker still owns its control file (🎯T1074.9).
 	cmd := isolatedBrokerCommand(os.Environ(), bin, root, s.stateDir, sidecarScript)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
@@ -170,6 +253,12 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		conn, err := net.DialTimeout("unix", socket, 200*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
+			if err := b.waitOverrideReady(deadline); err != nil {
+				return nil, errors.Join(err, b.close())
+			}
+			if err := b.pushUsage(healthyOverrideReadings()); err != nil {
+				return nil, errors.Join(fmt.Errorf("seed isolated usage override: %w", err), b.close())
+			}
 			return b, nil
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -304,11 +393,13 @@ func snapshotControlFile(root, dest string) error {
 // isolatedBrokerCommand configures the separately launched broker, including
 // consumer settings that the Jevons client process cannot supply afterwards.
 func isolatedBrokerCommand(base []string, bin, root, stateDir, sidecarScript string) *exec.Cmd {
-	socket := filepath.Join(root, "broker.sock")
-	cmd := exec.Command(bin, "broker", "serve", "-state-dir", filepath.Join(root, "state"),
+	socket := isolatedBrokerSocketPath(root)
+	state := isolatedBrokerStateDir(root)
+	cmd := exec.Command(bin, "broker", "serve", "-state-dir", state,
 		"-socket", socket, "-no-resume", "-restart-nudge", "-",
-		"-mcp-seed-dir", stateDir, "-mcp-consumer-prefix", "jevonsmcp")
-	cmd.Env = isolatedBrokerEnv(base, socket, filepath.Join(root, "omp.sock"), sidecarScript, root, filepath.Join(stateDir, "spool"))
+		"-mcp-seed-dir", isolatedBrokerMCPSeed(root), "-mcp-consumer-prefix", "jevonsmcp",
+		usageOverrideFlag)
+	cmd.Env = isolatedBrokerEnv(base, socket, filepath.Join(state, "omp.sock"), sidecarScript, root, filepath.Join(stateDir, "spool"))
 	return cmd
 }
 
@@ -328,6 +419,8 @@ func isolatedBrokerEnv(base []string, socket, ompSocket, sidecarScript, stateHom
 	strip := []string{
 		"CLAUDIA_BROKER_SOCKET=", "CLAUDIA_NO_BROKER=", "CLAUDIA_OMP_SOCKET=",
 		"CLAUDIA_OMP_SERVER=", "JEVONS_SPOOL_DIR=", "CLAUDIA_OMP_SPOOL_DIR=", "XDG_STATE_HOME=", "CLAUDIA_OMP_NO_REFRESH=",
+		"CLAUDIA_CONSUMER_STATE_DIR=",
+		"SUPERVISOR_ENABLED=", "SUPERVISOR_SERVER_URL=", "SUPERVISOR_PROCESS_NAME=",
 	}
 	env := make([]string, 0, len(base)+6)
 	for _, entry := range base {
@@ -378,7 +471,7 @@ func (b *isolatedBroker) close() error {
 	if body, err := os.ReadFile(filepath.Join(b.root, "omp-sidecar.log")); err == nil {
 		stopped = errors.Join(stopped, os.WriteFile(filepath.Join(filepath.Dir(b.log.Name()), "omp-sidecar.log"), body, 0o600))
 	}
-	stopped = errors.Join(stopped, stopIsolatedSidecar(filepath.Join(b.root, "omp.sock"), sidecarExitWait))
+	stopped = errors.Join(stopped, stopIsolatedSidecar(filepath.Join(filepath.Dir(b.socket), "omp.sock"), sidecarExitWait))
 	killPrivateClaudiaTmux(b.root)
 	stopped = errors.Join(stopped, b.log.Close(), os.RemoveAll(b.root))
 	return stopped

@@ -79,6 +79,33 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .dot.on { background: var(--green); box-shadow: 0 0 6px var(--dot-on-glow); }
 .dot.off { background: var(--red); box-shadow: 0 0 6px var(--dot-off-glow); }
 
+/* 🎯T966: fleet-wide pause — immediately right of the connection dot. */
+#fleet-pause-btn.fleet-pause-btn {
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-high);
+  color: var(--text-dim);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+#fleet-pause-btn.fleet-pause-btn:hover,
+#fleet-pause-btn.fleet-pause-btn:focus-visible {
+  color: var(--text);
+  outline: 2px solid var(--accent);
+}
+#fleet-pause-btn.fleet-pause-btn-active { color: var(--amber); }
+
+/* 🎯T966: paused fleet composer — faint pink fill, red border, Paused... hint. */
+.composer-field.fleet-paused-composer textarea {
+  background: color-mix(in srgb, var(--red) 8%, var(--surface));
+  border-color: var(--red);
+}
+
+
 #main { flex: 1; display: flex; overflow: hidden; }
 
 /* Chat pane — messages flex:1 min-height:0 so composer growth shrinks the
@@ -694,7 +721,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    Overlay is out of flow so it does not perturb scroll-position math. */
 .history-sentinel { height: 1px; margin: 0; pointer-events: none; }
 .history-page-status { position: sticky; top: 0; z-index: 2; box-sizing: border-box; height: 27px; margin-bottom: -27px; padding: 5px 8px; background: var(--surface-raised); color: var(--text-muted); font-size: 12px; }
-.history-page-status button { margin-left: 8px; color: var(--text); cursor: pointer; }
+.history-page-status button { margin: 0 0 0 8px; padding: 0; border: none; background: transparent; color: var(--accent); font: inherit; cursor: pointer; }
+.history-page-status button:first-child { margin-left: 0; }
+.history-page-status button:hover { text-decoration: underline; }
 .history-loading { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 3px 12px; font-size: 11px; color: var(--text-dim); z-index: 5; pointer-events: none; }
@@ -1047,6 +1076,11 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 #plan-ticker .plan-group.plan-unavail { opacity: 0.55; }
 #plan-ticker .plan-group.plan-stale { opacity: 0.7; }
+/* Last-success quantities remain visible, but never look like current capacity. */
+#plan-ticker .plan-group.plan-stale .plan-bar-fill,
+#plan-ticker .plan-group.plan-unavail .plan-bar-fill { background: var(--text-muted); }
+#plan-ticker .plan-group.plan-stale .plan-bar,
+#plan-ticker .plan-group.plan-unavail .plan-bar { box-shadow: none; }
 #plan-ticker .plan-chip { display: inline-flex; align-items: center; gap: 4px; }
 /* The sign-in menu sits just left of the plan bars and exists only while a
    backend is known to be signed out, so its colour is meant to catch the eye.
@@ -1179,10 +1213,9 @@ body.rhs-resizing-row { cursor: row-resize; }
 #rhs-bottom-tabs button.active {
   color: var(--text); border-bottom-color: var(--accent);
 }
-#rhs-bottom-tabs .rhs-tab-meta {
-  margin-left: auto; font-size: 10px; color: var(--text-muted);
-  font-family: var(--mono); padding-right: 8px; max-width: 40%;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+#rhs-bottom-tabs .rhs-tab-count {
+  margin-left: 5px; font-size: 10px; color: var(--text-muted);
+  font-family: var(--mono); font-weight: normal;
 }
 .rhs-tab-pane { display: none; flex-direction: column; flex: 1; min-height: 0; }
 .rhs-tab-pane.active { display: flex; }
@@ -1419,27 +1452,31 @@ body.rhs-resizing-row { cursor: row-resize; }
 #frontier-table .ft-play-btn.ft-stop-btn {
   color: var(--amber, #d4a017);
 }
-/* 🎯T980: acknowledged by the PO; red arrow when no plan can seat it yet
-   (click force-seats; hover shows stop to its left without moving the row). */
+/* 🎯T980: acknowledged by the PO; ⏸ pause when no plan can seat it yet
+   (hover: red force ▶ to the left, stop over pause). */
 #frontier-table .ft-play-wrap {
+  position: relative; display: inline-flex; align-items: center;
+}
+#frontier-table .ft-wait-pause-stack {
   position: relative; display: inline-flex; align-items: center;
 }
 #frontier-table .ft-play-btn.ft-acked-btn {
   color: var(--accent); opacity: 1; cursor: default;
 }
-#frontier-table .ft-play-btn.ft-waiting-btn,
-#frontier-table .ft-play-btn.ft-waiting-btn:hover {
-  color: var(--red);
+#frontier-table .ft-play-btn.ft-wait-pause-btn {
+  color: var(--text); opacity: 0.85; cursor: default;
 }
-/* 🎯T990: a seat was minted for the row and died before its brief landed.
- * Same red arrow (click force-seats again), outlined so it reads as a
- * failure to look at, not merely a plan that is full. */
+#frontier-table .ft-play-btn.ft-wait-force {
+  color: var(--red);
+  margin-right: 2px;
+}
+#frontier-table .ft-play-btn.ft-wait-stop-over {
+  position: absolute; inset: 0; z-index: 1;
+  background: var(--surface-raised);
+}
+/* 🎯T990: seat minted then died — same pause chrome, outlined failure. */
 #frontier-table .ft-play-btn.ft-seat-failed-btn {
   outline: 1px solid var(--red); outline-offset: -1px; border-radius: 3px;
-}
-#frontier-table .ft-play-btn.ft-wait-stop {
-  position: absolute; right: 100%; top: 0;
-  background: var(--surface-raised);
 }
 /* 🎯T278: immediate kickoff-submitted spinner (before PO reply / engage) */
 #frontier-table .ft-play-btn.ft-submitted-btn {
@@ -1655,6 +1692,9 @@ body.rhs-resizing-row { cursor: row-resize; }
 .model-menu-head { font-size: 0.75em; opacity: 0.75; margin: 6px 2px 2px; }
 .model-menu button { display: block; width: 100%; text-align: left; margin: 1px 0; }
 .model-menu-error { margin: 4px 2px; font-size: 0.8em; color: var(--red); }
+/* A small × in the top-right corner; the first provider heading clears it. */
+.model-menu .model-menu-close { position: sticky; top: 0; float: right; display: inline-flex; width: auto; margin: -2px -2px 0 4px; padding: 0 5px; border: none; background: transparent; color: inherit; font-size: 1.15em; line-height: 1.2; cursor: pointer; opacity: 0.6; z-index: 1; }
+.model-menu .model-menu-close:hover { opacity: 1; }
 .agent-node:hover { background: var(--surface-raised); }
 .agent-node .agent-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
 .agent-node .agent-dot.running { background: var(--green); box-shadow: 0 0 4px var(--agent-dot-glow); }
@@ -1803,6 +1843,8 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 .attn-chip.attn-aside .attn-title { color: var(--amber, #d4a017); }
 .agent-children { padding-left: 14px; border-left: 1px solid var(--border); margin-left: 10px; }
+.agent-idle-fold { display: block; margin: 2px 0 4px 8px; padding: 2px 6px; border: none; background: transparent; color: var(--text-muted); font-size: 11px; cursor: pointer; text-align: left; }
+.agent-idle-fold:hover { color: var(--text); text-decoration: underline; }
 
 /* Terminal viewer removed from product UI (🎯T73) — vestigial Claude/tmux panel.
    Keep nodes selectable for future use without opening black chrome. */
@@ -1845,6 +1887,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 .plan-tip-table td.plan-avail.plan-hot { color: var(--red); }
 .plan-tip-table td.plan-avail.plan-under { color: var(--plan-under); }
 .plan-tip-table td.plan-avail.plan-locked { color: var(--plan-locked); }
+.plan-tip-table td.plan-avail.plan-stale { color: var(--text-muted); }
 /* 🎯T634: fifth-row sparkline inherits the same pace colour as available. */
 .plan-tip-table td.plan-burn {
   color: var(--green);
@@ -1890,6 +1933,15 @@ body.rhs-resizing-row { cursor: row-resize; }
 .plan-tip-table td.plan-burn .plan-burn-bound {
   stroke: rgb(0 0 0 / 0.14);
   stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+/* 🎯T1283: the on-track line, 0% at the window's start to 100% at its reset.
+   A reference, not a reading: dashed, light black, never a pace colour. */
+.plan-tip-table td.plan-burn .plan-burn-pace {
+  fill: none;
+  stroke: rgb(0 0 0 / 0.3);
+  stroke-width: 1px;
+  stroke-dasharray: 3 2;
   vector-effect: non-scaling-stroke;
 }
 .plan-tip-table td.plan-burn {
@@ -2009,8 +2061,10 @@ body.rhs-resizing-row { cursor: row-resize; }
   line-height: 1.35;
   white-space: normal;
   overflow-wrap: anywhere;
+  /* An alarm, not the pane: the full line stays in the title tooltip. */
+  max-height: 5.4em;
+  overflow-y: auto;
 }
-.agent-node .agent-stop-reason,
 .agent-node .agent-plan-wall,
 .agent-node .agent-rehydrate {
   flex: 1 0 100%;
@@ -2025,6 +2079,20 @@ body.rhs-resizing-row { cursor: row-resize; }
   gap: 4px 7px;
 }
 .agent-node .agent-rehydrate-text { flex: 1 1 0; min-width: 0; }
+.agent-node .agent-reauth {
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.agent-node .agent-reauth:disabled { cursor: wait; opacity: 0.6; }
+.agent-node .agent-reauth-error { flex: 1 0 100%; color: #b33; }
+
 
 /* Explicit web settings entry point; native long-press is not a web gesture. */
 #settings-button {
@@ -2059,7 +2127,11 @@ body.rhs-resizing-row { cursor: row-resize; }
 #agents-toggle, #agents-close, #agents-backdrop { display: none; }
 @media (max-width: 599px) {
   html, body, #root { height: 100dvh; }
-  #status { padding: 6px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); min-width: 0; }
+  #status { padding: 6px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); min-width: 0; flex-wrap: wrap; }
+  /* 🎯T1274: keep controls on the first row and all subscription bars on
+     their own wrapping row. An overflowing nowrap ticker hid exhausted plans. */
+  #plan-ticker { order: 1; flex: 0 0 100%; margin-left: 0; flex-wrap: wrap; overflow: visible; row-gap: 4px; }
+  #plan-reauth-menu + #plan-ticker { margin-left: 0; }
   #agents-toggle { display: block; flex: 0 0 auto; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-high); font: inherit; text-transform: none; }
   #main { min-width: 0; min-height: 0; }
   #chat-pane { width: 100%; }
@@ -2071,3 +2143,153 @@ body.rhs-resizing-row { cursor: row-resize; }
   #agents-close { display: block; align-self: flex-end; margin: 8px 12px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-high); }
   #rhs-width-handle { display: none; }
 }
+
+/* 🎯T1044: owner review panel */
+.review-pane-body {
+  padding: 8px;
+  overflow-y: auto;
+  height: 100%;
+}
+.review-empty {
+  opacity: 0.6;
+  padding: 12px 4px;
+  font-size: 0.9em;
+}
+.review-card {
+  border: 1px solid var(--border-color, #444);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.review-card-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+.review-target {
+  font-weight: 600;
+}
+.review-target-title {
+  font-weight: 600;
+  margin-top: 2px;
+}
+.review-question {
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+.review-options {
+  margin-top: 4px;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+.review-evidence {
+  margin-top: 6px;
+  font-size: 0.82em;
+  opacity: 0.85;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.review-artifact-verified { color: #4caf50; }
+.review-artifact-reported_only { color: #c9a227; }
+.review-artifact-inaccessible { color: #e05252; }
+.review-artifact-missing { opacity: 0.6; }
+.review-card-actions {
+  margin-top: 8px;
+}
+.review-answer-btn {
+  font-size: 0.85em;
+}
+
+.fleet-panel-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 4px 4px;
+}
+.fleet-history-toggle {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+.agent-panel-line {
+  display: block;
+  font-size: 11px;
+  opacity: 0.85;
+  /* 🎯T1059: a parked row is one line. The whole reason is the title tooltip
+     and the ⛔ popup; a paragraph here buried the tree on 2026-10-22. */
+  flex: 1 0 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.review-meta {
+  display: grid;
+  gap: 0.35rem 0.75rem;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+}
+.review-meta div { display: grid; grid-template-columns: 6.5rem 1fr; gap: 0.35rem; }
+.review-meta dt { opacity: 0.75; margin: 0; }
+.review-meta dd { margin: 0; }
+.review-stalls-mark {
+  color: #ffb4b4;
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+.review-default-stalls { color: #ffb4b4; }
+.review-default-ok { opacity: 0.9; }
+.review-option-picks { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.5rem 0; }
+.review-option-btn, .review-submit-answer-btn {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.06);
+  color: inherit;
+  padding: 0.25rem 0.55rem;
+}
+.review-answer-in-place { display: flex; flex-direction: column; gap: 0.35rem; margin: 0.5rem 0; }
+.review-prose-input {
+  width: 100%;
+  font: inherit;
+  resize: vertical;
+  min-height: 2.5rem;
+}
+.review-answer-error { color: #ffb4b4; font-size: 0.85rem; }
+.review-answer-chat-fallback { opacity: 0.85; font-size: 0.85rem; }
+
+/* 🎯T1059: one tappable stop marker next to the name, never an inline reason. */
+/* 🎯T981: per-seat pause (❚❚) — distinct from frontier play/stop and fleet pause. */
+.agent-node .agent-pause-btn {
+  flex: none; background: none; border: 0; padding: 2px 4px; margin: -2px 0;
+  cursor: pointer; font-size: 11px; line-height: 1; color: var(--text-muted);
+  font-family: var(--mono);
+}
+.agent-node .agent-pause-btn:hover,
+.agent-node .agent-pause-btn:focus-visible { color: var(--text); outline: 2px solid var(--accent); border-radius: 4px; }
+.agent-node .agent-pause-btn-active { color: var(--amber); }
+
+.agent-node .agent-stop-wrap { display: inline-flex; flex: none; }
+.agent-node .agent-stop-icon { background: none; border: 0; padding: 2px 4px; margin: -2px -4px;
+  color: inherit; cursor: pointer; font-size: 14px; line-height: 1.3; }
+.agent-node .agent-stop-icon:focus-visible { outline: 2px solid var(--accent); border-radius: 4px; }
+.agent-stop-popup { position: fixed; z-index: 80; width: min(320px, calc(100vw - 16px));
+  max-height: min(420px, calc(100dvh - 16px)); overflow: hidden; box-sizing: border-box;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+  background: var(--bg); color: var(--text); box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+  font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.agent-stop-popup-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; flex: none; }
+.agent-stop-popup-head strong { min-width: 0; overflow-wrap: anywhere; }
+.agent-stop-popup-head button { flex: none; cursor: pointer; }
+.agent-stop-popup-body { min-height: 0; overflow: auto; overflow-wrap: anywhere; }
+
+/* Usage refresh is distinct from signing an agent in (🎯T1199). */
+.plan-usage-faults { margin-top: 6px; }
+.plan-usage-faults button { margin-top: 6px; padding: 2px 8px; border: 1px solid var(--border-focus); border-radius: 3px; background: var(--surface-raised); color: var(--text); font: inherit; cursor: pointer; }
+.plan-usage-faults button:disabled { opacity: 0.6; cursor: wait; }

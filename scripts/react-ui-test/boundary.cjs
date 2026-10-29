@@ -10,6 +10,7 @@ const path = require('node:path');
 const { parseArgs } = require('node:util');
 const { chromium } = require('./playwright.cjs')();
 const { submitAside, ownerEcho } = require('./boundary-oracle.cjs');
+const { prePrompt, preReaskPrompt, ownerPrompt, assertJourneyPromptShape, providerPasteDeclined } = require('./boundary-prompt.cjs');
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, workdir: { type: 'string' }, aside: { type: 'string' },
   'daemon-log': { type: 'string' }, 'sweep-deadline-ms': { type: 'string' }, screenshot: { type: 'string' },
@@ -106,8 +107,10 @@ async function main() {
     const helper = path.join(work, 'wait.cjs');
     const holdLimit = main ? 90000 : sweepDeadline + 90000;
     await fs.writeFile(helper, `const fs = require('node:fs');\nfs.writeFileSync(${JSON.stringify(ready)}, ${JSON.stringify(nonce)});\nconst limit = setTimeout(() => { console.error('owner boundary was not released'); process.exit(2); }, ${holdLimit});\nconst poll = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(poll); clearTimeout(limit); fs.writeFileSync(${JSON.stringify(completed)}, ${JSON.stringify(nonce)}); console.log('released'); } }, 25);\n`);
-    const prompt = `Perform this short interaction check in order. First emit ${pre} as a visible commentary message, not just tool input. Then run exactly this shell command using your tool: node ${helper}. Wait for it to finish. Then reply with exactly ${post}. Do not read or change the helper or its files; the test harness releases it. Do not spawn agents.`;
-    const owner = `Reply with exactly: ${ack}`;
+    const prompt = prePrompt(pre, helper, post);
+    const owner = ownerPrompt(ack);
+    assertJourneyPromptShape(prompt, `${name} PRE`);
+    assertJourneyPromptShape(owner, `${name} owner`);
     const start = frames.length;
     // 🎯T813: the provider may end a turn without the visible PRE or the tool
     // call. `attemptStart` scopes the ordering assertions to the current ask,
@@ -121,12 +124,21 @@ async function main() {
     };
     const events = () => frames.slice(attemptStart).filter(f => f.ch === `transcript:${name}` && f.t === 'frame');
     const assistants = () => events().filter(f => f.body?.event?.type === 'assistant');
+    const refusePasteDecline = () => {
+      for (const f of assistants()) {
+        const text = content(f.body);
+        if (providerPasteDeclined(text)) {
+          throw new Error(`provider declined journey prompt as paste: ${text.slice(0, 240)}`);
+        }
+      }
+    };
     await page.locator(input).fill(prompt);
     await page.locator(button).click();
     if (main) mainSubmittedAt = Date.now();
     if (process.env.BOUNDARY_SHOT) until.shot = () => page.screenshot({ path: process.env.BOUNDARY_SHOT });
     try {
       const preOrEnded = label => until(() => {
+        refusePasteDecline();
         const list = assistants();
         const seen = list.find(f => content(f.body).includes(pre));
         // A PRE that arrives already terminal, or a turn that ends without one,
@@ -145,7 +157,9 @@ async function main() {
         if (attempt > MAX_REASKS) throw new Error(`provider skipped the PRE plus tool call after ${MAX_REASKS} re-asks (last replies: ${said.join(' | ') || 'none'})`);
         console.log(`RETRY ${name} ${attempt}/${MAX_REASKS}: provider ended its turn without a visible PRE plus tool call (replies: ${said.join(' | ') || 'none'}); re-asking`);
         attemptStart = frames.length;
-        await page.locator(input).fill(`Do this now: write ${pre}, then run node ${helper}, then reply ${post}.`);
+        const reask = preReaskPrompt(pre, helper, post);
+        assertJourneyPromptShape(reask, `${name} PRE re-ask ${attempt}`);
+        await page.locator(input).fill(reask);
         await page.locator(button).click();
         first = await preOrEnded(`nonterminal PRE after re-ask ${attempt}`);
       }
@@ -166,9 +180,12 @@ async function main() {
         assert.equal(status.mode, 'queue', 'aside follow-up must be held in the queue');
         assert.equal(status.status, 'queued', 'held aside must queue in the daemon');
       }
-      const echo = await until(() => main
-        ? events().find(f => f.body?.event?.turn_origin === 'owner' && content(f.body).includes(owner))
-        : ownerEcho(events(), first, owner), 'interleaved canonical owner echo', control ? 8000 : 90000);
+      const echo = await until(() => {
+        refusePasteDecline();
+        return main
+          ? events().find(f => f.body?.event?.turn_origin === 'owner' && content(f.body).includes(owner))
+          : ownerEcho(events(), first, owner);
+      }, 'interleaved canonical owner echo', control ? 8000 : 90000);
       assert(echo.body.index > first.body.index, 'owner must follow PRE');
       assert(!assistants().some(f => terminal(f.body)), 'first response ended before second owner echo');
       if (!main) {

@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // DirName is the report store root under the daemon state dir.
@@ -316,4 +318,24 @@ func Latest(stateDir, agent string) (Record, error) {
 		return Record{}, fmt.Errorf("agentreport: no stored reports for %q", agent)
 	}
 	return Load(stateDir, agent, recs[len(recs)-1].ID)
+}
+
+// LatestDeclared returns the newest stored report whose text declares a jevons
+// envelope (🎯T1190). A later prose re-verification turn does not hide an
+// earlier finish-report from idle/reap classifiers.
+func LatestDeclared(stateDir, agent string) (Record, error) {
+	recs, err := List(stateDir, agent)
+	if err != nil {
+		return Record{}, err
+	}
+	for i := len(recs) - 1; i >= 0; i-- {
+		rec, err := Load(stateDir, agent, recs[i].ID)
+		if err != nil {
+			continue
+		}
+		if envelope.HasDeclared(rec.Text) {
+			return rec, nil
+		}
+	}
+	return Record{}, fmt.Errorf("agentreport: no declared envelope stored for %q", agent)
 }

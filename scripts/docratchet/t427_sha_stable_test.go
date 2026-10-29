@@ -23,7 +23,7 @@ func TestT427DoctrineMarkers(t *testing.T) {
 		"multi-file",
 	}
 	for _, doc := range []string{
-		"internal/config/persona.md",
+		"internal/roles/builtin/overseer.md",
 		"agents-guide.md",
 		"internal/cli/help_agent.md",
 		"internal/mcpserver/fleet_brief.go",

@@ -7,9 +7,11 @@
  * full reload restores FIFO order; soft reconnect must not reset it.
  */
 
+import { now } from '../clock';
+
 export const STORAGE_KEY = 'jevons-send-queue-v1';
 
-export type QueueItem = { id: string; text: string };
+export type QueueItem = { id: string; text: string; queuedAt?: number; daemonHeld?: boolean };
 export type QueueState = { items: QueueItem[]; nextId: number };
 
 export function emptyState(): QueueState {
@@ -64,7 +66,7 @@ export function enqueue(state: QueueState | null | undefined, text: string): Que
   const s = state || emptyState();
   const id = 'q' + s.nextId;
   return {
-    items: s.items.concat([{ id, text: String(text ?? '') }]),
+    items: s.items.concat([{ id, text: String(text ?? ''), queuedAt: now() }]),
     nextId: (s.nextId || 1) + 1,
   };
 }

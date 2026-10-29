@@ -88,7 +88,7 @@ func TestChatWireRoundTripOverWebSocket(t *testing.T) {
 	s.BroadcastChat(chatUserEcho("ping"))
 	s.DeliverOverseerEvent(claudia.Event{
 		Type: "assistant",
-		Text: "pong",
+		Text: wireOwnerReplyDecision("pong"),
 		Raw:  []byte(`{"sessionId":"x","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"pong"}}}`),
 	})
 	s.DeliverOverseerEvent(claudia.Event{
@@ -97,7 +97,7 @@ func TestChatWireRoundTripOverWebSocket(t *testing.T) {
 		Raw:        []byte(`{"stopReason":"end_turn"}`),
 	})
 
-	wantTypes := []string{"user", "assistant", "assistant"}
+	wantTypes := []string{"user", "assistant"}
 	var got []map[string]any
 	fleetRefreshes := 0
 	for i := 0; i < len(wantTypes); i++ {
@@ -141,10 +141,9 @@ func TestChatWireRoundTripOverWebSocket(t *testing.T) {
 	if block["text"] != "pong" {
 		t.Fatalf("assistant text=%v", block["text"])
 	}
-	// Terminal stop.
-	tm, _ := got[2]["message"].(map[string]any)
-	if tm["stop_reason"] != "end_turn" {
-		t.Fatalf("stop_reason=%v", tm["stop_reason"])
+	// 🎯T1140: owner-reply seals body + end_turn on one frame.
+	if am["stop_reason"] != "end_turn" {
+		t.Fatalf("stop_reason=%v", am["stop_reason"])
 	}
 
 	// Simulate the browser pure rule on the received frames.
@@ -196,10 +195,15 @@ func TestMultiChunkStreamWire(t *testing.T) {
 	s.mu.Unlock()
 
 	tokens := []string{"Hello", ".", "What", "do", "you", "need", "?"}
-	for _, tok := range tokens {
+	prefix := "```jevons\njevons: kind owner-reply\njevons: purpose decision\n```\n"
+	for i, tok := range tokens {
+		text := tok
+		if i == 0 {
+			text = prefix + tok
+		}
 		s.DeliverOverseerEvent(claudia.Event{
 			Type: "assistant",
-			Text: tok,
+			Text: text,
 			Raw:  []byte(`{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` + tok + `"}}}`),
 		})
 	}
@@ -211,7 +215,7 @@ func TestMultiChunkStreamWire(t *testing.T) {
 
 	var lines []string
 	deadline := time.After(2 * time.Second)
-	for len(lines) < len(tokens)+1 {
+	for len(lines) < 1 {
 		select {
 		case l := <-ch:
 			if isNonBubbleFrame(l) {
@@ -244,9 +248,12 @@ func TestMultiChunkStreamWire(t *testing.T) {
 				if text == "" {
 					continue
 				}
-				// Mid-stream must not clear.
-				if shouldClearWorkingGo(m) {
+				// Mid-stream must not clear. 🎯T1140 may seal body+end_turn in one frame.
+				if shouldClearWorkingGo(m) && msg["stop_reason"] != "end_turn" {
 					t.Fatalf("chunk %d cleared working mid-stream: %s", i, line)
+				}
+				if shouldClearWorkingGo(m) && msg["stop_reason"] == "end_turn" && len(bubbles) > 0 {
+					t.Fatalf("terminal frame cleared working after prose already painted: %s", line)
 				}
 				if open >= 0 {
 					bubbles[open] += text

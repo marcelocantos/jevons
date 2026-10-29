@@ -5,6 +5,8 @@ import * as smd from 'streaming-markdown';
 
 export type StreamSession = {
   writeFull: (raw: string, normalizeFn?: (s: string) => string) => void;
+  /** Flush smd's pending glyph without closing the session (🎯T555.5). */
+  flush: () => void;
   end: () => void;
   destroy: () => void;
   readonly written: number;
@@ -59,6 +61,13 @@ export function createSession(rootEl: HTMLElement): StreamSession | null {
     ended = false;
   }
 
+  /** smd keeps the last glyph in pending until end or the next write (🎯T555.5). */
+  function flushPendingGlyph(): void {
+    if (!parser || ended) return;
+    const pending = (parser as { pending?: string }).pending;
+    if (pending && pending.length > 0) smd.parser_end(parser);
+  }
+
   start();
 
   return {
@@ -66,16 +75,19 @@ export function createSession(rootEl: HTMLElement): StreamSession | null {
       if (ended || !parser) return;
       const text = normalizeText(raw, normalizeFn);
       if (text === lastNormalized) return;
-      // Full rewrite + parser_end: smd holds the last glyph in pending
-      // until end (🎯T555.5). A prefix-delta write without end paints
-      // “overseer is bac”. Restarting each write keeps the last character
-      // in the DOM for a finished string; live streams re-parse the prefix.
-      start();
-      if (text && parser) {
-        smd.parser_write(parser, text);
-        smd.parser_end(parser);
+      if (lastNormalized && text.startsWith(lastNormalized)) {
+        const delta = text.slice(lastNormalized.length);
+        if (delta) smd.parser_write(parser, delta);
+        lastNormalized = text;
+        return;
       }
+      // Non-append rewrite: restart the parser (normalize can reshape fences).
+      start();
+      if (text && parser) smd.parser_write(parser, text);
       lastNormalized = text;
+    },
+    flush() {
+      flushPendingGlyph();
     },
     end() {
       if (ended || !parser) return;
@@ -83,6 +95,7 @@ export function createSession(rootEl: HTMLElement): StreamSession | null {
       ended = true;
     },
     destroy() {
+      if (parser && !ended) smd.parser_end(parser);
       ended = true;
       parser = null;
       lastNormalized = '';

@@ -220,7 +220,10 @@ func TestT1074RepressureReservesBeforeSend(t *testing.T) {
 	dir := t.TempDir()
 	s := admitServer(t, dir)
 	err := (&rePressureSink{server: s}).RePressure("jv-t1074-admit", "T1074")
-	if err == nil || err.Error() == "repressure refused: "+string(NudgeBackoff) {
+	// 🎯T1229: a parked ambient send queues rather than launching a process.
+	// That is still "reached send" after reserving. Backoff here would mean
+	// we never reserved.
+	if err != nil && err.Error() == "repressure refused: "+string(NudgeBackoff) {
 		t.Fatalf("first repressure did not reach send after reserving: %v", err)
 	}
 	reopened, err := OpenIdleNudgeLedger(dir)
@@ -228,7 +231,7 @@ func TestT1074RepressureReservesBeforeSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	if count, _ := reopened.Get("jv-t1074-admit"); count != 1 {
-		t.Fatalf("send failure refunded the attempt: count=%d", count)
+		t.Fatalf("attempt refunded: count=%d", count)
 	}
 	s.idleNudgeLedger = reopened
 	err = (&rePressureSink{server: s}).RePressure("jv-t1074-admit", "T1074")
@@ -333,8 +336,9 @@ func admitServer(t *testing.T, dir string) *Server {
 		t.Fatal(err)
 	}
 	s := &Server{registry: reg, idleNudgeLedger: ledger}
-	// Park the seat so the real send path refuses to launch a process.
-	// The reservation still has to precede that refusal.
+	// Park the seat so the real send path does not launch a process
+	// (🎯T1229 holds ambient repressure in sendq). The reservation still
+	// has to precede that hold.
 	st, err := fleetintent.Open(dir)
 	if err != nil {
 		t.Fatal(err)

@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/commitattrib"
+	"github.com/marcelocantos/jevons/internal/fleetgit"
+	"github.com/marcelocantos/jevons/internal/sharedcloneseats"
 	"github.com/marcelocantos/jevons/internal/worktree"
 )
 
@@ -112,6 +115,11 @@ func (e *Env) Pre(p *Payload) (Decision, error) {
 	if p.ToolName == ToolBash {
 		return e.preBash(p)
 	}
+	if abs, checked := e.resolveSharedCloneWriteTarget(p.ToolInput.FilePath); checked {
+		if d, ok := e.decideWorkSeatSharedCloneWrite(abs); ok {
+			return d, nil
+		}
+	}
 	abs, rel, ok := e.resolve(p.ToolInput.FilePath)
 	if !ok {
 		return Decision{Verdict: Allow, Reason: "outside-repo"}, nil
@@ -153,17 +161,41 @@ func (e *Env) preBash(p *Payload) (Decision, error) {
 	if e.BashOff {
 		return Decision{Verdict: Allow, Reason: "bash-guard-off"}, nil
 	}
+	if d, checked := e.decideLandHold(p.ToolInput.Command); checked {
+		return d, nil
+	}
 	if ref, ok, definite := DetectBranchCheckout(p.ToolInput.Command); ok {
-		if d, checked := e.decideBranchCheckout(ref, definite); checked {
+		if d, checked := e.decideBranchCheckout(p.ToolInput.Command, p.CWD, ref, definite); checked {
 			return d, nil
 		}
 	}
+	if d, checked := e.decideBashForeignSharedCloneWrite(p.ToolInput.Command); checked {
+		return d, nil
+	}
+	if d, checked := e.decideBashSharedCloneGitWrite(p.ToolInput.Command, p.CWD); checked {
+		return d, nil
+	}
 	for _, write := range ScanCommand(p.ToolInput.Command) {
+		if write.Form == FormGitStashPush {
+			if d, checked := e.decideSharedStash(p.ToolInput.Command, p.CWD); checked {
+				return d, nil
+			}
+			continue
+		}
 		if write.Form == FormGitDiscardAll {
 			if d, checked := e.decideLedgerDiscard(); checked {
 				return d, nil
 			}
 			continue
+		}
+		if write.Form == FormGitRestore {
+			if _, rel, ok := e.resolve(e.expand(write.Path)); ok && IsLedgerPath(rel) {
+				// 🎯T1147: `git restore bullseye.yaml` / `git checkout -- bullseye.yaml`
+				// is the 04:29:02 wipe shape when achievements are still uncommitted.
+				if d, checked := e.decideLedgerDiscard(); checked && d.Verdict == Deny {
+					return d, nil
+				}
+			}
 		}
 		abs, rel, ok := e.resolve(e.expand(write.Path))
 		if !ok || !IsGuarded(rel, e.Guarded) {
@@ -202,6 +234,26 @@ func (e *Env) preBash(p *Payload) (Decision, error) {
 // 2026-10-06 incident did, and is refused. checked is false when the repo
 // cannot be queried (not a git repo at all) — the guard has nothing to say
 // and the caller falls through to its normal per-path handling.
+// decideSharedStash is the 🎯T1134 guard: `git stash push` in the shared
+// clone from a fleet seat takes every dirty tracked path — including another
+// worker's uncommitted bullseye row — off the working tree. Integrate never
+// stashes; this refuses the hand-rolled landing shortcut.
+func (e *Env) decideSharedStash(command, bashCwd string) (Decision, bool) {
+	gitCwd := e.resolveGitActingDir(command, bashCwd)
+	refuse, msg, ok := fleetgit.RefuseSharedCloneGitStash(e.RepoRoot, gitCwd, fleetgit.FleetSeat(), command)
+	if !ok {
+		return Decision{}, false
+	}
+	if !refuse {
+		return Decision{Verdict: Allow, Reason: "shared-stash-elsewhere"}, true
+	}
+	reason := "shared-clone-git"
+	if strings.Contains(msg, "🎯T1134") {
+		reason = "shared-stash"
+	}
+	return Decision{Verdict: Deny, Reason: reason, Message: msg}, true
+}
+
 func (e *Env) decideLedgerDiscard() (Decision, bool) {
 	dirty, ledgerRel, err := ledgerDirty(e.RepoRoot)
 	if err != nil {
@@ -320,31 +372,61 @@ func (e *Env) postBash(p *Payload) (string, error) {
 	return FormatSweepReport(findings), nil
 }
 
-// decideBranchCheckout applies DecideBranchCheckout (🎯T955) when e.RepoRoot
-// is the shared clone itself, not one of its isolated worker worktrees — a
-// worker switching branches inside its OWN linked worktree is not this
-// guard's business, only the shared clone's checked-out branch is. checked
-// is false when the guard has nothing to say (linked worktree, detached
-// HEAD, already on ref, or — for an ambiguous `git checkout <arg>` — <arg>
-// does not actually resolve to a ref git would switch to).
-func (e *Env) decideBranchCheckout(ref string, definite bool) (Decision, bool) {
+// decideBranchCheckout applies DecideBranchCheckout (🎯T955) when the git
+// command acts on this hook's shared clone (not a sibling repo reached via
+// `cd` or `git -C`, 🎯T1188), and that clone is the main checkout rather than
+// an isolated worker worktree. checked is false when the guard has nothing to
+// say (wrong repo, linked worktree target, detached HEAD, already on ref, or —
+// for an ambiguous `git checkout <arg>` — <arg> does not resolve to a ref).
+func (e *Env) decideBranchCheckout(command, bashCwd, ref string, definite bool) (Decision, bool) {
 	if worktree.IsLinkedWorktree(e.RepoRoot) {
 		return Decision{}, false
 	}
-	branch, err := gitSymbolicRefShort(e.RepoRoot)
+	protected := sharedcloneseats.CanonicalGitRoot(e.RepoRoot)
+	gitRoot := sharedcloneseats.CanonicalGitRoot(e.resolveGitActingDir(command, bashCwd))
+	if gitRoot == "" || gitRoot != protected {
+		return Decision{}, false
+	}
+	if worktree.IsLinkedWorktree(gitRoot) {
+		return Decision{}, false
+	}
+	branch, err := gitSymbolicRefShort(gitRoot)
 	if err != nil {
 		return Decision{}, false // detached HEAD or not a repo: no integration branch to protect
 	}
 	if ref == branch {
 		return Decision{}, false
 	}
-	if !definite && !isRefLike(e.RepoRoot, ref) {
+	if !definite && !isRefLike(gitRoot, ref) {
 		// A bare `git checkout <arg>` where <arg> is not a real ref is a path
 		// restore (`git checkout .`, `git checkout some/file.go`), not a
 		// branch switch.
 		return Decision{}, false
 	}
 	return DecideBranchCheckout(&BranchGuardArgs{CurrentBranch: branch, TargetRef: ref}), true
+}
+
+// resolveGitActingDir is the shell cwd a git subcommand in command runs in,
+// honoring `cd` prefixes and `git -C` (🎯T1188). bashCwd is the payload cwd;
+// empty falls back to e.RepoRoot.
+func (e *Env) resolveGitActingDir(command, bashCwd string) string {
+	start := strings.TrimSpace(bashCwd)
+	if start == "" {
+		start = e.RepoRoot
+	}
+	start = filepath.Clean(e.expand(start))
+	dir, ok := GitActingDir(command, start)
+	if !ok {
+		return start
+	}
+	dir = e.expand(dir)
+	if dir == "" {
+		return start
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(start, dir)
+	}
+	return filepath.Clean(dir)
 }
 
 // gitSymbolicRefShort is the shared clone's checked-out branch, or an error
@@ -423,3 +505,102 @@ func isOff(v string) bool {
 	}
 	return false
 }
+
+// resolveSharedCloneWriteTarget maps a tool file_path to an absolute path
+// when it names a write under the shared clone from a linked worktree seat.
+func (e *Env) resolveSharedCloneWriteTarget(filePath string) (abs string, checked bool) {
+	expanded := e.expand(filePath)
+	if expanded == "" {
+		return "", false
+	}
+	abs = expanded
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(e.RepoRoot, abs)
+	}
+	abs = filepath.Clean(abs)
+	shared, ok := sharedcloneseats.SharedCloneForWorktreeSeat(e.RepoRoot)
+	if !ok || !sharedcloneseats.PathUnderSharedClone(shared, abs) {
+		return "", false
+	}
+	return abs, true
+}
+
+func (e *Env) decideWorkSeatSharedCloneWrite(abs string) (Decision, bool) {
+	if !fleetgit.FleetSeat() {
+		return Decision{}, false
+	}
+	shared, ok := sharedcloneseats.SharedCloneForWorktreeSeat(e.RepoRoot)
+	if !ok || !sharedcloneseats.PathUnderSharedClone(shared, abs) {
+		return Decision{}, false
+	}
+	seat := strings.TrimSpace(os.Getenv(commitattrib.ActorEnv))
+	return Decision{
+		Verdict: Deny,
+		Reason:  "shared-clone-write",
+		Message: sharedcloneseats.RefuseSharedCloneWriteMessage(seat, shared, abs),
+	}, true
+}
+
+func (e *Env) decideBashForeignSharedCloneWrite(command string) (Decision, bool) {
+	if !fleetgit.FleetSeat() {
+		return Decision{}, false
+	}
+	seat := strings.TrimSpace(os.Getenv(commitattrib.ActorEnv))
+	for _, site := range ShellWriteSites(command) {
+		abs, ok := e.absShellWriteSite(site)
+		if !ok {
+			continue
+		}
+		if refuse, msg, checked := fleetgit.RefuseForeignSharedCloneAbsWrite(e.RepoRoot, abs, seat, site.Form); checked && refuse {
+			return Decision{Verdict: Deny, Reason: "foreign-shared-clone-write", Message: msg}, true
+		}
+	}
+	return Decision{}, false
+}
+
+func (e *Env) absShellWriteSite(site ShellWriteSite) (string, bool) {
+	work := e.RepoRoot
+	if site.WorkDir != "." {
+		w := e.expand(site.WorkDir)
+		if w == "" {
+			return "", false
+		}
+		if !filepath.IsAbs(w) {
+			w = filepath.Join(e.RepoRoot, w)
+		}
+		work = filepath.Clean(w)
+	}
+	if site.Target == "" {
+		return work, true
+	}
+	t := e.expand(site.Target)
+	if t == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(t) {
+		t = filepath.Join(work, t)
+	}
+	return filepath.Clean(t), true
+}
+
+func (e *Env) decideBashSharedCloneGitWrite(command, bashCwd string) (Decision, bool) {
+	if GitCommandMutatesSharedCloneRefs(command) {
+		gitCwd := e.resolveGitActingDir(command, bashCwd)
+		if refuse, msg, ok := fleetgit.RefuseSharedCloneGitWrite(e.RepoRoot, gitCwd, fleetgit.FleetSeat(), command); ok && refuse {
+			return Decision{Verdict: Deny, Reason: "shared-clone-git", Message: msg}, true
+		}
+	}
+	for _, w := range ScanCommand(command) {
+		switch w.Form {
+		case FormGitCommit, FormGitDiscardAll, FormGitStashPush, FormGitRestore:
+			continue
+		}
+		if abs, checked := e.resolveSharedCloneWriteTarget(w.Path); checked {
+			if d, ok := e.decideWorkSeatSharedCloneWrite(abs); ok {
+				return d, true
+			}
+		}
+	}
+	return Decision{}, false
+}
+

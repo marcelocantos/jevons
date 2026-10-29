@@ -23,6 +23,10 @@ func AchieveField(k FlagKind) string {
 		return "tree.clean"
 	case FlagAchieveGatePrecedesFix:
 		return "tree.commit"
+	case FlagAchieveGateNarrowRun, FlagAchieveGateMissingPackages:
+		return "command"
+	case FlagAchieveProductPathUnrun:
+		return "acceptance"
 	}
 	return "attestation"
 }

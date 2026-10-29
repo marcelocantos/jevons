@@ -279,6 +279,28 @@ func TestApplyLiveProgressStampPairsOldestGenericWithoutID(t *testing.T) {
 	}
 }
 
+func TestApplyLiveProgressMintsNamedNativeTool(t *testing.T) {
+	start := `{"type":"progress","recorded":"lossless","progress_type":"tool_use","timestamp":"2026-10-24T10:00:00Z","raw":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"bash-1","title":"Bash: go test ./...","status":"in_progress","rawInput":{"command":"go test ./..."}}}}`
+	evs, folds := ApplyLiveAll(nil, start)
+	if len(folds) != 1 || folds[0].Op != "put" || evs[0].Type != "tool_use" {
+		t.Fatalf("folds=%+v types=%v want one put tool_use", folds, typesOf(evs))
+	}
+	var m map[string]any
+	_ = json.Unmarshal(evs[0].Body, &m)
+	if m["name"] != "Bash: go test ./..." || m["execution_status"] != "in_progress" {
+		t.Fatalf("body=%v want Bash step in_progress", m)
+	}
+	done := `{"type":"progress","recorded":"lossless","progress_type":"tool_use","raw":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"bash-1","title":"Bash: go test ./...","status":"completed"}}}`
+	evs, folds = ApplyLiveAll(evs, done)
+	if len(folds) != 1 || folds[0].Op != "append" {
+		t.Fatalf("terminal folds=%+v want append on same row", folds)
+	}
+	_ = json.Unmarshal(evs[0].Body, &m)
+	if m["execution_status"] != "completed" {
+		t.Fatalf("terminal status=%v want completed", m["execution_status"])
+	}
+}
+
 func TestApplyStampsFIFOAndLeftover(t *testing.T) {
 	evs := EventsFromLines([]string{
 		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"MCP: tool"}]}}`,

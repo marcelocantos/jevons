@@ -195,10 +195,13 @@ var brokerReattachTried sync.Map // name -> time.Time
 // reattachCandidates lists seats with no live handle whose intent allows
 // revival: auto-start seats, and any seat this host lost to a broker
 // restart (🎯T925).
-func reattachCandidates(defs []claudia.AgentDef, alive func(string) bool, intent fleetintent.Snapshot, lostToBroker func(string) bool) []string {
+func reattachCandidates(defs []claudia.AgentDef, alive func(string) bool, intent fleetintent.Snapshot, lostToBroker func(string) bool, blocked func(string) bool) []string {
 	var out []string
 	for _, d := range defs {
 		if d.Name == "" || alive(d.Name) {
+			continue
+		}
+		if blocked != nil && blocked(d.Name) {
 			continue
 		}
 		if !d.AutoStart && (lostToBroker == nil || !lostToBroker(d.Name)) {
@@ -242,11 +245,11 @@ type BrokerLostStuck struct {
 // broker did not bring it back, and it is relaunched on its own
 // conversation, brief intact (🎯T925) — or on a fresh one when it has none
 // (🎯T935). lostToBroker may be nil.
-func ReattachRunningSeats(reg *claudia.Registry, intent fleetintent.Snapshot, now time.Time, lostToBroker func(string) bool) ReattachResult {
+func ReattachRunningSeats(reg *claudia.Registry, intent fleetintent.Snapshot, now time.Time, lostToBroker func(string) bool, blocked func(string) bool) ReattachResult {
 	if reg == nil {
 		return ReattachResult{}
 	}
-	return reattachWith(registryReattach{reg}, intent, now, lostToBroker)
+	return reattachWith(registryReattach{reg}, intent, now, lostToBroker, blocked)
 }
 
 // reattachReg is what the reattach loop needs of the registry; tests fake it.
@@ -317,7 +320,7 @@ var (
 	brokerLostOutages = map[string]*brokerLostOutage{}
 )
 
-func reattachWith(reg reattachReg, intent fleetintent.Snapshot, now time.Time, lostToBroker func(string) bool) ReattachResult {
+func reattachWith(reg reattachReg, intent fleetintent.Snapshot, now time.Time, lostToBroker func(string) bool, blocked func(string) bool) ReattachResult {
 	lost := func(name string) bool { return lostToBroker != nil && lostToBroker(name) }
 	var res ReattachResult
 	defs := reg.List()
@@ -325,7 +328,7 @@ func reattachWith(reg reattachReg, intent fleetintent.Snapshot, now time.Time, l
 	for _, d := range defs {
 		parents[d.Name] = d.Parent
 	}
-	candidates := reattachCandidates(defs, reg.Alive, intent, lostToBroker)
+	candidates := reattachCandidates(defs, reg.Alive, intent, lostToBroker, blocked)
 
 	// An outage ends when its seat is no longer a down seat lost to the
 	// broker: running again, stopped on purpose, parked, or removed. A

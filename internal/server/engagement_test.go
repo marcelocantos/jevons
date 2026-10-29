@@ -192,3 +192,40 @@ func TestHandleEngagementStopHTTP(t *testing.T) {
 		t.Fatalf("/api/agents rows=%+v", agents)
 	}
 }
+
+// 🎯T980: stopping a waiting request withdraws its seat-wait even when no
+// worker is engaged, so the frontier row leaves the red arrow immediately.
+func TestT980EngagementStopClearsSeatWait(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleared string
+	s := New("test", t.TempDir())
+	s.SetRegistry(reg)
+	s.SetSeatWaitClear(func(target string) { cleared = target })
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	body, _ := json.Marshal(map[string]string{"target_id": "🎯T980"})
+	resp, err := http.Post(srv.URL+"/api/agents/engagement/stop", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if cleared != "T980" {
+		t.Fatalf("seatWaitClear(%q), want T980", cleared)
+	}
+	var out engagementStopResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != "none" || len(out.Stopped) != 0 {
+		t.Fatalf("response %+v, want none stopped", out)
+	}
+}

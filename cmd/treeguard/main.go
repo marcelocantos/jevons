@@ -77,6 +77,7 @@ func main() {
 			os.Exit(exitError)
 		}
 		if decision.Verdict == treeguard.Deny {
+			treeguard.LogBranchCheckoutDenial(decision)
 			fmt.Fprintln(os.Stderr, decision.Message)
 			os.Exit(exitDeny)
 		}

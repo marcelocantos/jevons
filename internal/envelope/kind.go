@@ -36,6 +36,11 @@ const (
 	// not a product-done finish — T165/T195 must not reap it as finished
 	// work when there are no implementation commits.
 	KindScoutReport Kind = "scout-report"
+	// KindOwnerReply is an overseer→owner message with a typed purpose slot
+	// (🎯T1140). Missing purpose or purpose=routine is host-suppressed.
+	KindOwnerReply Kind = "owner-reply"
+	// KindOwnerMission is a bounded owner→PO obligation (🎯T1195).
+	KindOwnerMission Kind = "owner-mission"
 )
 
 // allKinds is the canonical list. Instruction files must not grow a parallel
@@ -48,6 +53,8 @@ var allKinds = []Kind{
 	KindAck,
 	KindTargetFileRequest,
 	KindScoutReport,
+	KindOwnerReply,
+	KindOwnerMission,
 }
 
 // AllKinds returns every known kind in definition order.
@@ -175,6 +182,10 @@ func ParseProgress(raw string) (Progress, bool) {
 		}
 	}
 	if strings.HasPrefix(s, string(ProgressBlocked)+"-") {
+		return ProgressBlocked, true
+	}
+	// 🎯T1233: needs-direction is a blocked finish-report spelling.
+	if s == "needs-direction" || s == "needsdirection" {
 		return ProgressBlocked, true
 	}
 	return "", false

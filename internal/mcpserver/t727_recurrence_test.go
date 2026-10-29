@@ -219,8 +219,8 @@ func TestT727EdgeOccurrenceMovesBetweenEvents(t *testing.T) {
 
 	// Same operator-facing names, two genuinely distinct events.
 	const line = "🎯T530 parent kill: restarted 1 held-sendq seat(s) for drain under \"jevons-po\": jv-t727."
-	s.notifyFleetHealth(fleetHealthEventOccurrence("jv-t727", t727EventA), line)
-	s.notifyFleetHealth(fleetHealthEventOccurrence("jv-t727", t727EventB), line)
+	s.notifyFleetHealth(noticeAct, fleetHealthEventOccurrence("jv-t727", t727EventA), line)
+	s.notifyFleetHealth(noticeAct, fleetHealthEventOccurrence("jv-t727", t727EventB), line)
 	if len(inbox.texts) != 2 {
 		t.Fatalf("two distinct drain-restarts of the same cohort delivered %d batches; want 2\n%v",
 			len(inbox.texts), inbox.texts)
@@ -229,7 +229,7 @@ func TestT727EdgeOccurrenceMovesBetweenEvents(t *testing.T) {
 	// And an unbuildable occurrence refuses rather than sending an
 	// undiscriminated notice — empty occurrence is refused at the door.
 	before := len(inbox.texts)
-	s.notifyFleetHealth(fleetHealthEventOccurrence("", t727EventA), line)
+	s.notifyFleetHealth(noticeAct, fleetHealthEventOccurrence("", t727EventA), line)
 	if len(inbox.texts) != before {
 		t.Fatal("an occurrence with no stable part was delivered anyway")
 	}

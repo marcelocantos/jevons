@@ -110,7 +110,7 @@ func (s *Server) reserveMissionStart(name, workdir, target, parent, purpose, act
 		}
 		if _, sendErr := s.deliverByName(parent, notice.String(), OriginAgent, false); sendErr != nil {
 			slog.Warn("mission anomaly notice delivery failed", "parent", parent, "err", sendErr)
-			s.notifyFleetHealth(name, notice.String()+" Parent delivery failed: "+sendErr.Error())
+			s.notifyFleetHealth(noticeAct, name, notice.String()+" Parent delivery failed: "+sendErr.Error())
 		}
 	}
 	if err != nil {

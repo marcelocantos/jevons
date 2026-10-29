@@ -64,6 +64,10 @@ func (s *Server) migrateOptions(now time.Time) []migrateProviderOption {
 	var snap planusage.Snapshot
 	if src != nil {
 		switch v := src().(type) {
+		case json.RawMessage:
+			if err := json.Unmarshal(v, &snap); err != nil {
+				snap = planusage.Snapshot{Pending: true, Error: err.Error()}
+			}
 		case planusage.Snapshot:
 			snap = v
 		case *planusage.Snapshot:

@@ -104,6 +104,12 @@ type Message struct {
 	// 🎯T766.4.1): the seat is watching an alive process it does not
 	// control. Repeatable. On a finish-report this is a contradiction.
 	ActiveWaits []ActiveWait
+	// OwnerPurpose is the purpose slot on owner-reply (🎯T1140).
+	OwnerPurpose OwnerPurpose
+	// OwnerImpact is the owner-impact slot on finish-report (🎯T1122).
+	OwnerImpact OwnerImpact
+	// LandHold is the 🎯T1040 no-merge/no-activation mission hold.
+	LandHold LandHold
 	// Extra holds unknown jevons: keys so a newer emitter is not refused.
 	Extra   map[string]string
 	Payload string
@@ -190,11 +196,20 @@ func (m *Message) SlotsFingerprint() string {
 		"question-options=" + strings.Join(m.QuestionOptions, "\x00"),
 		"name=" + m.Name,
 		"phase=" + string(m.Phase),
+		"owner-impact=" + string(m.OwnerImpact),
 		ledgerFingerprint(m),
 		fogFingerprint(m),
 		gateRoleFingerprint(m),
 		activeWaitFingerprint(m),
 	}, "\n")
+}
+
+// HasDeclared reports whether text carries a jevons fence with a kind slot.
+// Prose with no fence is false. A malformed envelope still counts as declared
+// so classifiers can read its slots (🎯T766.4).
+func HasDeclared(text string) bool {
+	m, _ := Parse(text)
+	return m != nil
 }
 
 // Parse extracts a jevons envelope from text.
@@ -212,7 +227,12 @@ func Parse(text string) (*Message, error) {
 	if body == "" {
 		return nil, nil
 	}
+	atLine1 := true
 	fence, payload, ok := splitFence(body)
+	if !ok {
+		fence, payload, ok = splitTrailingFence(body)
+		atLine1 = false
+	}
 	if !ok {
 		return nil, nil
 	}
@@ -222,7 +242,7 @@ func Parse(text string) (*Message, error) {
 	}
 	msg.Payload = strings.TrimLeft(payload, "\n")
 	msg.Raw = fence
-	msg.AtLine1 = true
+	msg.AtLine1 = atLine1
 	if err != nil {
 		return msg, err
 	}
@@ -322,6 +342,65 @@ func stripStandingBrief(s string) (string, bool) {
 // splitFence returns the fence body and the payload after it when text
 // opens with a ```jevons fence. Incomplete fences (no closer) return ok=false
 // so a mid-stream paint is not flagged as malformed.
+// splitTrailingFence accepts an envelope that is the message's final block:
+// a line opening a jevons fence, its closing fence, and nothing after it but
+// whitespace. The payload is the text before it. Of 600 stored worker
+// reports on 2026-10-22 one opened at line 1 and 68 ended with their
+// envelope, so every typed control (reap, stop, idle, active wait) read
+// those finishes as unknown. A block in the middle of a message stays
+// unknown: it may be a quotation.
+func splitTrailingFence(text string) (fence, payload string, ok bool) {
+	body := strings.TrimRight(trimGoalStatusTail(text), " \t\r\n")
+	const closer = "\n```"
+	if !strings.HasSuffix(body, closer) {
+		return "", "", false
+	}
+	inner := body[:len(body)-len(closer)]
+	start := -1
+	for i := len(inner); i > 0; {
+		nl := strings.LastIndexByte(inner[:i], '\n')
+		line := inner[nl+1 : i]
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			start = nl + 1
+			break
+		}
+		if nl < 0 {
+			break
+		}
+		i = nl
+	}
+	if start < 0 {
+		return "", "", false
+	}
+	opener := strings.TrimLeft(inner[start:], " \t")
+	nl := strings.IndexByte(opener, '\n')
+	if nl < 0 {
+		return "", "", false
+	}
+	fields := strings.Fields(strings.TrimSpace(opener[len("```"):nl]))
+	if len(fields) == 0 || strings.ToLower(fields[0]) != FenceInfo {
+		return "", "", false
+	}
+	return opener[nl+1:], strings.TrimRight(inner[:start], " \t\r\n"), true
+}
+
+// trimGoalStatusTail drops trailing `GOAL_STATUS: <word>` lines. Claudia's
+// session-goal protocol has a seat end its turn with one, after any envelope
+// (37 of the 600 reports above ended envelope then GOAL_STATUS only). It is a
+// protocol token, not prose, so it does not make the envelope mid-message.
+func trimGoalStatusTail(text string) string {
+	s := strings.TrimRight(text, " \t\r\n")
+	for {
+		nl := strings.LastIndexByte(s, '\n')
+		line := strings.TrimSpace(s[nl+1:])
+		word, found := strings.CutPrefix(line, "GOAL_STATUS:")
+		if !found || len(strings.Fields(word)) != 1 || nl < 0 {
+			return s
+		}
+		s = strings.TrimRight(s[:nl], " \t\r\n")
+	}
+}
+
 func splitFence(text string) (fence, payload string, ok bool) {
 	s := strings.TrimLeft(text, " \t")
 	const open = "```"
@@ -508,6 +587,24 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 			return err
 		}
 		msg.ActiveWaits = append(msg.ActiveWaits, w)
+	case "hold", "land-hold", "land_hold":
+		h, err := ParseLandHold(value)
+		if err != nil {
+			return err
+		}
+		msg.LandHold = h
+	case "purpose":
+		p, ok := ParseOwnerPurpose(value)
+		if !ok {
+			return fmt.Errorf("unknown purpose %q (want decision|fault|plan-change|answer|routine)", value)
+		}
+		msg.OwnerPurpose = p
+	case "owner-impact", "owner_impact":
+		oi, ok := ParseOwnerImpact(value)
+		if !ok {
+			return ownerImpactSlotError(value)
+		}
+		msg.OwnerImpact = oi
 	default:
 		msg.Extra[key] = value
 	}
@@ -605,6 +702,9 @@ func Format(m *Message) string {
 	writeSlot(&b, "question-default", quoteIfNeeded(m.QuestionDefault))
 	writeSlot(&b, "name", m.Name)
 	writeSlot(&b, "phase", string(m.Phase))
+	if m.OwnerImpact != OwnerImpactNone {
+		writeSlot(&b, "owner-impact", string(m.OwnerImpact))
+	}
 	switch m.SilentLedger {
 	case SilentLedgerEmpty:
 		writeSlot(&b, "silent-ledger", "none")
@@ -705,5 +805,33 @@ func CorrectionNotice(text string) string {
 	if m.Kind == KindFinishReport {
 		b.WriteString("\nA finish-report the daemon reads as done has this shape:\n" + DoneShape + "\n" + DoneShapeNote)
 	}
+	return b.String()
+}
+
+// MissingDefaultNotice is what the daemon sends BACK TO THE AUTHOR (same
+// shape as CorrectionNotice, 🎯T793) when an owner-decision block parses
+// fine but states no question-default (🎯T404.2). Validate does not refuse
+// this — refusing would drop the question from the durable view (🎯T378) —
+// so the only way the author learns the slot is missing is this notice.
+// Returns "" when text has no valid owner-decision block, or the block
+// already carries a default.
+func MissingDefaultNotice(text string) string {
+	m, err := Parse(text)
+	if m == nil || err != nil || m.Kind != KindFinishReport {
+		return ""
+	}
+	if m.BlockClass != BlockOwnerDecision {
+		return ""
+	}
+	if strings.TrimSpace(m.QuestionDefault) != "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("⚠ Your owner-decision question states no `question-default` (🎯T404.2): " +
+		"the owner answers to change an outcome, not to unblock one, but a question with no " +
+		"default stalls your seat on silence.")
+	b.WriteString("\nThe failing slot line is `" + Sigil + " question-default <what you will do if unanswered>`.")
+	b.WriteString("\nThe question itself is already recorded and paged (🎯T378: never dropped). " +
+		"Carry a default on your next ask so silence degrades into a decision instead of a stall.")
 	return b.String()
 }

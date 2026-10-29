@@ -301,6 +301,11 @@ func sharedReason(seats map[string]Record) string {
 	return "mixed: " + strings.Join(parts, "; ")
 }
 
+// AlertNamedSeats caps how many seat names the alert line spells out. On
+// 2026-10-22 a deliberate 67-seat cleanup filled the whole RHS agent pane with
+// names; agent_list still shows every stopped seat.
+const AlertNamedSeats = 8
+
 // FormatAlert is the one line agent_list, the RHS and the overseer see.
 func FormatAlert(a Alert) string {
 	if len(a.Seats) == 0 {
@@ -312,7 +317,14 @@ func FormatAlert(a Alert) string {
 	}
 	return fmt.Sprintf("MASS STOP (🎯T662): %d seats stopped within %s (%s–%s) %s — %s. Seats: %s.",
 		len(a.Seats), a.Window, a.From.Local().Format("15:04:05"), a.To.Local().Format("15:04:05"),
-		cause, a.Shared, strings.Join(a.Seats, ", "))
+		cause, a.Shared, namedSeats(a.Seats))
+}
+
+func namedSeats(seats []string) string {
+	if len(seats) <= AlertNamedSeats {
+		return strings.Join(seats, ", ")
+	}
+	return fmt.Sprintf("%s and %d more (agent_list names each)", strings.Join(seats[:AlertNamedSeats], ", "), len(seats)-AlertNamedSeats)
 }
 
 // Key identifies a burst for once-only delivery: the burst's first stop.

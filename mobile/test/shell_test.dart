@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jevons_mobile/main.dart';
 import 'package:jevons_mobile/settings.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
 
@@ -87,10 +87,20 @@ void main() {
   late _FakeWebViewPlatform platform;
 
   setUp(() {
-    SharedPreferences.setMockInitialValues({});
+    CockpitSettings.androidOverrideForTests = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('jevons/device_store'), (
+      call,
+    ) async {
+      if (call.method == 'get') return null;
+      if (call.method == 'put') return null;
+      throw MissingPluginException();
+    });
     platform = _FakeWebViewPlatform();
     WebViewPlatform.instance = platform;
   });
+
+  tearDown(() => CockpitSettings.androidOverrideForTests = null);
 
   Future<void> pumpShell(WidgetTester tester) async {
     final settings = await CockpitSettings.load();

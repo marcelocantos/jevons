@@ -95,13 +95,31 @@ func (s *Server) latestStoredReport(name string) string {
 	return ""
 }
 
+// latestDeclaredStoredReport returns the newest stored report that declares a
+// jevons envelope (🎯T1190). It always reads the durable store, not the
+// LooksSatisfied hook, so it stays stable while hooks compose LatestDeclared.
+func (s *Server) latestDeclaredStoredReport(name string) string {
+	if s == nil || strings.TrimSpace(name) == "" {
+		return ""
+	}
+	if dir := s.agentReportStateDir(); dir != "" {
+		if rec, err := agentreport.LatestDeclared(dir, name); err == nil {
+			return rec.Text
+		}
+	}
+	return ""
+}
+
 // ClearSeatBlocker marks name's stored blocked finish-report cleared, so the
 // idle-nudge and impatience sweeps treat the seat as an ordinary open-mission
 // seat again. Returns false (and records nothing) when the latest stored
 // report is not a blocked finish-report.
 func (s *Server) ClearSeatBlocker(name, why string) bool {
 	name = strings.TrimSpace(name)
-	report := s.latestStoredReport(name)
+	report := s.latestDeclaredStoredReport(name)
+	if report == "" {
+		report = s.latestStoredReport(name)
+	}
 	blocker, ok := envelope.BlockedOn(report)
 	if !ok {
 		return false

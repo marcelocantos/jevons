@@ -42,6 +42,9 @@ func TestT792StartSurvivesCallerDeadline(t *testing.T) {
 	if res == nil || !strings.Contains(toolText(res), "T792") {
 		t.Fatalf("caller must be told the launch continues (T792), got %q", toolText(res))
 	}
+	if !strings.Contains(toolText(res), "outcome="+StartOutcomeAlreadyStarting) {
+		t.Fatalf("T758 requires outcome=%s on a deadline answer, got %q", StartOutcomeAlreadyStarting, toolText(res))
+	}
 	if launched.Load() {
 		t.Fatal("launch should still be in flight")
 	}

@@ -207,7 +207,21 @@ class _CockpitShellState extends State<CockpitShell> {
         body: SafeArea(
           child: Stack(
             children: [
-              WebViewWidget(controller: _web),
+              // 🎯T1057: Flutter's default shortcuts claim plain arrow keys
+              // for directional focus, so a hardware keyboard's arrows never
+              // reached the cockpit's text box (Shift/Cmd+arrow did). Binding
+              // them to DoNothingAndStopPropagationIntent stops Flutter acting
+              // on them without marking them handled, so the platform hands
+              // them to the web view.
+              Shortcuts(
+                shortcuts: const <ShortcutActivator, Intent>{
+                  SingleActivator(LogicalKeyboardKey.arrowUp): DoNothingAndStopPropagationIntent(),
+                  SingleActivator(LogicalKeyboardKey.arrowDown): DoNothingAndStopPropagationIntent(),
+                  SingleActivator(LogicalKeyboardKey.arrowLeft): DoNothingAndStopPropagationIntent(),
+                  SingleActivator(LogicalKeyboardKey.arrowRight): DoNothingAndStopPropagationIntent(),
+                },
+                child: WebViewWidget(controller: _web),
+              ),
               if (_loading) const LinearProgressIndicator(),
               if (_loadError != null)
                 Center(

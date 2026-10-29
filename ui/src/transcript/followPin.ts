@@ -37,6 +37,11 @@ export const FOLLOW_END_PX = 80;
  */
 export const PIN_RESIDUAL_PX = 8;
 
+/** T532/T603: sub-pixel pin slack — do not rewrite scrollTop on every RO tick. */
+export function settlePinGapPx(gap: number): boolean {
+  return (Number(gap) || 0) <= PIN_RESIDUAL_PX;
+}
+
 /**
  * growthSince is how much canvas appeared below the viewport since the
  * last measurement — a long agent report, a fold expanding, twenty
@@ -174,4 +179,29 @@ export function shouldHoldFollow(opts: {
   if (opts.wasFollowing && opts.heightGrew) return true;
   const t = opts.threshold == null ? FOLLOW_END_PX : opts.threshold;
   return opts.fromBottom < t;
+}
+
+/**
+ * After hydrate, remeasures that do not move the live end should not
+ * re-run scrollToIndex — that rewrites scrollTop and fights wheel-down
+ * while tracking (🎯T494.1 mechanism C). Late gaps are closed by the
+ * canvas ResizeObserver (🎯T603 / 🎯T789).
+ */
+export function shouldSkipFollowRepinWhenAtLiveEnd(o: {
+  hydrateSettled: boolean;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+}): boolean {
+  if (!o.hydrateSettled) return false;
+  const st = Number(o.scrollTop) || 0;
+  // Hard-reload first paint is scrollTop=0. Before the virtualizer assigns
+  // the full canvas extent, scrollHeight can still equal clientHeight, which
+  // reads as "already at the live end" and skipped the only pin pass — the
+  // owner stayed at the top with ↓ Latest visible (🎯T1164).
+  if (st <= 0) return false;
+  return (
+    distanceFromEnd(o.scrollTop, o.scrollHeight, o.clientHeight) <=
+    PIN_RESIDUAL_PX
+  );
 }

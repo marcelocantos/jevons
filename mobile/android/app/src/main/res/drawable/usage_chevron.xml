@@ -1,0 +1,7 @@
+<!-- 🎯T673's chevron, turned for a vertical bar: a small left-pointing
+     triangle beside the bar at the period's elapsed height. Neutral grey,
+     never a band colour: it is a ruler mark, not a verdict. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="5dp" android:height="6dp" android:viewportWidth="5" android:viewportHeight="6">
+    <path android:fillColor="#a0a0a0" android:pathData="M0,3 L5,0 L5,6 Z" />
+</vector>

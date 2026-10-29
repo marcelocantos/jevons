@@ -233,6 +233,11 @@ func (s *Server) noteTurnEnded(name string) {
 	s.mu.Unlock()
 	// 🎯T766.2: turn-flight write path feeds the shared authority (InFlight=No).
 	s.observeTurnFlight(name, FlightIdle)
+	// 🎯T1186: a finish-report may already be in the store from notify while
+	// worker-idle still read turn_in_flight; reap once flight settles.
+	s.maybeReapStoredDoneWorkAgent(name)
+	s.notePOTurnEndedForChildWake(name)
+	s.notePOTurnEndedForUndeliveredDirection(name)
 }
 
 func (s *Server) terminalGeneration(name string) uint64 {
@@ -252,11 +257,15 @@ func (s *Server) noteQueuedTurnBegan(name string, generation uint64) bool {
 	if s.agentFlight == nil {
 		s.agentFlight = map[string]TurnFlight{}
 	}
+	began := s.agentFlight[name] != FlightInFlight
 	s.agentFlight[name] = FlightInFlight
 	s.wedges.flightBegan(name, time.Now())
 	s.mu.Unlock()
 	// 🎯T766.2: queued turn begin is an InFlight claim the authority must hear.
 	s.observeTurnFlight(name, FlightInFlight)
+	if began {
+		s.notePOTurnBegan(name)
+	}
 	return false
 }
 
@@ -285,7 +294,8 @@ func (s *Server) setFlight(name string, f TurnFlight) {
 	if s.agentFlight == nil {
 		s.agentFlight = map[string]TurnFlight{}
 	}
-	if f == FlightInFlight && s.agentFlight[name] != FlightInFlight {
+	began := f == FlightInFlight && s.agentFlight[name] != FlightInFlight
+	if began {
 		s.wedges.flightBegan(name, time.Now())
 	}
 	s.agentFlight[name] = f
@@ -293,6 +303,9 @@ func (s *Server) setFlight(name string, f TurnFlight) {
 	// 🎯T766.2: the send-path flight ledger is a knowing party for InFlight;
 	// fold every write into the shared authority so controls do not re-derive.
 	s.observeTurnFlight(name, f)
+	if began {
+		s.notePOTurnBegan(name)
+	}
 }
 
 // observeTurnFlight records what the turn-flight ledger just wrote (🎯T766.2).

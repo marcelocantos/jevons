@@ -4,8 +4,10 @@
 package mcpserver
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
@@ -81,10 +83,32 @@ func TestT972StopReasonDistinguishesFinishedWorkFromKill(t *testing.T) {
 
 	// FormatReapedListSection (the jevons_agent_list surface) must carry the
 	// same distinguishing field through to the tool's text output.
-	section := FormatReapedListSection(snap)
+	section := FormatReapedListSection(snap, 0)
 	for _, want := range []string{"stop_reason=reap_done", "stop_reason=kill", "stop_reason=dead_seat"} {
 		if !strings.Contains(section, want) {
 			t.Fatalf("FormatReapedListSection missing %q:\n%s", want, section)
 		}
+	}
+}
+
+// A default listing names the newest reaped seats and counts the rest; the
+// full history ran to 89 KB per jevons_agent_list call (2026-10-27).
+func TestReapedListSectionBoundsHistory(t *testing.T) {
+	snap := fleetintent.Snapshot{Agents: map[string]fleetintent.Record{}}
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < reapedListLimit+5; i++ {
+		snap.Agents[fmt.Sprintf("seat-%02d", i)] = fleetintent.Record{State: fleetintent.Reaped, At: base.Add(time.Duration(i) * time.Hour)}
+	}
+	got := FormatReapedListSection(snap, reapedListLimit)
+	newest := fmt.Sprintf("seat-%02d", reapedListLimit+4)
+	if !strings.Contains(got, newest) || strings.Contains(got, "seat-00 ") || !strings.Contains(got, "5 older reaped name(s) omitted") {
+		t.Fatalf("bounded section wrong:\n%s", got)
+	}
+	if all := FormatReapedListSection(snap, 0); !strings.Contains(all, "seat-00 ") || strings.Contains(all, "omitted") {
+		t.Fatalf("history listing should be complete:\n%s", all)
+	}
+	report := FormatFleetIntentReport(snap, 3)
+	if !strings.Contains(report, "15 agent(s) stood down") || !strings.Contains(report, "12 older stood-down agent(s) omitted") {
+		t.Fatalf("bounded intent report wrong:\n%s", report)
 	}
 }

@@ -8,8 +8,10 @@ import { MuxClient } from '../mux/client';
 import { AgentInteraction } from './AgentInteraction';
 
 // 🎯T562.2: a worker/aside composer is busy from ITS OWN phase sample, in the
-// object shape the daemon puts on that seat's transcript meta. Busy queues a
-// plain Enter visibly; idle sends straight through. Only the socket is a fixture.
+// object shape the daemon puts on that seat's transcript meta.
+// 🎯T856 / 🎯T899: a plain Enter while busy MUST reach /ws/mux at once (daemon
+// sendq owns the busy seat; the pane does not client-queue). Idle still sends
+// straight through. Only the socket is a fixture.
 class Socket {
   static OPEN = 1;
   static CONNECTING = 0;
@@ -45,8 +47,9 @@ const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JS
 const win = { start: 1, older: 0, total: 0, n: 0, following: true };
 
 describe('seat composer busy from its own phase (T562.2)', () => {
-  // 🎯T899: a busy agent seat sends at once; the daemon steers the message into
-  // the turn and says when it will interrupt, and the pane counts down to it.
+  // 🎯T856 / 🎯T899: a busy non-overseer seat sends at once; the daemon steers
+  // the message into the turn and says when it will interrupt, and the pane
+  // counts down to it.
   it('busy seat: Enter reaches the wire at once and the escalation counts down; idle clears it', async () => {
     const view = render(<AgentInteraction mux={client} name={SEAT} density="compact" connected />);
     act(() => { emit('meta', { ...win, phase: { phase: 'tool', step: 'Read' } }); });

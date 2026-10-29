@@ -1,0 +1,88 @@
+#!/bin/sh
+# Pre-push: check that `make gate` attested the tree being pushed (🎯T1279).
+#
+# Jevons ships owner work to master by gated push, not by PR. The gate is the
+# oracle: `make gate` runs the full product net in a clean checkout and, only
+# on a GREEN verdict, writes .git/gate-attestation (scripts/gate-attest.sh).
+# This hook does not run the gate — the gate takes over an hour, and git opens
+# the SSH connection before the hook runs, so GitHub would close it long
+# before a gate here finished. It checks that the attestation names the tree
+# of the tip of each ref being pushed; only the tip, not the commits behind
+# it. The attestation stays in .git/ and is never committed.
+#
+# WIP backups are exempt: a ref pushed under refs/backup/ is not a release and
+# no consumer builds it.
+#
+# The hook replaces git-lfs's stock pre-push, so it ends by handing git's ref
+# list to `git lfs pre-push`; without that, LFS objects stop uploading and
+# pointers reach the remote with nothing behind them. The ref list is read
+# first because the checks below would otherwise consume it.
+#
+# Agents must not pass --no-verify. Owner emergency bypass is
+# git push --no-verify.
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+
+zero=0000000000000000000000000000000000000000
+remote_name=${1:-}  # the ref loop below reuses the positional parameters
+remote_url=${2:-}
+
+refs=$(cat)
+checked=""   # local shas whose tree must match the attestation
+strict=0     # any non-backup ref in this push (or no refs at all)
+[ -z "$refs" ] && strict=1
+nl='
+'
+oldifs=$IFS
+IFS=$nl
+for line in $refs; do
+    IFS=$oldifs
+    # shellcheck disable=SC2086
+    set -- $line
+    IFS=$nl
+    local_sha=${2:-}
+    remote_ref=${3:-}
+    case "$remote_ref" in
+        refs/backup/*) continue ;;
+    esac
+    strict=1
+    [ "$local_sha" = "$zero" ] && continue # a branch delete pushes nothing
+    checked="$checked $local_sha"
+done
+IFS=$oldifs
+
+if [ "$strict" = 1 ]; then
+    att="$(git rev-parse --git-dir)/gate-attestation"
+    if [ ! -f "$att" ]; then
+        echo "pre-push: no gate attestation in this clone — run make gate, then push" >&2
+        exit 1
+    fi
+    tree=$(sed -n 's/^tree=//p' "$att")
+    at=$(sed -n 's/^at=//p' "$att")
+    profile=$(sed -n 's/^profile=//p' "$att")
+    case "$profile" in
+        jevons-fast-v1 | jevons-full-v1) ;; # make gate | make gate-full (🎯T1299)
+        *)
+            echo "pre-push: gate attestation profile '$profile' is not a jevons gate profile — run make gate, then push" >&2
+            exit 1
+            ;;
+    esac
+    for local_sha in $checked; do
+        pushed_tree=$(git rev-parse "$local_sha^{tree}")
+        if [ "$pushed_tree" != "$tree" ]; then
+            echo "pre-push: make gate last attested tree $tree at $at; you are pushing $(git rev-parse --short "$local_sha") whose tree is $pushed_tree — run make gate on this commit, then push" >&2
+            exit 1
+        fi
+    done
+    echo "✓ gate attestation covers the pushed tree ($at)"
+else
+    echo "✓ refs/backup/* only — WIP backup, gate attestation skipped"
+fi
+
+if [ -f .gitattributes ] && grep -q 'filter=lfs' .gitattributes; then
+    command -v git-lfs >/dev/null 2>&1 || {
+        echo "pre-push: this repository uses Git LFS but git-lfs is not on PATH" >&2
+        exit 2
+    }
+    printf '%s' "$refs${refs:+$nl}" | git lfs pre-push "$remote_name" "$remote_url"
+fi

@@ -174,16 +174,17 @@ type Snapshot struct {
 	TokensUsed   int64 `json:"tokens_used,omitempty"`
 	TokensBudget int64 `json:"tokens_budget,omitempty"`
 
-	// ActiveSessions is process-alive (or conservatively unknown) fleet seats,
-	// not distinct sessions in the cost window. MaxSessions bounds admission
+	// ActiveSessions is live fleet seats (positive alive evidence), not
+	// distinct sessions in the cost window. MaxSessions bounds admission
 	// (0 = unbounded). CostWindowSessions is diagnostic only; cost alerts still
 	// come independently from the cost monitor.
 	ActiveSessions     int `json:"active_sessions,omitempty"`
 	CostWindowSessions int `json:"cost_window_sessions,omitempty"`
 	MaxSessions        int `json:"max_sessions,omitempty"`
 	// ProviderLoad / ProviderSoftCaps are the 🎯T325.2 portfolio spread.
-	ProviderLoad     map[string]int `json:"provider_load,omitempty"`
-	ProviderSoftCaps map[string]int `json:"provider_soft_caps,omitempty"`
+	ProviderLoad      map[string]int      `json:"provider_load,omitempty"`
+	ProviderLoadSeats map[string][]string `json:"provider_load_seats,omitempty"`
+	ProviderSoftCaps  map[string]int      `json:"provider_soft_caps,omitempty"`
 
 	// RunningBackground counts background cycles already in flight by class.
 	RunningBackground map[Class]int `json:"running_background,omitempty"`

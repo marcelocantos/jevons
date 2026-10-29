@@ -13,7 +13,7 @@ import (
 )
 
 // handleGetGate GET /api/gates/{id} — supervisor lookup of a cited GATE
-// record (🎯T697). The daemon reads the store; the caller does not need
+// record (🎯T697 / 🎯T701). The daemon reads the store; the caller does not need
 // filesystem access to ~/.jevons/gates or permission to run bin/gate.
 //
 // An id with no record (or an id that is not a legal handle) returns 404

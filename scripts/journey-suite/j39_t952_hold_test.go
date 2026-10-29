@@ -4,6 +4,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -116,5 +118,35 @@ func TestT952HoldCountReadsTheNoticeWordsNotFoldedToolFields(t *testing.T) {
 	named := `{"text":"[Fleet health] Stalled backlog on \"t952-hold\": 1 message(s) held","type":"agent_note"}`
 	if _, holdNamed := t952NoticeCounts([]string{named}); holdNamed != 1 {
 		t.Fatalf("a notice whose words name the hold was not counted: %d", holdNamed)
+	}
+}
+
+// 🎯T1187 changed the parked hold from a WARN per sweep to one WARN per
+// daemon lifetime. The isolate still requires a status line, not silence.
+func TestT952HoldWarnAllowance(t *testing.T) {
+	dir := t.TempDir()
+	s := &suite{logPath: filepath.Join(dir, "jevonsd.log")}
+	first := `level=WARN msg="🎯T418 backlog stalled" component=agent_send agent=t952-hold queued=1 oldest_age=77h6m41s reason="stood down: parked by owner"`
+	debug := `level=DEBUG msg="🎯T1187 stood-down backlog stall already warned" agent=t952-hold oldest_age=77h7m41s`
+	if err := os.WriteFile(s.logPath, []byte(first+"\n"+debug+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.checkT952HoldWarns(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.logPath, []byte(first+"\n"+debug+"\n"+first+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.checkT952HoldWarns(1); err == nil {
+		t.Fatal("repeated WARN in one lifetime accepted")
+	}
+	if err := s.checkT952HoldWarns(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.logPath, []byte(debug+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.checkT952HoldWarns(2); err == nil {
+		t.Fatal("missing first WARN accepted")
 	}
 }

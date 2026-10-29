@@ -14,7 +14,7 @@ import (
 
 // MintArtifact issues a fresh PairingArtifact for the given peer
 // instance ID, persisting the server-side PairingRecord to the
-// credential store. The returned artifact carries everything the
+// credential store, without replacing another peer. The returned artifact carries everything the
 // client needs for ConnectWithArtifact: relay URL, peer instance ID,
 // key material, and expiry.
 func (s *Server) MintArtifact(relayURL, instanceID string) (*pigeon.PairingArtifact, error) {
@@ -23,7 +23,7 @@ func (s *Server) MintArtifact(relayURL, instanceID string) (*pigeon.PairingArtif
 	if err != nil {
 		return nil, fmt.Errorf("mint pairing artifact: %w", err)
 	}
-	if err := s.creds.Save(serverRec); err != nil {
+	if err := s.creds.Add(serverRec); err != nil {
 		return nil, fmt.Errorf("persist server record: %w", err)
 	}
 	return artifact, nil
@@ -31,8 +31,7 @@ func (s *Server) MintArtifact(relayURL, instanceID string) (*pigeon.PairingArtif
 
 // AddCredential ingests a server-side PairingRecord from the given
 // path (the JSON form emitted by `pigeon pair --server-record-out=...`)
-// and persists it to the credential store, replacing any existing
-// credential. Designed for out-of-band deploy flows where the artifact
+// and persists it only if that peer is not already paired. Designed for out-of-band deploy flows where the artifact
 // is minted by an external process.
 func (s *Server) AddCredential(path string) error {
 	data, err := os.ReadFile(path)
@@ -43,5 +42,5 @@ func (s *Server) AddCredential(path string) error {
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return fmt.Errorf("parse server record: %w", err)
 	}
-	return s.creds.Save(&rec)
+	return s.creds.Add(&rec)
 }

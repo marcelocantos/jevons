@@ -161,7 +161,7 @@ func MigrateOff(be Backend, now time.Time, th Thresholds) bool {
 	if be.Override != nil {
 		return !IsDestBandOverride(be.Override.Band) // 🎯T948
 	}
-	return claudia.ShouldVacate(backendToPlanUsage(be), now, claudiaThresholdsPtr(th))
+	return claudia.ShouldVacate(planUsageForResolve(be, now), now, claudiaThresholdsPtr(th))
 }
 
 // DestEligible reports a published dest that may receive work (🎯T693):
@@ -169,7 +169,7 @@ func MigrateOff(be Backend, now time.Time, th Thresholds) bool {
 // when claudia.HasAvailableTokens still says the account has tokens.
 // Eligibility only — ranking is claudia.Resolve.
 func DestEligible(be Backend, now time.Time, th Thresholds) bool {
-	u := backendToPlanUsage(be)
+	u := planUsageForResolve(be, now)
 	if u.Status != claudia.PlanUsageAvailable {
 		return false
 	}
@@ -185,8 +185,8 @@ func DestEligible(be Backend, now time.Time, th Thresholds) bool {
 // PickPlanDest chooses dest through claudia.Resolve (🎯T691 / 🎯T693).
 // ok is false when no published dest is dest-band eligible. Jevons does
 // not rank the candidates.
-func PickPlanDest(cands []DestCand, now time.Time, th Thresholds) (string, bool) {
-	pick, err := ResolveDest(context.Background(), cands, "", now, th)
+func PickPlanDest(cands []DestCand, now time.Time, th Thresholds, tieBreak []claudia.Provider) (string, bool) {
+	pick, err := ResolveDest(context.Background(), cands, "", now, th, tieBreak)
 	if err != nil || pick.Provider == "" {
 		return "", false
 	}
@@ -199,7 +199,7 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 	view := CockpitSnapshot(snap)
 	var usage []claudia.PlanUsage
 	for _, be := range view.Backends {
-		usage = append(usage, backendToPlanUsage(be))
+		usage = append(usage, planUsageForResolve(be, now))
 	}
 	var exclusions []claudia.Provider
 	var capped []string
@@ -388,16 +388,18 @@ func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds,
 
 func migrateOffReason(be Backend, now time.Time, th Thresholds) string {
 	sess := SessionStatusOf(be, th) == SessionExhausted
-	week := false
+	weekWhy := ""
 	switch WeeklyBandOf(be, now, th) {
-	case BandHot, BandExhausted:
-		week = true
+	case BandHot, BandExhausted, BandAhead:
+		weekWhy = windowReason(be, now, th)
 	}
 	switch {
-	case sess && week:
-		return "session or weekly exhausted"
+	case sess && weekWhy != "":
+		return "session exhausted; " + weekWhy
 	case sess:
 		return "session exhausted"
+	case weekWhy != "":
+		return weekWhy
 	default:
 		return "weekly hot or exhausted"
 	}

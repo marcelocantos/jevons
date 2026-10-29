@@ -116,17 +116,63 @@ type Config struct {
 	// busy with its own turn, by who sent it (🎯T899). Zero value = compiled
 	// defaults.
 	DeliveryEscalation DeliveryEscalationConfig `yaml:"delivery_escalation"`
+
+	// OwnerQuestions tunes the 🎯T404.2 silence-resolution sweep: an
+	// unanswered question that carries a default is retired on its own
+	// after this window, and the asker is told to proceed on it. A
+	// question with no default never auto-resolves; it keeps its STALLS
+	// mark regardless of this window.
+	OwnerQuestions OwnerQuestionsConfig `yaml:"owner_questions"`
+
+	// FableClassDefaults records owner ratification for 🎯T358 (see
+	// docs/design/t358-fable-class-defaults-owner-decision.md). Empty or
+	// keep_current leaves mint pins unchanged.
+	FableClassDefaults FableClassDefaultsConfig `yaml:"fable_class_defaults"`
+}
+
+// FableClassDefaultsConfig is the durable owner record for 🎯T358.
+type FableClassDefaultsConfig struct {
+	// Ratified is one of: keep_current, root_fable, po_fable, both, tiered.
+	Ratified string `yaml:"ratified"`
+}
+
+// OwnerQuestionsConfig is the 🎯T404.2 silence-resolution window. The window
+// is a config key, not a constant in prose, so a deployment can tune it
+// without a code change.
+type OwnerQuestionsConfig struct {
+	// SilenceWindowMinutes is how long an unanswered, default-carrying
+	// question stays open before being retired as moot: proceeded on
+	// default. 0 = DefaultOwnerQuestionSilenceWindow (24h).
+	SilenceWindowMinutes int `yaml:"silence_window_minutes"`
+}
+
+// DefaultOwnerQuestionSilenceWindow is the provisional silence window
+// (🎯T404.2) absent an explicit owner_questions.silence_window_minutes.
+const DefaultOwnerQuestionSilenceWindow = 24 * time.Hour
+
+// SilenceWindow resolves the configured window, falling back to the
+// provisional default when unset or non-positive.
+func (c OwnerQuestionsConfig) SilenceWindow() time.Duration {
+	if c.SilenceWindowMinutes <= 0 {
+		return DefaultOwnerQuestionSilenceWindow
+	}
+	return time.Duration(c.SilenceWindowMinutes) * time.Minute
 }
 
 // FrontierConsumeConfig is the 🎯T254.1 enforcement loop tuning. The loop is
 // on by default (the target is daemon enforcement without owner spawn
 // commands); Disabled opts out. Zero numeric fields use compiled defaults
-// (10m interval, 1 spawn per cycle, 3 auto-spawns per target).
+// (10m interval, 1 spawn per cycle, 3 auto-spawns per target, 4 live
+// sweep-spawned workers).
 type FrontierConsumeConfig struct {
 	Disabled           bool `yaml:"disabled"`
 	IntervalMinutes    int  `yaml:"interval_minutes"`
 	MaxSpawnsPerCycle  int  `yaml:"max_spawns_per_cycle"`
 	MaxSpawnsPerTarget int  `yaml:"max_spawns_per_target"`
+	// MaxLiveWorkers caps how many sweep-minted auto workers (jv-t*-auto) may
+	// be registered at once while neither reaped nor parked (🎯T1196). While
+	// at the cap the sweep spawns nothing. 0 = default 4.
+	MaxLiveWorkers int `yaml:"max_live_workers"`
 }
 
 // Portfolio is one named domain group (e.g. personal, minicades, schools).
@@ -556,8 +602,10 @@ func (c Config) ContextCeilingEnforced() bool {
 
 func (c Config) OverseerDir() string { return filepath.Join(c.StateDir, c.OverseerName) }
 
-// Persona renders the overseer's instructions: the built-in template
-// (or PersonaFile) with this config's identity, plus PersonaNotes.
+// Persona renders the overseer's instructions: the owner-templated shell
+// (or PersonaFile) plus the overseer role file appended under
+// [Jevons role doctrine] (🎯T511 / 🎯T44 — single path; cmd/jevonsd only
+// calls this method when writing AGENTS.md / Claude.md).
 func (c Config) Persona() (string, error) {
 	tmpl := personaTemplate
 	if c.PersonaFile != "" {
@@ -579,7 +627,11 @@ func (c Config) Persona() (string, error) {
 	if notes := strings.TrimSpace(c.PersonaNotes); notes != "" {
 		out += "\n## Owner Notes\n\n" + notes + "\n"
 	}
-	return out, nil
+	roleBody, err := c.overseerRoleBody()
+	if err != nil {
+		return "", err
+	}
+	return appendOverseerRoleDoctrine(out, roleBody), nil
 }
 
 // DeliveryEscalationConfig is 🎯T899's urgency profile. A message to an

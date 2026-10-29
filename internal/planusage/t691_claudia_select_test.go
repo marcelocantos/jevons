@@ -51,7 +51,7 @@ func TestT691ResolveMintRefusesWhenNoDestBand(t *testing.T) {
 	cands := []DestCand{
 		{Provider: "grok", Backend: t495Backend("grok", t495pf(85), t495pf(15), t495Week(0.5), now)},
 	}
-	_, err := ResolveMint(context.Background(), cands, now, th)
+	_, err := ResolveMint(context.Background(), cands, now, th, nil)
 	if err == nil {
 		t.Fatal("hot-only feed must fail closed through claudia, not invent a dest")
 	}

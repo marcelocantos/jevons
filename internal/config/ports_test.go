@@ -53,6 +53,9 @@ func TestRefuseJourneyDevState(t *testing.T) {
 	if err := RefuseJourneyDevState(13716, daily); err != nil {
 		t.Fatalf("other port + daily state_dir must allow: %v", err)
 	}
+	if DailyPort != DevelopmentPort {
+		t.Fatalf("DailyPort legacy alias = %d, want DevelopmentPort %d", DailyPort, DevelopmentPort)
+	}
 	if JourneyPort == DevelopmentPort {
 		t.Fatal("JourneyPort must not equal DevelopmentPort")
 	}

@@ -61,6 +61,14 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		}
 		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+a.Reason, planPolicyActor, "")
 		if s.registry != nil {
+			// 🎯T1305: end the running turn first. Releasing a broker seat
+			// mid-turn left the sidecar running it, still calling the plan
+			// this park exists to stop spending (J45, 2026-10-29).
+			if proc := s.registry.Get(a.Name); proc != nil {
+				if err := proc.Interrupt(); err != nil {
+					slog.Warn("plan policy park: interrupt before stop failed", "name", a.Name, "err", err)
+				}
+			}
 			s.registry.Stop(a.Name)
 			seatstate.ObserveStopped(s.registry, a.Name)
 		}

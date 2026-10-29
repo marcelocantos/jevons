@@ -66,6 +66,10 @@ const (
 	// DefaultFrontierConsumeRespawnBackoff is the minimum wait between
 	// auto-spawns for the same target (worker died / finished-not-achieved).
 	DefaultFrontierConsumeRespawnBackoff = 30 * time.Minute
+	// DefaultFrontierConsumeMaxLiveWorkers caps concurrently live sweep-
+	// spawned workers (registered, not reaped or parked). While at the cap
+	// a sweep cycle spawns nothing (🎯T1196).
+	DefaultFrontierConsumeMaxLiveWorkers = 4
 
 	compFrontierConsume = "frontier_consume"
 )
@@ -115,6 +119,9 @@ const (
 	// which is the budget clamp: an owner reading a parked frontier has to be
 	// able to tell "I stood this fleet down" from "the clamp tripped".
 	FrontierReasonFleetIntent = "park_fleet_intent"
+	// FrontierReasonMaxLiveWorkers skips spawns while the configured ceiling
+	// of live sweep-minted workers is already met (🎯T1196).
+	FrontierReasonMaxLiveWorkers = "skip_max_live_workers"
 )
 
 // FrontierConsumeReport is one leaf's sweep outcome.
@@ -159,6 +166,44 @@ var autoSpawnedWorkerNamePattern = regexp.MustCompile(`^jv-t[0-9]+(\.[0-9]+)*-au
 // in "-auto" is never caught by this gate.
 func IsAutoSpawnedWorkerName(name string) bool {
 	return autoSpawnedWorkerNamePattern.MatchString(strings.TrimSpace(name))
+}
+
+// resolveFrontierMaxLiveWorkers maps config 0 → compiled default (🎯T1196).
+func resolveFrontierMaxLiveWorkers(n int) int {
+	if n <= 0 {
+		return DefaultFrontierConsumeMaxLiveWorkers
+	}
+	return n
+}
+
+// frontierSpawnActor is the intent actor the sweep stamps on a seat it mints.
+const frontierSpawnActor = "auto:frontier"
+
+// liveSweepSpawnedWorkerCount returns how many registered seats the sweep
+// minted and that are neither Reaped nor Parked (🎯T1196). A seat counts
+// only when its intent record still carries the sweep's own stamp: the
+// PO names its workers jv-tN-auto too, so the name shape alone counted four
+// PO spawns against the sweep's ceiling on 2026-10-23 and the sweep stopped
+// for good. A seat whose intent was later set by anyone else no longer
+// counts as the sweep's.
+func liveSweepSpawnedWorkerCount(names []string, intent fleetintent.Snapshot) int {
+	n := 0
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if !IsAutoSpawnedWorkerName(name) {
+			continue
+		}
+		rec, ok := intent.Agents[name]
+		if !ok || strings.TrimSpace(rec.By) != frontierSpawnActor {
+			continue
+		}
+		st := fleetintent.Resolve(rec.State)
+		if st == fleetintent.Reaped || st == fleetintent.Parked {
+			continue
+		}
+		n++
+	}
+	return n
 }
 
 // FormatFrontierSpawnBrief builds the opening mission brief for an
@@ -318,6 +363,11 @@ type FrontierConsumeArgs struct {
 	// Seats are registered implementers (🎯T566.3): a stopped seat on a
 	// ready leaf remints before a new spawn for a different leaf.
 	Seats []keepgoing.Seat
+	// LiveSweepWorkers is the precomputed count of registered sweep-minted
+	// auto workers that are neither reaped nor parked (🎯T1196).
+	LiveSweepWorkers int
+	// MaxLiveWorkers 0 → DefaultFrontierConsumeMaxLiveWorkers.
+	MaxLiveWorkers int
 }
 
 // SweepFrontierConsume evaluates every leaf and auto-spawns up to the
@@ -342,6 +392,13 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 	}
 
 	var out []FrontierConsumeReport
+	// 🎯T1117: attempts bounds every register call this cycle makes,
+	// counting a failed register (plan dest empty, etc.) the same as a
+	// successful spawn — otherwise an unbounded number of ready leaves can
+	// be tried in one cycle looking for the one that succeeds, each failed
+	// try still calling ensureFreshStartIntent and persisting against the
+	// name before its own register fails.
+	attempts := 0
 	spawned := 0
 	remintName := map[string]string{}
 	var readyIDs []string
@@ -479,6 +536,13 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			out = append(out, rep)
 			continue
 		}
+		maxLive := resolveFrontierMaxLiveWorkers(args.MaxLiveWorkers)
+		if args.LiveSweepWorkers >= maxLive {
+			rep.Action, rep.Reason = FrontierConsumeSkip, FrontierReasonMaxLiveWorkers
+			rep.Err = fmt.Sprintf("live_sweep_workers=%d max=%d", args.LiveSweepWorkers, maxLive)
+			out = append(out, rep)
+			continue
+		}
 		count, last := args.Ledger.Get(id)
 		if count >= maxTarget {
 			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonMaxAutospawns
@@ -490,7 +554,7 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			out = append(out, rep)
 			continue
 		}
-		if spawned >= maxCycle {
+		if attempts >= maxCycle {
 			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonCapacity
 			out = append(out, rep)
 			continue
@@ -505,6 +569,7 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			out = append(out, rep)
 			continue
 		}
+		attempts++
 		if err := args.Spawn(leaf, worker); err != nil {
 			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonSpawnFailed
 			rep.Err = err.Error()
@@ -537,6 +602,7 @@ type FrontierConsumeLoopArgs struct {
 	Interval           time.Duration
 	MaxSpawnsPerCycle  int
 	MaxSpawnsPerTarget int
+	MaxLiveWorkers     int
 	RespawnBackoff     time.Duration
 	// Spawn overrides the production launch path (hermetic tests without a
 	// provider process). Nil → Server.spawnFrontierWorker.
@@ -591,9 +657,19 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 	if parentPO == "" {
 		parentPO = defaultProductPOName
 	}
-	leaves, ledgerPath, err := targetfile.LoadFrontierLeavesFromCwd(args.Workdir)
+	ledgerData, ledgerPath, err := targetfile.ReadLedgerFromCwd(args.Workdir)
 	if err != nil {
 		slog.Warn("frontier consume: ledger load failed", "workdir", args.Workdir, "err", err)
+		return nil
+	}
+	snap, ok := targetfile.NewLedgerSnapshot(ledgerData)
+	if !ok {
+		slog.Warn("frontier consume: ledger parse failed", "workdir", args.Workdir, "ledger", ledgerPath)
+		return nil
+	}
+	leaves, err := snap.FrontierLeaves()
+	if err != nil {
+		slog.Warn("frontier consume: frontier leaves failed", "workdir", args.Workdir, "err", err)
 		return nil
 	}
 	// 🎯T499: recency bias — the per-cycle spawn slot goes to the newest
@@ -619,6 +695,12 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 		}
 	}
 
+	autoNames := make([]string, 0, len(s.registry.List()))
+	for _, d := range s.registry.List() {
+		autoNames = append(autoNames, d.Name)
+	}
+	liveSweep := liveSweepSpawnedWorkerCount(autoNames, s.fleetIntent())
+
 	reps := SweepFrontierConsume(FrontierConsumeArgs{
 		Leaves:             obs,
 		Ledger:             ledger,
@@ -628,6 +710,8 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 		FleetIntent:        s.fleetIntent().FleetState(),
 		MaxSpawnsPerCycle:  args.MaxSpawnsPerCycle,
 		MaxSpawnsPerTarget: args.MaxSpawnsPerTarget,
+		MaxLiveWorkers:     args.MaxLiveWorkers,
+		LiveSweepWorkers:   liveSweep,
 		RespawnBackoff:     args.RespawnBackoff,
 		Seats:              keepgoingSeats(s.registry, args.Workdir),
 		Spawn: func(leaf poproactive.LeafObs, workerName string) error {
@@ -640,14 +724,24 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 	})
 
 	spawnedN, parkedN := 0, 0
+	maxLiveLogged := false
 	for _, r := range reps {
+		if r.Reason == FrontierReasonMaxLiveWorkers && !maxLiveLogged {
+			maxLiveLogged = true
+			maxLive := resolveFrontierMaxLiveWorkers(args.MaxLiveWorkers)
+			s.logLifecycle(compFrontierConsume, "skip", "max_live_workers", map[string]any{
+				"live_sweep_workers": liveSweep, "max": maxLive,
+			})
+			slog.Info("frontier consume: skip max live workers",
+				"live_sweep_workers", liveSweep, "max", maxLive)
+		}
 		switch r.Action {
 		case FrontierConsumeSpawn:
 			spawnedN++
 			s.logLifecycle(compFrontierConsume, "spawn", "ok", map[string]any{
 				"target_id": r.TargetID, "worker": r.Worker, "parent": parentPO,
 			})
-			s.notifyFleetHealth(fleetHealthEventOccurrence(r.Worker+":"+r.TargetID, time.Now()), fmt.Sprintf(
+			s.notifyFleetHealth(noticeInform, fleetHealthEventOccurrence(r.Worker+":"+r.TargetID, time.Now()), fmt.Sprintf(
 				"[frontier-consume 🎯T254.1] auto-spawned %s for 🎯%s under %s (unconsumed frontier leaf)",
 				r.Worker, r.TargetID, parentPO))
 		case FrontierConsumePark:
@@ -672,6 +766,7 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 		slog.Info("frontier consume sweep",
 			"ledger", ledgerPath, "leaves", len(reps), "spawned", spawnedN, "parked", parkedN)
 	}
+	s.scanLedgerOwnerBlockersSnapshot(args.Workdir, snap)
 	return reps
 }
 
@@ -728,7 +823,7 @@ func (s *Server) notifySpawnFailure(po, targetID, worker, errText string) {
 	if _, err := s.deliverByName(po, msg, OriginAgent, false); err != nil {
 		slog.Warn("spawn-failure notice undelivered to PO; escalating to overseer",
 			"component", compFrontierConsume, "po", po, "target", targetID, "err", err)
-		s.notifyFleetHealth(worker, fmt.Sprintf("PO %s unreachable (%v) for: %s", po, err, msg))
+		s.notifyFleetHealth(noticeAct, worker, fmt.Sprintf("PO %s unreachable (%v) for: %s", po, err, msg))
 	}
 }
 
@@ -737,12 +832,51 @@ func (s *Server) notifySpawnFailure(po, targetID, worker, errText string) {
 // the sweep's engagement check). Cursor ACP (🎯T541) starts then sends the
 // brief without holding startMu; other providers still confirm the opening
 // brief on start (🎯T305).
+// restoreFrontierIntent puts a name's fleet intent back to what it was
+// before ensureFreshStartIntent flipped it to Working, when the register
+// that flip was for never completed (🎯T1117). A no-op when preIntent is
+// already Working (nothing to undo) or when the name has since moved on to
+// some other intent a concurrent caller set (never clobber a fresher
+// decision with a stale restore).
+func (s *Server) restoreFrontierIntent(name string, preIntent fleetintent.State, reason string) {
+	if preIntent == fleetintent.Working {
+		return
+	}
+	if s.fleetIntent().AgentState(name) != fleetintent.Working {
+		// Something else already moved it; a blind restore here could
+		// clobber that decision instead of undoing our own flip.
+		return
+	}
+	if err := s.SetAgentIntent(name, preIntent, frontierSpawnActor, reason); err != nil {
+		slog.Warn("frontier consume: intent restore after failed register failed",
+			"name", name, "want", preIntent, "err", err)
+	}
+}
+
 func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief string) error {
 	if name == "" || workdir == "" {
 		return fmt.Errorf("worker name and workdir required")
 	}
+	// 🎯T1117: remember the intent ensureFreshStartIntent is about to flip
+	// (a previously-reaped name, most likely) so a register failure below
+	// can put it back — a register that never persisted or launched a
+	// process must not leave the ledger claiming the name is Working.
+	preIntent := s.fleetIntent().AgentState(name)
+	// 🎯T1109: the frontier sweep is its own start path and does not go
+	// through handleAgentStart, so it must pass the same fresh-start intent
+	// gate (ensureFreshStartIntent) directly — otherwise a re-mint of a
+	// name that was killed-with-descendants-preserved (🎯T560) registers and
+	// launches a live process while the registry row's intent stays Reaped,
+	// and the 🎯T984 sentinel stands it back down within its next sweep.
+	if err := s.ensureFreshStartIntent(name, frontierSpawnActor); err != nil {
+		return err
+	}
+	// 🎯T1151.1: frontier sweep passes cfg.WorkDir (shared clone); isolate
+	// before mission reserve and register so the row never keeps shared WorkDir.
+	workdir, _, _ = isolateFleetWorkSeat(workdir, name, "work", s.agentRole(name, "work"))
 	settleStart, err := s.reserveMissionStart(name, workdir, targetID, parent, "work", "auto:frontier", false, "")
 	if err != nil {
+		s.restoreFrontierIntent(name, preIntent, "register refused: reserve failed")
 		return fmt.Errorf("%s", s.missionStartRefusal(name, targetID, err))
 	}
 	missionStarted := false
@@ -751,6 +885,13 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	defer s.markStarting(name)()
 	def, existed, _, err := s.stitchAgentStart(name, workdir, "", "", "", parent, "work", normalizeAgentTargetID(targetID), brief)
 	if err != nil {
+		// 🎯T1117: register refused (plan dest empty, etc.) before any
+		// process launched — nothing is running, so the intent flip above
+		// must not stand: restore it rather than leave a Working-but-never-
+		// started lie for 🎯T984's stand-down sweep to find nothing to do
+		// about (a Working intent on a never-launched seat looks, to every
+		// other reader, like a seat that is fine).
+		s.restoreFrontierIntent(name, preIntent, "register refused: "+err.Error())
 		return fmt.Errorf("register: %w", err)
 	}
 	s.startMu.Lock()
@@ -761,7 +902,7 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 		return fmt.Errorf("launch: %w", err)
 	}
 	missionStarted = true
-	s.logLifecycle(compAgentLifecycle, "start", "ok", map[string]any{"name": name, "target_id": targetID, "workdir": workdir, "purpose": "work", "parent": parent, "actor": "auto:frontier"})
+	s.logLifecycle(compAgentLifecycle, "start", "ok", map[string]any{"name": name, "target_id": targetID, "workdir": def.WorkDir, "purpose": "work", "parent": parent, "actor": "auto:frontier"})
 	s.wireAgentEvents(name, proc)
 	s.startMu.Unlock()
 	if deferStartPrompt(def.Provider) {

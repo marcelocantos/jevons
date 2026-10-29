@@ -565,33 +565,52 @@ func TestObserveTurnCondemnsPromptlyWhenDeadWellInsideExtension(t *testing.T) {
 // elapsed time and the live process state, not nursed indefinitely.
 func TestObserveTurnExtensionHasAHardBound(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "wedged.jsonl")
-	obs := newFakeObserver(path) // never dies, never writes
-
 	const (
 		base = 20 * time.Millisecond
 		max  = 80 * time.Millisecond
 	)
-	start := time.Now()
-	watch, _ := observeTurnForCancelableFilteredBounded(
-		obs, "", base, max, nil,
-		func() seatstate.Tri { return seatstate.Yes })
-	ev := watch()
-	elapsed := time.Since(start)
-
-	if ev.Positive() {
-		t.Fatalf("a process that never produces evidence must not confirm: %+v", ev)
-	}
-	if elapsed < max {
-		t.Fatalf("extension must run to the hard bound before condemning, took %s want >= %s", elapsed, max)
-	}
-	if elapsed > max+500*time.Millisecond {
-		t.Fatalf("condemnation must follow the hard bound promptly, took %s", elapsed)
-	}
-	if !strings.Contains(ev.Detail, "extended to") || !strings.Contains(ev.Detail, "elapsed=") ||
-		!strings.Contains(ev.Detail, "process state=alive") {
-		t.Fatalf("detail must name the extension, elapsed time, and process state: %q", ev.Detail)
+	for _, tc := range []struct {
+		name     string
+		wakes    []time.Duration
+		extended bool
+	}{
+		{"base then hard bound", []time.Duration{50 * time.Millisecond, 100 * time.Millisecond}, true},
+		{"scheduler wakes after hard bound", []time.Duration{83 * time.Millisecond}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
+			current := start
+			waits := 0
+			clock := turnWatchClock{
+				now: func() time.Time { return current },
+				after: func(delay time.Duration) <-chan time.Time {
+					if delay != turnEvidencePoll || waits >= len(tc.wakes) {
+						t.Fatalf("unexpected wait %d with delay %s", waits, delay)
+					}
+					current = start.Add(tc.wakes[waits])
+					waits++
+					ch := make(chan time.Time, 1)
+					ch <- current
+					return ch
+				},
+			}
+			obs := newFakeObserver(filepath.Join(t.TempDir(), "wedged.jsonl"))
+			watch, _ := observeTurnWithClock(obs, "", base, max, nil, clock,
+				func() seatstate.Tri { return seatstate.Yes })
+			ev := watch()
+			elapsed := current.Sub(start)
+			if ev.Positive() || !ev.Observed || !ev.Durable || elapsed < max || waits != len(tc.wakes) {
+				t.Fatalf("unexpected bounded watch result: %+v elapsed=%s waits=%d", ev, elapsed, waits)
+			}
+			if strings.Contains(ev.Detail, "extended to") != tc.extended ||
+				!strings.Contains(ev.Detail, "elapsed="+elapsed.String()) ||
+				!strings.Contains(ev.Detail, "process state=alive") {
+				t.Fatalf("detail must report only the extension that occurred, elapsed time and state: %q", ev.Detail)
+			}
+			if !tc.extended && !strings.Contains(ev.Detail, "hard bound 80ms reached before extension") {
+				t.Fatalf("late scheduler wake must be explicit: %q", ev.Detail)
+			}
+		})
 	}
 }
 

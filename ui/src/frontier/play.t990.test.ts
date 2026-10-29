@@ -95,16 +95,17 @@ describe('a failed seat is shown, not bounced back to play (🎯T990)', () => {
     expect(plan.seat_wait_kind).toBe('plan');
   });
 
-  it('paints the red arrow with the failure in its title', () => {
+  it('paints pause chrome with the failure in its title', () => {
     const [row] = applySeatWaits([{ ...t989, engaged: false }], { T989: { reason, at: 'x', kind: 'seat_failed' } });
     const spec = playChromeSpec(row, { agents, ledgerKey: JEVONS });
     expect(spec.mode).toBe('waiting');
     expect(spec.className).toContain('ft-seat-failed-btn');
+    expect(spec.className).toContain('ft-wait-pause-btn');
     expect(spec.title).toContain('Seat failed to start');
     expect(spec.title).toContain('unbriefed_seat');
     expect(spec.title).toContain('has not trusted workdir');
     expect(spec.ariaLabel).toContain('failed to start');
-    expect(spec.disabled).toBe(false);
+    expect(spec.disabled).toBe(true);
   });
 
   it('the force-play brief carries the previous attempt to the PO', () => {

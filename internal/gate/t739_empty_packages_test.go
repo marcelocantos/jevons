@@ -4,6 +4,9 @@
 package gate
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -74,4 +77,68 @@ func TestT739CheckerFlagsCitationOfEmptyPackage(t *testing.T) {
 	if hasKind(FlagFalseGreen(other, lookup), FlagAttestationEmptyPackage) {
 		t.Fatalf("report about the non-empty package flagged")
 	}
+}
+
+// Acceptance hermetic: a real go test over two packages where -run matches only
+// one leaves the other in EmptyPackages while the overall verdict stays GREEN.
+func TestT739GoTestTwoPackagesOneEmpty(t *testing.T) {
+	root := t739TwoPackageModule(t)
+	rec, err := Run(&RunArgs{
+		Command: []string{
+			"go", "test", "./withrun", "./nomatch",
+			"-count=1", "-timeout", "30s", "-run", "TestRuns",
+		},
+		Dir: root, Store: storeAt(t), Stdout: nil, Stderr: nil,
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if rec.Verdict != VerdictGreen {
+		t.Fatalf("verdict=%s, want GREEN\n%s", rec.Verdict, rec.Summary())
+	}
+	want := []string{"example.com/t739/nomatch"}
+	if !reflect.DeepEqual(rec.EmptyPackages, want) {
+		t.Fatalf("empty set = %v, want exactly %v\n%s", rec.EmptyPackages, want, rec.Summary())
+	}
+	line := rec.Attestation()
+	if !strings.Contains(line, "empty=example.com/t739/nomatch") {
+		t.Fatalf("GATE line missing empty package token: %s", line)
+	}
+}
+
+func t739TwoPackageModule(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not on PATH")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := filepath.Join(t.TempDir(), "mod")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeFixture(t, root, "go.mod", "module example.com/t739\n\ngo 1.22\n")
+	for _, sub := range []string{"withrun", "nomatch"} {
+		if err := os.MkdirAll(filepath.Join(root, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	writeFixture(t, root, "withrun/doc.go", "package withrun\n")
+	writeFixture(t, root, "withrun/run_test.go", "package withrun\n\nimport \"testing\"\n\nfunc TestRuns(t *testing.T) {}\n")
+	writeFixture(t, root, "nomatch/doc.go", "package nomatch\n")
+	writeFixture(t, root, "nomatch/other_test.go", "package nomatch\n\nimport \"testing\"\n\nfunc TestOtherOnly(t *testing.T) {}\n")
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("init", "-q")
+	run("add", ".")
+	run("-c", "user.email=fixture@example.com", "-c", "user.name=Fixture",
+		"-c", "commit.gpgsign=false", "commit", "-q", "-m", "mod")
+	return root
 }

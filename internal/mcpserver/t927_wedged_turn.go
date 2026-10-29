@@ -211,6 +211,13 @@ func (w *turnWedges) forget(name string) {
 	delete(w.wedged, name)
 }
 
+func (w *turnWedges) lastMotion(name string) time.Time {
+	w.mu.Lock()
+	t := w.motion[name]
+	w.mu.Unlock()
+	return t
+}
+
 // noteReattachedMidTurn is called whenever a new process for name is wired,
 // with the turn that was believed in flight at that moment (turnAt, read
 // before the new process was subscribed). If that turn is still the one
@@ -306,7 +313,7 @@ func (s *Server) reconcileWedgedTurn(b sendq.Backlog, now time.Time) bool {
 		"silent", now.Sub(quiet).Round(time.Second).String(),
 		"handed_over", len(wt.HandedOver), "lost_handle", wt.LostHandle,
 		"cleared", wt.Cleared)
-	s.notifyFleetHealth("wedged:"+name+":"+quiet.UTC().Format(time.RFC3339Nano), FormatWedgedTurnLine(name, wt, now))
+	s.notifyFleetHealth(noticeAct, "wedged:"+name+":"+quiet.UTC().Format(time.RFC3339Nano), FormatWedgedTurnLine(name, wt, now))
 	return true
 }
 

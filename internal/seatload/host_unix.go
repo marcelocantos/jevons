@@ -8,24 +8,33 @@ package seatload
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/proclist"
 )
 
-// psArgs reads the whole process table in one shot. The keywords are the
-// ones both BSD (darwin) and GNU (linux) ps agree on: etimes is not
-// portable, so elapsed time is parsed from etime's [[dd-]hh:]mm:ss.
-var psArgs = []string{"-Ao", "pid=,ppid=,pgid=,pcpu=,etime=,args="}
-
-// HostTable reads the host process table via ps.
+// HostTable reads the host process table in-process (🎯T1232). Darwin
+// uses sysctl so a workspace-write seatbelt that cannot exec setuid
+// /bin/ps still sees the table.
 func HostTable() (Table, error) {
-	out, err := exec.Command("ps", psArgs...).Output()
+	rows, err := proclist.All()
 	if err != nil {
-		return nil, fmt.Errorf("seatload: ps: %w", err)
+		return nil, fmt.Errorf("seatload: process table: %w", err)
 	}
-	return ParsePS(string(out)), nil
+	t := make(Table, 0, len(rows))
+	for _, r := range rows {
+		t = append(t, Proc{
+			PID:        r.PID,
+			PPID:       r.PPID,
+			PGID:       r.PGID,
+			CPUPercent: r.CPUPercent,
+			Elapsed:    r.Elapsed,
+			Command:    r.Command,
+		})
+	}
+	return t, nil
 }
 
 // ParsePS parses `ps -Ao pid=,ppid=,pgid=,pcpu=,etime=,args=` output. A row

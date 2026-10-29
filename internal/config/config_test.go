@@ -216,7 +216,7 @@ func TestDefaultPersonaOracleFirstEnforcement(t *testing.T) {
 		t.Fatalf("Persona: %v", err)
 	}
 	for _, want := range []string{
-		"Oracle-first as system property",
+		"Oracle-first completion gate",
 		"T31",
 		"T31.1",
 		"independent final judge",
@@ -226,7 +226,6 @@ func TestDefaultPersonaOracleFirstEnforcement(t *testing.T) {
 		"accepted-risk",
 		"class-3",
 		"ClassifyCompletionReport",
-		"instructional doctrine",
 		"T31.2",
 	} {
 		if !strings.Contains(p, want) {
@@ -307,13 +306,33 @@ func TestDefaultPersonaPONeverImplements(t *testing.T) {
 }
 
 // 🎯T129: overseer routes to jevons-po; never parents product workers under jevons.
+
+// 🎯T1182: PO delegates independent verification to an auditor seat.
+func TestDefaultPersonaPOIndependentVerification(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"T1182",
+		"Independent verification",
+		"role=auditor",
+		"bin/gate -clean",
+		"Never choose a non-clean gate",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T1182 marker %q", want)
+		}
+	}
+}
+
 func TestDefaultPersonaOverseerNeverParentsWorkers(t *testing.T) {
 	p, err := Default().Persona()
 	if err != nil {
 		t.Fatalf("Persona: %v", err)
 	}
 	for _, want := range []string{
-		"Overseer never parents product workers",
+		"Never parent product workers",
 		"T129",
 		"jevons-po",
 		"parent=jevons",
@@ -493,7 +512,7 @@ func TestDefaultPersonaRoutineReportQuiet(t *testing.T) {
 		t.Fatalf("Persona: %v", err)
 	}
 	for _, want := range []string{
-		"Routine worker reports are not owner-facing appraisals", "T1053",
+		"Routine worker reports (🎯T1053)", "T1053",
 		"`[silent]`", "genuine owner decision point", "anomaly",
 		"direct question", "explicitly asked for", "Continue verification and routing",
 	} {
@@ -510,7 +529,7 @@ func TestDefaultPersonaLifecycleNarration(t *testing.T) {
 		t.Fatalf("Persona: %v", err)
 	}
 	for _, want := range []string{
-		"Fleet state narration matches the live registry",
+		"Fleet state narration (🎯T692)",
 		"T692",
 		"killing",
 		"will stop",
@@ -958,6 +977,7 @@ func TestInstructionSurfacesDoNotMintDailyUniverse(t *testing.T) {
 	for _, rel := range []struct{ name, path string }{
 		{"AGENTS.md", filepath.Join("..", "..", "AGENTS.md")},
 		{"agents-guide.md", filepath.Join("..", "..", "agents-guide.md")},
+		{"help_agent.md", filepath.Join("..", "cli", "help_agent.md")},
 		{"fleet_brief.go", filepath.Join("..", "mcpserver", "fleet_brief.go")},
 	} {
 		b, err := os.ReadFile(rel.path)

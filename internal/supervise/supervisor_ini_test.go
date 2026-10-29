@@ -79,6 +79,7 @@ func TestSupervisorInstallRendersRepoRoot(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"SUPERVISOR_CONF_DIR="+conf,
 		"SUPERVISOR_SKIP_CTL=1",
+		"SUPERVISOR_SKIP_LAUNCHAGENT=1",
 		"HOME="+t.TempDir(),
 	)
 	out, err := cmd.CombinedOutput()
@@ -126,14 +127,13 @@ func TestSupervisorRetirementOnlyTouchesComparisonGroup(t *testing.T) {
 	}
 	for name, body := range map[string]string{
 		"supervisorctl": "#!/bin/sh\nprintf 'supervisorctl %s\\n' \"$*\" >>\"$CALLS\"\nif [ \"$1\" = reread ]; then printf 'jevons-vanilla: disappeared\\njevonsd: changed\\nother: changed\\n'; fi\n",
-		"launchctl":     "#!/bin/sh\nprintf 'launchctl %s\\n' \"$*\" >>\"$CALLS\"\n",
 	} {
 		if err := os.WriteFile(filepath.Join(fakeBin, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	cmd := exec.Command("/bin/sh", filepath.Join(dir, "install.sh"))
-	cmd.Env = append(os.Environ(), "HOME="+home, "SUPERVISOR_CONF_DIR="+conf, "SUPERVISOR_RETIRE_VANILLA_ONLY=1", "SUPERVISOR_SKIP_CTL=0", "PATH="+fakeBin+":/usr/bin:/bin", "CALLS="+calls)
+	cmd.Env = append(os.Environ(), "HOME="+home, "SUPERVISOR_CONF_DIR="+conf, "SUPERVISOR_RETIRE_VANILLA_ONLY=1", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_SKIP_LAUNCHAGENT=1", "PATH="+fakeBin+":/usr/bin:/bin", "CALLS="+calls)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("retire: %v\n%s", err, out)
 	}
@@ -149,7 +149,7 @@ func TestSupervisorRetirementOnlyTouchesComparisonGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) != 3 || !strings.HasPrefix(lines[0], "launchctl bootout gui/") || !strings.HasSuffix(lines[0], "/com.marcelocantos.jevons-ui-vanilla") || lines[1] != "supervisorctl reread" || lines[2] != "supervisorctl update jevons-vanilla" {
+	if len(lines) != 2 || lines[0] != "supervisorctl reread" || lines[1] != "supervisorctl update jevons-vanilla" {
 		t.Fatalf("retirement touched unexpected service operations:\n%s", out)
 	}
 }
@@ -183,10 +183,9 @@ case "$*" in
 esac
 `,
 				"claudia": "#!/bin/sh\nprintf 'claudia %s\\n' \"$*\" >>\"$CALLS\"\n[ \"$*\" = 'broker status' ]\n",
-				"launchctl": "#!/bin/sh\nexit 0\n",
-				"brew":      "#!/bin/sh\nexit 0\n",
-				"lsof":      "#!/bin/sh\nexit 1\n",
-				"pgrep":     "#!/bin/sh\nexit 1\n",
+				"brew":    "#!/bin/sh\nexit 0\n",
+				"lsof":    "#!/bin/sh\nexit 1\n",
+				"pgrep":   "#!/bin/sh\nexit 1\n",
 			} {
 				if err := os.WriteFile(filepath.Join(fakeBin, name), []byte(body), 0o755); err != nil {
 					t.Fatal(err)
@@ -194,7 +193,7 @@ esac
 			}
 			cmd := exec.Command("/bin/sh", filepath.Join(supervisorDir(t), "install.sh"))
 			cmd.Env = append(os.Environ(), "HOME="+home, "SUPERVISOR_CONF_DIR="+conf,
-				"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_NO_TAKEOVER=0",
+				"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_SKIP_LAUNCHAGENT=1", "SUPERVISOR_NO_TAKEOVER=0",
 				"PATH="+fakeBin+":/usr/bin:/bin", "CALLS="+calls, "LOADED="+loaded, "INITIAL_STATE="+state)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("install %s: %v\n%s", state, err, out)
@@ -245,9 +244,8 @@ esac
 printf 'claudia %s\n' "$*" >>"$CALLS"
 test "$*" = 'broker status' && test -f "$READY"
 `,
-		"launchctl": "#!/bin/sh\nexit 0\n",
-		"lsof":      "#!/bin/sh\nexit 1\n",
-		"pgrep":     "#!/bin/sh\nexit 1\n",
+		"lsof":  "#!/bin/sh\nexit 1\n",
+		"pgrep": "#!/bin/sh\nexit 1\n",
 	} {
 		if err := os.WriteFile(filepath.Join(fakeBin, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
@@ -255,7 +253,7 @@ test "$*" = 'broker status' && test -f "$READY"
 	}
 	cmd := exec.Command("/bin/sh", filepath.Join(supervisorDir(t), "install.sh"))
 	cmd.Env = append(os.Environ(), "HOME="+home, "SUPERVISOR_CONF_DIR="+conf,
-		"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_NO_TAKEOVER=0",
+		"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_SKIP_LAUNCHAGENT=1", "SUPERVISOR_NO_TAKEOVER=0",
 		"PATH="+fakeBin+":/usr/bin:/bin", "CALLS="+calls, "READY="+ready)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("install: %v\n%s", err, out)
@@ -286,7 +284,7 @@ func TestSupervisorInstallKeepsOldDefinitionWithoutClaudia(t *testing.T) {
 	}
 	cmd := exec.Command("/bin/sh", filepath.Join(supervisorDir(t), "install.sh"))
 	cmd.Env = append(os.Environ(), "HOME="+home, "SUPERVISOR_CONF_DIR="+conf,
-		"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_NO_TAKEOVER=0",
+		"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_SKIP_LAUNCHAGENT=1", "SUPERVISOR_NO_TAKEOVER=0",
 		"PATH="+fakeBin+":/usr/bin:/bin")
 	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "claudia is required") {
 		t.Fatalf("install without Claudia: %v\n%s", err, out)
@@ -301,9 +299,8 @@ func TestSupervisorInstallRefusesOldBrokerStillRunning(t *testing.T) {
 	calls := filepath.Join(t.TempDir(), "calls")
 	for name, body := range map[string]string{
 		"supervisorctl": "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$CALLS\"\nexit 0\n",
-		"claudia":      "#!/bin/sh\n[ \"$*\" = 'broker status' ]\n",
-		"pgrep":        "#!/bin/sh\nexit 0\n",
-		"launchctl":    "#!/bin/sh\nexit 0\n",
+		"claudia":       "#!/bin/sh\n[ \"$*\" = 'broker status' ]\n",
+		"pgrep":         "#!/bin/sh\nexit 0\n",
 	} {
 		if err := os.WriteFile(filepath.Join(fakeBin, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
@@ -311,7 +308,7 @@ func TestSupervisorInstallRefusesOldBrokerStillRunning(t *testing.T) {
 	}
 	cmd := exec.Command("/bin/sh", filepath.Join(supervisorDir(t), "install.sh"))
 	cmd.Env = append(os.Environ(), "HOME="+home, "SUPERVISOR_CONF_DIR="+conf,
-		"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_NO_TAKEOVER=0",
+		"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_SKIP_LAUNCHAGENT=1", "SUPERVISOR_NO_TAKEOVER=0",
 		"PATH="+fakeBin+":/usr/bin:/bin", "CALLS="+calls)
 	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "jevons-broker is still running") {
 		t.Fatalf("install with old broker still running: %v\n%s", err, out)

@@ -23,6 +23,8 @@ type Payload = {
   judgments?: Judgment[];
   total?: number;
   pending?: number;
+  coach_enabled?: boolean;
+  coach_updated_at?: string;
 };
 
 function when(iso?: string): string {
@@ -44,6 +46,7 @@ export function CoachList(props: { active: boolean }) {
   const [pending, setPending] = useState(0);
   const [total, setTotal] = useState(0);
   const [err, setErr] = useState('');
+  const [offSince, setOffSince] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -55,6 +58,7 @@ export function CoachList(props: { active: boolean }) {
       setRows(list);
       setPending(body.pending || 0);
       setTotal(body.total ?? list.length);
+      setOffSince(body.coach_enabled === false ? body.coach_updated_at || '' : null);
       setErr('');
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'coach list unavailable');
@@ -69,7 +73,7 @@ export function CoachList(props: { active: boolean }) {
     <>
       <div id="coach-toolbar">
         <span id="coach-counts">
-          {rows == null ? '' : `${pending} pending · ${total} judged`}
+          {rows == null ? '' : offSince != null ? `coach off · ${total} judged` : `${pending} pending · ${total} judged`}
         </span>
         <button type="button" id="coach-refresh" onClick={() => void load()}>
           Refresh
@@ -77,6 +81,12 @@ export function CoachList(props: { active: boolean }) {
       </div>
       <div id="coach-body">
         {err ? <p className="ai-err">{err}</p> : null}
+        {offSince != null ? (
+          <p className="ai-empty" id="coach-off">
+            The coach is off{offSince ? ' since ' + when(offSince) : ''}, so nothing below is waiting on anyone. These are
+            its past judgments.
+          </p>
+        ) : null}
         {rows != null && rows.length === 0 ? (
           <p className="ai-empty">No coach judgments yet.</p>
         ) : null}
@@ -94,7 +104,7 @@ export function CoachList(props: { active: boolean }) {
                 {j.severity ? (
                   <span className={'coach-sev' + (j.severity === 'high' ? ' coach-sev-high' : '')}>{j.severity}</span>
                 ) : null}
-                <span className={chip(j.disposition)}>{j.disposition || 'pending'}</span>
+                <span className={offSince != null ? 'coach-chip' : chip(j.disposition)}>{j.disposition || 'pending'}</span>
               </div>
               {showObs ? <div className="coach-obs">{obs}</div> : null}
               {meta ? <div className="coach-meta">{meta}</div> : null}

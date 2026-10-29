@@ -13,10 +13,13 @@ import (
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/converge"
 	"github.com/marcelocantos/jevons/internal/converge/attenuate"
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/seatstop"
 )
 
 // ImpatienceEngine is the daemon-side 🎯T317 ladder: a 🎯T316 reconcile set,
@@ -150,7 +153,29 @@ func (r *rePressureSink) RePressure(agent, mission string) error {
 	event := IdleNudgeEventSource(false, kind)
 	wire := formatIdleNudgeWire(event, text)
 	if _, err := s.sendToAgent(agent, wire, false); err != nil {
-		return err
+		// 🎯T1110 acceptance 2: `claude process not running` for a row the
+		// registry calls running is a rehydrate case (resume from the
+		// stored conversation), not a plain repressure failure — a broker
+		// relink can leave the registry believing a seat is alive long
+		// after its process handle actually died. A row with no stored
+		// conversation to resume is stopped with that reason instead of
+		// being retried at this rung forever.
+		if agenterr.ProviderCause(err) == agenterr.CauseProcessNotRunning && s.registry != nil {
+			if _, rerr := fleet.LaunchRecovering(s.registry, agent); rerr != nil {
+				s.registry.Stop(agent)
+				seatstate.ObserveStopped(s.registry, agent)
+				s.noteSeatStopRecord(seatstop.Record{
+					Seat: agent, Source: seatstop.SourceBroker,
+					Reason: "repressure_process_not_running_no_resume", Detail: rerr.Error(),
+				})
+				return fmt.Errorf("repressure: process not running; rehydrate failed, stopped: %w", rerr)
+			}
+			if _, err2 := s.sendToAgent(agent, wire, false); err2 != nil {
+				return err2
+			}
+		} else {
+			return err
+		}
 	}
 	if kind == IdleNudgeKindFullBrief {
 		s.mu.Lock()
@@ -304,6 +329,18 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 	actions, closed := e.ladder.Reconcile(now, gaps)
 	pendingPostmortem := e.journal != nil && len(e.journal.Pending()) > 0
 	if len(actions) == 0 && len(closed) == 0 && !pendingPostmortem {
+		// 🎯T959: when the ladder leaves refusal gaps open with no rung, say
+		// why — otherwise a tick reads as idle while seats wait on login repair.
+		for _, g := range gaps {
+			if g.Satisfied {
+				continue
+			}
+			if refusalBy[g.Agent] || g.FleetIntent == fleetintent.BlockedProvider {
+				slog.Info("impatience ladder held open refusal gap",
+					"agent", g.Agent, "refusal_hold", refusalBy[g.Agent],
+					"fleet_intent", g.FleetIntent, "open_gaps", e.set.Len())
+			}
+		}
 		return
 	}
 
@@ -403,8 +440,9 @@ func (s *Server) observeForImpatience(
 	// (IsAutoSpawnedWorkerName), never a named worker or PO, and never the
 	// owner's own jevons_agent_send (this is the ladder's own fire decision,
 	// not the generic send chokepoint).
-	autoSeatPaused := s.autoSeatHold(d.Name) != ""
-	deliberateStop := (!running && !d.AutoStart) || autoSeatPaused
+	hold := s.autoSeatHold(d.Name)
+	deliberateStop := ownerPauseDeliberateStop(running, d.AutoStart, s.SeatOwnerPaused(d.Name)) ||
+		(hold != "" && hold != OwnerHoldPaused)
 
 	phase := ""
 	refusalHold := false

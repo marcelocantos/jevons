@@ -48,9 +48,18 @@ func WithBands(snap Snapshot, now time.Time, th Thresholds) Snapshot {
 	for i := range out.Backends {
 		be := &out.Backends[i]
 		if be.Available() {
-			if seatprovider.Resolve(claudia.Provider(be.Provider)).Plan == seatprovider.Claude {
+			// 🎯T967.1: Claude extra-usage only while spending past allowance.
+			// 🎯T967.3: Codex wham/usage overage (spend_control.individual_limit)
+			// through the same gate once claudia maps PlanSpend.
+			// 🎯T967.2: Grok on-demand spend is mapped in claudia only when
+			// onDemandCap > 0 and onDemandUsed is non-zero (unit established).
+			// 🎯T967.4: Cursor stays silent until on-demand enablement and AUD
+			// money are established — DashboardService still carries unitless
+			// counters only (live probe 2026-10-14; residue on 🎯T967).
+			switch seatprovider.Resolve(claudia.Provider(be.Provider)).Plan {
+			case seatprovider.Claude, seatprovider.Codex, seatprovider.Grok:
 				be.Spend = spendIfActive(be.rawSpend, be.Windows)
-			} else {
+			default:
 				be.Spend = nil
 			}
 		} else {
@@ -105,7 +114,14 @@ func pressureOfWindow(w Window, now time.Time, th Thresholds) *float64 {
 // copy — the history slice belongs to the shared snapshot.
 //
 // Same rule as the window's own Band, reached through the same function, so
-// the sparkline's colour at its right edge is the bar's colour now.
+// the sparkline's colour at its right edge is the bar's colour now — EXCEPT
+// that w.Band is the caller's already-decided verdict for "now", which by
+// the time this runs may already carry the owner's override (🎯T948). The
+// newest sample is "now": it gets w.Band verbatim rather than a second,
+// un-overridden recomputation, so the line's end and the dot drawn on top of
+// it (🎯T1069) read the same colour as the bar even when a band override is
+// in force and disagrees with what the newest reading alone would classify
+// as.
 func historyWithBands(w Window, th Thresholds) []HistoryPoint {
 	if len(w.History) == 0 {
 		return w.History
@@ -121,6 +137,7 @@ func historyWithBands(w Window, th Thresholds) []HistoryPoint {
 		p.Band = string(BandOfWindow(at, p.At, th))
 		out[i] = p
 	}
+	out[len(out)-1].Band = w.Band
 	return out
 }
 

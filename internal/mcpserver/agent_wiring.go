@@ -202,7 +202,9 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 	// reports no JSONL path, so the fallback reads the session store — and that
 	// read takes s.mu, which this function must not touch while it holds
 	// wireMu (see the lock-order note above).
+	s.wireRecovery.Add(1)
 	go func() {
+		defer s.wireRecovery.Done()
 		// 🎯T927: a turn the daemon believes in flight was observed on the
 		// handle this attach replaces. Off wireMu: it reads flight under mu.
 		s.noteReattachedMidTurn(name, turn, turnInFlight, launching)

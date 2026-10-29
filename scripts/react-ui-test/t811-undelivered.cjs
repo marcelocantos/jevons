@@ -16,7 +16,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs } = require('node:util');
-const { chromium } = require('../browser-loop-test/node_modules/playwright');
+const { chromium } = require('./playwright.cjs')();
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, workdir: { type: 'string' }, aside: { type: 'string' },
   fault: { type: 'string' }, screenshot: { type: 'string' }, 'overseer-provider': { type: 'string' },

@@ -7,6 +7,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
@@ -38,6 +39,9 @@ func registerOverseerSeat(registry *claudia.Registry, name, dir, model string, d
 	// 🎯T114: overseer purpose on the unified participant record.
 	if def.Purpose == "" {
 		def.Purpose = claudia.PurposeOverseer
+	}
+	if def.Role == "" {
+		def.Role = roles.Overseer
 	}
 	// Overseer MCP registration happens after the listener is bound, so the
 	// advertised URL names the port actually served (🎯T379).

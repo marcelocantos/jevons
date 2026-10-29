@@ -274,6 +274,77 @@ func TestRecordDeliveredReopensAfterOutcome(t *testing.T) {
 	}
 }
 
+// TestCompressionMetricsUsefulVsPerformative is the 🎯T333.1 hermetic oracle:
+// fixture judgments → disposition → later compression → metrics distinguish useful
+// from performative (no_effect).
+func TestCompressionMetricsUsefulVsPerformative(t *testing.T) {
+	s := dispositionFixtureStore(t)
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+
+	if err := s.RecordDelivered([]Judgment{
+		{Fingerprint: "fp-useful", Name: "filed gap"},
+		{Fingerprint: "fp-flat", Name: "acted gap"},
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetDisposition(SetDispositionArgs{
+		Fingerprint: "fp-useful", Disposition: DispositionFile,
+		TargetID: "T500", TargetCwd: "/repo", Now: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetDisposition(SetDispositionArgs{
+		Fingerprint: "fp-flat", Disposition: DispositionActOther, Now: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Filed target achieved → auto useful.
+	if _, err := s.SyncOutcomes(func(cwd, id string) (string, error) {
+		return "achieved", nil
+	}, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	// Acted-other with no compression → explicit performative score.
+	if _, err := s.SetCompression(SetCompressionArgs{
+		Fingerprint: "fp-flat", Compression: CompressionNoEffect,
+		Note: "same escalation cluster next week", Now: now.Add(2 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cm, err := s.CompressionMetrics(now.Add(3*time.Hour), 14*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Acted != 2 || cm.Useful != 1 || cm.NoEffect != 1 || cm.Scored != 2 {
+		t.Fatalf("compression metrics = %+v, want acted=2 useful=1 no_effect=1 scored=2", cm)
+	}
+	if cm.UsefulRate < 0.49 || cm.UsefulRate > 0.51 {
+		t.Fatalf("useful_rate = %v, want 0.5", cm.UsefulRate)
+	}
+
+	entries, err := s.Entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var useful, flat *DispositionEntry
+	for i := range entries {
+		switch entries[i].Fingerprint {
+		case "fp-useful":
+			useful = &entries[i]
+		case "fp-flat":
+			flat = &entries[i]
+		}
+	}
+	if useful == nil || useful.Compression != CompressionUseful {
+		t.Fatalf("fp-useful compression = %+v", useful)
+	}
+	if flat == nil || flat.Compression != CompressionNoEffect {
+		t.Fatalf("fp-flat compression = %+v", flat)
+	}
+}
+
 func TestReadBullseyeTargetStatus(t *testing.T) {
 	repo := t.TempDir()
 	yaml := `schema_version: 5

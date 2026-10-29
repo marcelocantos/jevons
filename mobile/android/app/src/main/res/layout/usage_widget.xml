@@ -1,0 +1,12 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/usage_root"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:padding="7dp" android:background="#20252c">
+    <TextView android:id="@+id/usage_state" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:textColor="#eeeeee" android:textSize="10sp"
+        android:gravity="center_horizontal"
+        android:text="Jevons usage · loading" />
+    <!-- The gap keeps the title off the company marks below it. -->
+    <LinearLayout android:id="@+id/provider_columns" android:layout_width="match_parent"
+        android:layout_height="match_parent" android:layout_marginTop="@dimen/usage_title_gap"
+        android:orientation="horizontal" android:gravity="bottom" />
+</LinearLayout>

@@ -53,6 +53,39 @@ func (q Query) matches(ev Event) bool {
 	return true
 }
 
+// rawNeedles are the byte strings a line must contain to match q's exact
+// field filters (🎯T936, 🎯T1131). A line lacking one cannot match, so Page
+// skips it without decoding. Only plain identifiers are needles: a value
+// JSON would escape, or the case-folded Contains, is left to the decoded
+// match, which still decides every line that is decoded.
+func (q Query) rawNeedles() [][]byte {
+	var need [][]byte
+	for _, v := range []string{q.Component, q.Decision, q.Source, q.Level} {
+		if v != "" && plainIdentifier(v) {
+			need = append(need, []byte(v))
+		}
+	}
+	return need
+}
+
+func plainIdentifier(v string) bool {
+	for _, r := range v {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-' || r == ':') {
+			return false
+		}
+	}
+	return true
+}
+
+func hasAll(line []byte, need [][]byte) bool {
+	for _, n := range need {
+		if !bytes.Contains(line, n) {
+			return false
+		}
+	}
+	return true
+}
+
 // PageResult carries a byte cursor into one append-only journal. A cursor
 // remains stable when new rows append. NextCursor is nil only at file start.
 type PageResult struct {
@@ -95,6 +128,7 @@ func Page(path string, before *int64, limit int, query Query) (PageResult, error
 	position, lineEnd := end, end
 	line := make([]byte, 0, 256) // reversed until the preceding newline
 	tooLong := false
+	need := query.rawNeedles()
 	for position > 0 && result.ScannedBytes < MaxPageScanBytes && len(result.Events) < limit {
 		length := int64(logReadChunk)
 		if length > position {
@@ -124,7 +158,7 @@ func Page(path string, before *int64, limit int, query Query) (PageResult, error
 					line[left], line[right] = line[right], line[left]
 				}
 				var ev Event
-				if json.Unmarshal(line, &ev) == nil && query.matches(ev) {
+				if hasAll(line, need) && json.Unmarshal(line, &ev) == nil && query.matches(ev) {
 					result.Events = append(result.Events, ev)
 					if len(result.Events) == limit {
 						cursor := at + 1
@@ -147,7 +181,7 @@ func Page(path string, before *int64, limit int, query Query) (PageResult, error
 				line[left], line[right] = line[right], line[left]
 			}
 			var ev Event
-			if json.Unmarshal(line, &ev) == nil && query.matches(ev) {
+			if hasAll(line, need) && json.Unmarshal(line, &ev) == nil && query.matches(ev) {
 				result.Events = append(result.Events, ev)
 			}
 		}
@@ -179,26 +213,33 @@ func Collect(path string, opt TailOptions) ([]Event, error) {
 		Source:    strings.TrimSpace(opt.Source),
 		Contains:  strings.TrimSpace(opt.Contains),
 	}
-	var (
-		out    []Event
-		before *int64
-	)
-	for len(out) < limit {
-		page, err := Page(path, before, limit-len(out), query)
-		if err != nil {
-			if len(out) == 0 {
-				return nil, err
+	segments, err := SegmentPaths(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []Event
+	for _, seg := range segments {
+		var before *int64
+		for len(out) < limit {
+			page, err := Page(seg, before, limit-len(out), query)
+			if err != nil {
+				if len(out) == 0 {
+					return nil, err
+				}
+				return out, err
 			}
-			return out, err
+			out = append(out, page.Events...)
+			if page.NextCursor == nil {
+				break
+			}
+			if before != nil && *page.NextCursor >= *before {
+				break
+			}
+			before = page.NextCursor
 		}
-		out = append(out, page.Events...)
-		if page.NextCursor == nil {
+		if len(out) >= limit {
 			break
 		}
-		if before != nil && *page.NextCursor >= *before {
-			break
-		}
-		before = page.NextCursor
 	}
 	if out == nil {
 		out = []Event{}

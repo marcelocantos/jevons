@@ -37,7 +37,8 @@ a pass.
 
 Field mapping (`gate.AchieveField`): `gate_id` (uncited or unknown id),
 `verdict` (misquoted, not GREEN), `tree` (no provenance), `tree.clean`
-(dirty tree), `tree.commit` (gate ran on a commit that lacks the attested fix).
+(dirty tree), `tree.commit` (gate ran on a commit that lacks the attested fix),
+`command` (🎯T1162: `-run`-scoped or package-incomplete go test).
 
 A `marked` result is the accepted-risk escape: the attestation must state an
 accepted risk that names the gate, `-clean` or the dirt. It is printed with the

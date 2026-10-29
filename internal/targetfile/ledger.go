@@ -175,3 +175,26 @@ func SameLedger(a, b string) bool {
 func SameLedgerAsWorkdirs(a, b string) bool {
 	return SameLedger(LedgerKey(a), LedgerKey(b))
 }
+
+// ReadLedgerFileForWorkdir returns the bullseye.yaml bytes that own target ids
+// for workdir. Linked worktrees read the main clone's tracked ledger
+// (🎯T1105), not a per-checkout copy that can lag after integrate/revert on
+// the shared branch (🎯T1166). When the canonical path is missing, falls back
+// to DiscoverLedgerPath (external shadow / non-git residual).
+func ReadLedgerFileForWorkdir(workdir string) ([]byte, bool) {
+	key := LedgerKey(workdir)
+	if key != "" {
+		if data, err := os.ReadFile(key); err == nil {
+			return data, true
+		}
+	}
+	path, err := DiscoverLedgerPath(workdir)
+	if err != nil {
+		return nil, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}

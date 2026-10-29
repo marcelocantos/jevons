@@ -316,3 +316,27 @@ func TestIncidentCauseDistinguishesSatisfiedFromDeparted(t *testing.T) {
 		t.Fatalf("want ClosedByDeparture, got %+v", closed)
 	}
 }
+
+// A gap stuck for a day reaches the overseer twice (impatient, then failing),
+// not every OverseerNoiseEvery; the owner rung keeps its cadence.
+func TestOverseerHearsAStuckGapTwicePerEpisode(t *testing.T) {
+	l := NewLadder()
+	overseer, human := 0, 0
+	for at := time.Duration(0); at <= 24*time.Hour; at += time.Minute {
+		acts, _ := l.Reconcile(ladderT0.Add(at), idle("jv-x"))
+		for _, r := range fired(acts) {
+			switch r {
+			case RungOverseerNoise:
+				overseer++
+			case RungHumanAlert:
+				human++
+			}
+		}
+	}
+	if overseer != maxOverseerShouts {
+		t.Fatalf("overseer shouts over 24h = %d, want %d", overseer, maxOverseerShouts)
+	}
+	if human < 24 {
+		t.Fatalf("owner alerts over 24h = %d; the owner rung must keep its cadence", human)
+	}
+}

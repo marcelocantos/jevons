@@ -27,7 +27,7 @@ func TestT810RepeatedStalledBacklogIsOneTurnAndCountsSaved(t *testing.T) {
 	const n = 6
 	for i := range n {
 		// Age advances every sweep: byte-different, materially identical.
-		s.notifyFleetHealth("b1bec7a0e257", t810Stalled(1, fmt.Sprintf("2h%dm%ds", 29+i/2, 36+i)))
+		s.notifyFleetHealth(noticeAct, "b1bec7a0e257", t810Stalled(1, fmt.Sprintf("2h%dm%ds", 29+i/2, 36+i)))
 		now = now.Add(40 * time.Second)
 	}
 	if len(inbox.texts) != 1 {
@@ -46,10 +46,10 @@ func TestT810MaterialChangeDeliversAgain(t *testing.T) {
 	now := time.Date(2026, 9, 22, 4, 0, 0, 0, time.UTC)
 	s.SetNoticeCoalesceClock(func() time.Time { return now })
 
-	s.notifyFleetHealth("k1", t810Stalled(1, "20m0s"))
-	s.notifyFleetHealth("k1", t810Stalled(1, "21m0s"))  // same age bucket: saved
-	s.notifyFleetHealth("k1", t810Stalled(2, "22m0s"))  // count changed: new turn
-	s.notifyFleetHealth("k1", t810Stalled(2, "7h1m0s")) // age crossed a threshold: new turn
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "20m0s"))
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "21m0s"))  // same age bucket: saved
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(2, "22m0s"))  // count changed: new turn
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(2, "7h1m0s")) // age crossed a threshold: new turn
 	if len(inbox.texts) != 3 {
 		t.Fatalf("overseer turns=%d want 3\n%v", len(inbox.texts), inbox.texts)
 	}
@@ -63,9 +63,9 @@ func TestT810StateClearingRedelivers(t *testing.T) {
 	now := time.Date(2026, 9, 22, 4, 0, 0, 0, time.UTC)
 	s.SetNoticeCoalesceClock(func() time.Time { return now })
 
-	s.notifyFleetHealth("k1", t810Stalled(1, "20m0s"))
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "20m0s"))
 	now = now.Add(NoticeClearedAfter + time.Minute) // no offers: the condition cleared
-	s.notifyFleetHealth("k1", t810Stalled(1, "21m0s"))
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "21m0s"))
 	if len(inbox.texts) != 2 {
 		t.Fatalf("overseer turns=%d want 2 after the state cleared and recurred\n%v", len(inbox.texts), inbox.texts)
 	}
@@ -73,8 +73,8 @@ func TestT810StateClearingRedelivers(t *testing.T) {
 
 func TestT810DistinctOccurrencesAreIndependent(t *testing.T) {
 	s, inbox := t428Server(t, TurnEvidence{Observed: true, PayloadSeen: true})
-	s.notifyFleetHealth("k1", t810Stalled(1, "20m0s"))
-	s.notifyFleetHealth("k2", t810Stalled(1, "20m0s"))
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "20m0s"))
+	s.notifyFleetHealth(noticeAct, "k2", t810Stalled(1, "20m0s"))
 	if len(inbox.texts) != 2 {
 		t.Fatalf("overseer turns=%d want 2", len(inbox.texts))
 	}
@@ -84,12 +84,12 @@ func TestT810SavedCountSurvivesBounce(t *testing.T) {
 	dir := t.TempDir()
 	first := &overseerInbox{}
 	s1 := t568Server(t, dir, first)
-	s1.notifyFleetHealth("k1", t810Stalled(1, "20m0s"))
-	s1.notifyFleetHealth("k1", t810Stalled(1, "21m0s"))
+	s1.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "20m0s"))
+	s1.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "21m0s"))
 
 	second := &overseerInbox{}
 	s2 := t568Server(t, dir, second)
-	s2.notifyFleetHealth("k1", t810Stalled(1, "22m0s"))
+	s2.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "22m0s"))
 	if len(first.texts) != 1 || len(second.texts) != 0 {
 		t.Fatalf("turns before=%d after bounce=%d want 1 and 0", len(first.texts), len(second.texts))
 	}
@@ -119,7 +119,7 @@ func TestT810ReplayRealClT108Sequence(t *testing.T) {
 		}
 		now = at
 		age := strings.TrimPrefix(f[2], "oldest_age=")
-		s.notifyFleetHealth("b1bec7a0e257", fmt.Sprintf(
+		s.notifyFleetHealth(noticeAct, "b1bec7a0e257", fmt.Sprintf(
 			"Stalled backlog on %q: 1 message(s) held by the daemon, the oldest waiting %s, because it has no live process to deliver to.",
 			"cl-t108-readiness-at-load", age))
 		rows++
@@ -163,7 +163,7 @@ func TestT810UnconfirmedSameMaterialIsOneEpisode(t *testing.T) {
 	s.SetNotifyReplayClock(func() time.Time { return now })
 
 	for i := range 4 {
-		s.notifyFleetHealth("k1", t810Stalled(1, fmt.Sprintf("2%dm0s", i)))
+		s.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, fmt.Sprintf("2%dm0s", i)))
 		now = now.Add(40 * time.Second)
 	}
 	if len(inbox.texts) != 1 {
@@ -173,15 +173,15 @@ func TestT810UnconfirmedSameMaterialIsOneEpisode(t *testing.T) {
 		t.Fatalf("saved=%d want 3 suppressed repeats of the original episode", got)
 	}
 
-	s.notifyFleetHealth("k1", t810Stalled(2, "23m0s"))
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(2, "23m0s"))
 	if len(inbox.texts) != 2 {
 		t.Fatalf("depth change delivered=%d want 2", len(inbox.texts))
 	}
 
 	ev = TurnEvidence{Observed: true, PayloadSeen: true}
 	before := len(inbox.texts)
-	s.notifyFleetHealth("k1", t810Stalled(2, "24m0s"))
-	s.notifyFleetHealth("k1", t810Stalled(2, "25m0s"))
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(2, "24m0s"))
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(2, "25m0s"))
 	if len(inbox.texts) != before {
 		t.Fatalf("confirmed repeats reached the overseer: %d -> %d", before, len(inbox.texts))
 	}
@@ -198,14 +198,14 @@ func TestT810ClearedUnconfirmedConditionRedelivers(t *testing.T) {
 	s.SetNoticeCoalesceClock(func() time.Time { return now })
 	s.SetNotifyReplayClock(func() time.Time { return now })
 
-	s.notifyFleetHealth("k1", t810Stalled(1, "20m0s"))
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "20m0s"))
 	now = now.Add(5 * time.Minute)
-	s.notifyFleetHealth("k1", t810Stalled(1, "21m0s"))
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "21m0s"))
 	if len(inbox.texts) != 1 || s.NoticeSavedTurns()["k1"] != 1 {
 		t.Fatalf("inside the clear window delivered=%d saved=%d want 1 and 1", len(inbox.texts), s.NoticeSavedTurns()["k1"])
 	}
 	now = now.Add(NoticeClearedAfter + time.Second)
-	s.notifyFleetHealth("k1", t810Stalled(1, "22m0s"))
+	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "22m0s"))
 	if len(inbox.texts) != 2 {
 		t.Fatalf("quiet condition delivered=%d want a recurrence", len(inbox.texts))
 	}

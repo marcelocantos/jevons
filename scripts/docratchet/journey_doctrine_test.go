@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -115,6 +116,22 @@ func TestMakeTestRunsJourneys(t *testing.T) {
 				hasJourney = hasJourney || word == "test-journey"
 			}
 		}
+		// 🎯T1299: the layers run at once through testpar, the journeys as
+		// two suites. Together they must be every journey: the fast suite
+		// skips exactly the set the slow suite selects.
+		if inTest && strings.HasPrefix(line, "\tgo run ./scripts/testpar ") && !strings.ContainsAny(line, ";|&") {
+			words := strings.Fields(line)
+			slow := slices.Contains(words, "test-journey-slow-run") &&
+				recipeHas(mk, "test-journey-slow-run:", "-only $(SLOW_JOURNEYS)")
+			fast := slices.Contains(words, "test-journey-fast-run") &&
+				recipeHas(mk, "test-journey-fast-run:", "-skip $(SLOW_JOURNEYS)")
+			// 🎯T1302: or the fast set as shards, which partition it.
+			sharded := slices.Contains(words, "$(JOURNEY_SHARD_TARGETS)") &&
+				recipeHas(mk, "test-journey-shard-%:", "-skip $(SLOW_JOURNEYS) -shard $*/$(JOURNEY_SHARDS)")
+			if slow && (fast || sharded) {
+				hasJourney = true
+			}
+		}
 	}
 	if !hasJourney {
 		t.Fatalf("Makefile `test` must run test-journey (🎯T492); a gate's dependency is not a reason to omit the gate:\n%s", testLine)
@@ -129,6 +146,25 @@ func TestMakeTestRunsJourneys(t *testing.T) {
 			t.Errorf("AGENTS.md missing T492 doctrine marker %q", want)
 		}
 	}
+}
+
+// recipeHas reports whether target's recipe (its tab-indented lines) contains
+// want.
+func recipeHas(mk, target, want string) bool {
+	in := false
+	for _, line := range strings.Split(mk, "\n") {
+		if strings.HasPrefix(line, target) {
+			in = true
+			continue
+		}
+		if in && !strings.HasPrefix(line, "\t") {
+			return false
+		}
+		if in && strings.Contains(line, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestCEOAlterEgoDoctrineMarkers ratchets 🎯T98 draft doctrine: alter-ego

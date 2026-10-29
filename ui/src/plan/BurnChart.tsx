@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useId, useLayoutEffect, useRef, useState } from 'react';
-import { burnPaths, burnStops, currentMark, currentMarkClass, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
+import { burnPaths, burnStops, currentMark, currentMarkClass, paceLine, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
 /**
@@ -39,6 +39,8 @@ export function BurnChart(props: { window: PlanWindow }) {
   const mark = currentMark(props.window);
   // 🎯T1069: the mark wears the newest sample's band, as the line's end does.
   const markClass = currentMarkClass(props.window);
+  // 🎯T1284: the mined weekday reference (or explicit diagonal fallback), behind the reading.
+  const pace = paceLine(props.window);
   const stops = spec ? burnStops(props.window, width) : [];
   const gradId = 'plan-burn-grad-' + useId().replace(/[^A-Za-z0-9_-]/g, '');
   const paint = stops.length ? `url(#${gradId})` : undefined;
@@ -66,6 +68,7 @@ export function BurnChart(props: { window: PlanWindow }) {
         width={BURN_WIDTH}
         height={BURN_HEIGHT}
       />
+      {pace ? <path className="plan-burn-pace" d={pace} /> : null}
       {spec ? <path className="plan-burn-line" d={spec.line} style={paint ? { stroke: paint } : undefined} /> : null}
       {mark ? <path className={('plan-burn-now ' + (markClass ?? '')).trim()} d={mark} /> : null}
     </svg>

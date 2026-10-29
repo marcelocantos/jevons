@@ -15,6 +15,14 @@ import (
 	"github.com/marcelocantos/jevons/internal/chatlog"
 )
 
+func wireOwnerReplyDecision(body string) string {
+	return "```jevons\njevons: kind owner-reply\njevons: purpose decision\n```\n" + body
+}
+
+func wireOwnerReplyFault(body string) string {
+	return "```jevons\njevons: kind owner-reply\njevons: purpose fault\n```\n" + body
+}
+
 // 🎯T64: product path is claudia handleSessionUpdate → Event.Raw → chatWireLine.
 // Fixed claudia passes ACP session/update params through as Raw (preserves
 // rawInput). This fixture is that real shape — not a hand-built partial.
@@ -111,7 +119,7 @@ func TestChatWireLineGrokACPShapes(t *testing.T) {
 	}{
 		{
 			name:     "assistant text chunk from ACP",
-			ev:       claudia.Event{Type: "assistant", Text: "pong", Raw: acpChunkRaw},
+			ev:       claudia.Event{Type: "assistant", Text: wireOwnerReplyDecision("pong"), Raw: acpChunkRaw},
 			wantOK:   true,
 			wantType: "assistant",
 			wantText: `"text":"pong"`,
@@ -130,7 +138,7 @@ func TestChatWireLineGrokACPShapes(t *testing.T) {
 			// 🎯T455: the same words with no error frame behind them are an
 			// agent talking about an outage. Verbatim, no banner.
 			name:     "internal error as authored prose stays verbatim",
-			ev:       claudia.Event{Type: "assistant", Text: "Internal error", StopReason: "end_turn", Raw: acpEndRaw},
+			ev:       claudia.Event{Type: "assistant", Text: wireOwnerReplyFault("Internal error"), StopReason: "end_turn", Raw: acpEndRaw},
 			wantOK:   true,
 			wantType: "assistant",
 			wantText: `"text":"Internal error"`,
@@ -181,7 +189,7 @@ func TestChatWireLineGrokACPShapes(t *testing.T) {
 			name: "already Claude-shaped assistant passed through",
 			ev: claudia.Event{
 				Type:       "assistant",
-				Text:       "hello",
+				Text:       wireOwnerReplyDecision("hello"),
 				Raw:        []byte(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn"}}`),
 				StopReason: "end_turn",
 			},
@@ -292,7 +300,7 @@ func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
 	// Simulate a full Grok turn: chunk then empty end_turn.
 	s.DeliverOverseerEvent(claudia.Event{
 		Type: "assistant",
-		Text: "Hello",
+		Text: wireOwnerReplyDecision("Hello"),
 		Raw:  []byte(`{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello"}}}`),
 	})
 	s.DeliverOverseerEvent(claudia.Event{
@@ -304,7 +312,7 @@ func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
 
 	var lines []string
 	deadline := time.After(2 * time.Second)
-	for len(lines) < 2 {
+	for len(lines) < 1 {
 		select {
 		case l := <-ch:
 			if isNonBubbleFrame(l) {
@@ -316,7 +324,7 @@ func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
 		}
 	}
 
-	// First: assistant with text content array + stream_id (🎯T223).
+	// 🎯T1140: owner-reply paints once at seal with stream_id (🎯T223).
 	var a1 map[string]any
 	if err := json.Unmarshal([]byte(lines[0]), &a1); err != nil {
 		t.Fatal(err)
@@ -337,21 +345,8 @@ func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
 	if block["type"] != "text" || block["text"] != "Hello" {
 		t.Fatalf("line0 block=%v", block)
 	}
-
-	// Second: terminal empty-content assistant with stop_reason; same stream_id.
-	var a2 map[string]any
-	if err := json.Unmarshal([]byte(lines[1]), &a2); err != nil {
-		t.Fatal(err)
-	}
-	if a2["type"] != "assistant" {
-		t.Fatalf("line1 type=%v line=%s", a2["type"], lines[1])
-	}
-	if a2["stream_id"] != sid1 {
-		t.Fatalf("stream_id mismatch: chunk=%q end=%v", sid1, a2["stream_id"])
-	}
-	msg2, _ := a2["message"].(map[string]any)
-	if msg2["stop_reason"] != "end_turn" {
-		t.Fatalf("line1 stop_reason=%v", msg2["stop_reason"])
+	if msg1["stop_reason"] != "end_turn" {
+		t.Fatalf("🎯T1140 seals owner-reply with end_turn on the same frame; stop_reason=%v", msg1["stop_reason"])
 	}
 	// Terminal clears open stream so the next turn mints a new id.
 	s.mu.Lock()
@@ -419,8 +414,9 @@ func TestHandleAgentEventToolUseDoesNotClearWaiting(t *testing.T) {
 // handle() reads. If this breaks, the working indicator stays stuck.
 func TestUIContractAssistantWire(t *testing.T) {
 	line, ok := chatWireLine(claudia.Event{
-		Type: "assistant",
-		Text: "pong",
+		Type:       "assistant",
+		Text:       wireOwnerReplyDecision("pong"),
+		StopReason: "end_turn",
 	})
 	if !ok {
 		t.Fatal("expected wire line")
@@ -505,13 +501,22 @@ func TestChatWireLineSuppressesSilentAssistant(t *testing.T) {
 		t.Fatal("case-insensitive silent must suppress")
 	}
 
-	// Non-silent still delivered.
-	line, ok = chatWireLine(claudia.Event{
+	// 🎯T1140: undeclared prose is routine — not owner wire.
+	_, ok = chatWireLine(claudia.Event{
 		Type: "assistant",
 		Text: "Owner needs this reply.",
 	})
-	if !ok || !strings.Contains(line, "Owner needs this reply") {
-		t.Fatalf("non-silent assistant still delivered: ok=%v line=%s", ok, line)
+	if ok {
+		t.Fatal("undeclared overseer prose must not wire")
+	}
+
+	// Owner-reply with owner-facing purpose still delivers payload only.
+	line, ok = chatWireLine(claudia.Event{
+		Type: "assistant",
+		Text: "```jevons\njevons: kind owner-reply\njevons: purpose decision\n```\nOwner needs this reply.",
+	})
+	if !ok || !strings.Contains(line, "Owner needs this reply") || strings.Contains(line, "jevons: kind") {
+		t.Fatalf("owner-reply decision not delivered: ok=%v line=%s", ok, line)
 	}
 }
 
@@ -557,7 +562,8 @@ func TestDeliverOverseerEventVisibleStreamEmptyEndTurnSealedBodyNonEmpty(t *test
 	s.waiting = true
 	s.mu.Unlock()
 
-	for _, frag := range []string{"Hel", "lo owner", " stays."} {
+	envelope := "```jevons\njevons: kind owner-reply\njevons: purpose decision\n```\n"
+	for _, frag := range []string{envelope + "Hel", "lo owner", " stays."} {
 		s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: frag})
 	}
 	s.DeliverOverseerEvent(claudia.Event{
@@ -568,7 +574,7 @@ func TestDeliverOverseerEventVisibleStreamEmptyEndTurnSealedBodyNonEmpty(t *test
 
 	var lines []string
 	deadline := time.After(2 * time.Second)
-	for len(lines) < 4 {
+	for len(lines) < 1 {
 		select {
 		case l := <-ch:
 			if isNonBubbleFrame(l) {
@@ -579,10 +585,10 @@ func TestDeliverOverseerEventVisibleStreamEmptyEndTurnSealedBodyNonEmpty(t *test
 			t.Fatalf("timeout; lines=%v", lines)
 		}
 	}
-	// Live wire must carry body fragments (flash path) and empty end_turn.
+	// 🎯T1140: owner-reply paints once at seal (payload only), not per fragment.
 	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "Hel") || !strings.Contains(joined, " stays.") {
-		t.Fatalf("live fragments missing: %v", lines)
+	if !strings.Contains(joined, "Hello owner stays.") {
+		t.Fatalf("sealed owner-reply body missing: %v", lines)
 	}
 
 	// Seal+replay path: CoalesceStreamLines on journaled lines → non-empty body.
@@ -631,10 +637,10 @@ func TestDeliverOverseerEventSuppressesMultiFragmentSilentStream(t *testing.T) {
 		Text:       "",
 		StopReason: "end_turn",
 	})
-	// Non-silent control.
+	// Non-silent control (🎯T1140 owner-reply).
 	s.DeliverOverseerEvent(claudia.Event{
 		Type: "assistant",
-		Text: "Hello owner",
+		Text: wireOwnerReplyDecision("Hello owner"),
 	})
 	s.DeliverOverseerEvent(claudia.Event{
 		Type:       "assistant",
@@ -714,14 +720,10 @@ func TestDeliverOverseerEventSilentThenVisibleOnlySecondBody(t *testing.T) {
 	})
 	// agent_note intervenes on the wire (owner-invisible).
 	s.BroadcastChat(`{"type":"agent_note","text":"[Agent jevons-po responded] Independent gate"}`)
-	// Turn B: visible.
-	s.DeliverOverseerEvent(claudia.Event{
-		Type: "assistant",
-		Text: "**🎯T244 landed.**",
-	})
+	// Turn B: visible (🎯T1140 owner-reply decision).
 	s.DeliverOverseerEvent(claudia.Event{
 		Type:       "assistant",
-		Text:       "",
+		Text:       wireOwnerReplyDecision("**🎯T244 landed.**"),
 		StopReason: "end_turn",
 	})
 
@@ -800,11 +802,12 @@ func TestDeliverOverseerEventSuppressesSilentAssistantJournal(t *testing.T) {
 		Raw:        []byte(`{"stopReason":"end_turn"}`),
 	})
 
-	// Non-silent control: must still deliver.
+	// Non-silent control: must still deliver (🎯T1140 owner-reply).
 	s.DeliverOverseerEvent(claudia.Event{
-		Type: "assistant",
-		Text: "Hello owner",
-		Raw:  []byte(`{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello owner"}}}`),
+		Type:       "assistant",
+		Text:       wireOwnerReplyDecision("Hello owner"),
+		StopReason: "end_turn",
+		Raw:        []byte(`{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello owner"}},"stopReason":"end_turn"}`),
 	})
 
 	var lines []string
@@ -899,7 +902,7 @@ func TestT455ChatWireRecordsTransportNotAuthored(t *testing.T) {
 			name: "ACP chunk with the same words is authored",
 			ev: claudia.Event{
 				Type:       "assistant",
-				Text:       "Internal error",
+				Text:       wireOwnerReplyFault("Internal error"),
 				StopReason: "end_turn",
 				Raw:        acpChunk,
 			},
@@ -911,7 +914,7 @@ func TestT455ChatWireRecordsTransportNotAuthored(t *testing.T) {
 			name: "failed earlier slices as ACP chunk stays verbatim",
 			ev: claudia.Event{
 				Type: "assistant",
-				Text: "failed earlier slices",
+				Text: wireOwnerReplyFault("failed earlier slices"),
 				Raw:  acpChunk,
 			},
 			wantTextExact: "failed earlier slices",
@@ -920,7 +923,7 @@ func TestT455ChatWireRecordsTransportNotAuthored(t *testing.T) {
 			name: "bare failed token as ACP chunk stays verbatim",
 			ev: claudia.Event{
 				Type: "assistant",
-				Text: "failed",
+				Text: wireOwnerReplyFault("failed"),
 				Raw:  acpChunk,
 			},
 			wantTextExact: "failed",
@@ -929,7 +932,7 @@ func TestT455ChatWireRecordsTransportNotAuthored(t *testing.T) {
 			name: "quoted Internal error in a report is authored",
 			ev: claudia.Event{
 				Type: "assistant",
-				Text: quoted,
+				Text: wireOwnerReplyFault(quoted),
 				Raw:  acpChunk,
 			},
 			wantTextExact: quoted,
@@ -938,7 +941,7 @@ func TestT455ChatWireRecordsTransportNotAuthored(t *testing.T) {
 			name: "overseer spend-limit status is authored",
 			ev: claudia.Event{
 				Type: "assistant",
-				Text: incident,
+				Text: wireOwnerReplyFault(incident),
 				Raw:  acpChunk,
 			},
 			wantTextExact: incident,
@@ -947,7 +950,7 @@ func TestT455ChatWireRecordsTransportNotAuthored(t *testing.T) {
 			name: "session/update that happens to nest code+message is authored",
 			ev: claudia.Event{
 				Type: "assistant",
-				Text: "Internal error",
+				Text: wireOwnerReplyFault("Internal error"),
 				Raw:  []byte(`{"sessionId":"s1","sessionUpdate":"agent_message_chunk","code":-32603,"message":"Internal error","update":{"sessionUpdate":"agent_message_chunk"}}`),
 			},
 			wantTextExact: "Internal error",
@@ -1134,6 +1137,12 @@ func TestProviderCodeCauseReadsTheErrorField(t *testing.T) {
 	if got := classifyAssistantEvent(backend); got != agenterr.ClassBackendUnavailable {
 		t.Fatalf("internal_error classified as %s", got)
 	}
+	exhausted := bill
+	exhausted.Text = "max retries exceeded: connection timed out after 1 retry"
+	exhausted.Raw = []byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"max retries exceeded: connection timed out after 1 retry"}]},"error":"retry_exhausted"}`)
+	if got := classifyAssistantEvent(exhausted); got != agenterr.ClassRetryExhausted {
+		t.Fatalf("retry_exhausted classified as %s", got)
+	}
 	prose := bill
 	prose.Raw = []byte(`{"type":"assistant","error":"You've hit your monthly spend limit"}`)
 	if got := classifyAssistantEvent(prose); got != agenterr.ClassNone {
@@ -1194,8 +1203,14 @@ func isFleetRefreshFrame(l string) bool {
 
 // The owner chat stream also carries fleet refresh and phase control frames.
 // Bubble assertions must ignore only those named controls, not unknown data.
+func isProvisionalAssistantFrame(l string) bool {
+	var m map[string]any
+	return json.Unmarshal([]byte(l), &m) == nil &&
+		(m["type"] == wireTypeProvisionalAssistant || m["type"] == wireTypeTUIPreviewFault)
+}
+
 func isNonBubbleFrame(l string) bool {
-	return isPhaseFrame(l) || isFleetRefreshFrame(l)
+	return isPhaseFrame(l) || isFleetRefreshFrame(l) || isProvisionalAssistantFrame(l)
 }
 
 // drainNonBubbleFrames consumes control frames already fanned onto ch so a

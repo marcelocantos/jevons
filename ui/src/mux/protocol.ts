@@ -15,6 +15,7 @@ export type MuxType =
   | 'status'
   | 'interrupt'
   | 'resend'
+  | 'remove_held'
   | 'error'
   | 'reset';
 

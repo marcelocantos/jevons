@@ -27,6 +27,12 @@ type rsiJudgmentsResponse struct {
 	Pending   int                    `json:"pending"`
 	Path      string                 `json:"path,omitempty"`
 	Filter    string                 `json:"filter,omitempty"`
+	// CoachEnabled and CoachUpdatedAt say whether the coach still runs. A list
+	// of three-week-old "pending" judgments from a coach the owner turned off
+	// read as live work (2026-10-22).
+	CoachEnabled   bool   `json:"coach_enabled"`
+	CoachUpdatedAt string `json:"coach_updated_at,omitempty"`
+	CoachUpdatedBy string `json:"coach_updated_by,omitempty"`
 }
 
 // handleRSIDispositions GET /api/rsi/dispositions — judgment + disposition list.
@@ -84,13 +90,21 @@ func (s *Server) handleRSIDispositions(w http.ResponseWriter, r *http.Request) {
 	if len(out) > limit {
 		out = out[:limit]
 	}
+	coach, err := rsi.LoadCoachConfig(dir)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, rsiJudgmentsResponse{
-		Judgments: out,
-		Count:     len(out),
-		Total:     len(entries),
-		Pending:   pending,
-		Path:      store.Path(),
-		Filter:    filter,
+		CoachEnabled:   coach.Enabled,
+		CoachUpdatedAt: coach.UpdatedAt,
+		CoachUpdatedBy: coach.UpdatedBy,
+		Judgments:      out,
+		Count:          len(out),
+		Total:          len(entries),
+		Pending:        pending,
+		Path:           store.Path(),
+		Filter:         filter,
 	})
 }
 

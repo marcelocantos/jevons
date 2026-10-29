@@ -11,6 +11,8 @@ export type FleetAgent = {
   running?: boolean;
   /** 🎯T970: being brought up (registered, queued or launching); has not stopped. */
   starting?: boolean;
+  /** 🎯T1304: a row painted before /api/agents has answered; nothing is known about it. */
+  placeholder?: boolean;
   phase?: string;
   step?: string;
   last_tool?: string;
@@ -18,6 +20,9 @@ export type FleetAgent = {
   progress?: string;
   summary?: string;
   workdir?: string;
+  /** 🎯T845: latched provider request failure from GET /api/agents. */
+  failure_class?: string;
+  last_error?: string;
 };
 
 export type FleetSecondaryCtx = {
@@ -92,6 +97,16 @@ export function isStateDirOverseerHome(workdir: unknown, name: unknown): boolean
   return new RegExp('(?:^|/)\\.jevons/' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$').test(s);
 }
 
+/** A worker in a Jevons worktree of its parent's repo
+ * (`<org>/.jevons-worktrees-<repo>/<name>`) works in the parent's repo: its
+ * row does not need a second line spelling out the worktree path. */
+export function isJevonsWorktreeOf(selfWd: string, parentWd: string): boolean {
+  const cut = parentWd.lastIndexOf('/');
+  if (cut <= 0) return false;
+  const prefix = parentWd.slice(0, cut) + '/.jevons-worktrees-' + parentWd.slice(cut + 1) + '/';
+  return selfWd.startsWith(prefix) && !selfWd.slice(prefix.length).includes('/');
+}
+
 export function shouldShowPathSecondary(agent: FleetAgent, ctx: FleetSecondaryCtx = {}): boolean {
   if (isStateDirOverseerHome(agent.workdir, agent.name)) return false;
   const purpose = collapse(agent.purpose).toLowerCase();
@@ -103,7 +118,7 @@ export function shouldShowPathSecondary(agent: FleetAgent, ctx: FleetSecondaryCt
   if (ctx.hasChildren) return true;
   const parentWd = normalizeWorkdir(ctx.parentWorkdir || '');
   const selfWd = normalizeWorkdir(agent.workdir || '');
-  if (parentWd && selfWd && parentWd !== selfWd) return true;
+  if (parentWd && selfWd && parentWd !== selfWd && !isJevonsWorktreeOf(selfWd, parentWd)) return true;
   if (!parentWd && selfWd) return true;
   return false;
 }
@@ -114,6 +129,15 @@ export function formatFleetProgress(agent: FleetAgent, maxLen = PROGRESS_MAX): s
   const step = collapse(agent.step || agent.last_tool || agent.lastTool);
   let explicit = collapse(agent.progress || agent.summary);
   if (explicit && isProcessOnlyLabel(explicit)) explicit = '';
+
+  const status = collapse(agent.status).toLowerCase();
+  if (status === 'failed') {
+    const err = collapse(agent.last_error);
+    if (err) return truncate(err, maxLen);
+    const fc = collapse(agent.failure_class);
+    if (fc) return truncate(`failed (${fc})`, maxLen);
+    return 'failed';
+  }
 
   if (phase === 'working') {
     if (explicit) return truncate(explicit, maxLen);
@@ -148,6 +172,12 @@ export function formatFleetProgress(agent: FleetAgent, maxLen = PROGRESS_MAX): s
 export function fleetSecondary(agent: FleetAgent, ctx: FleetSecondaryCtx = {}): FleetSecondary {
   const purpose = collapse(agent.purpose).toLowerCase();
   if (purpose === 'aside' || purpose === 'side' || purpose === 'side-chat' || purpose === 'file-target') {
+    return { kind: '', text: '' };
+  }
+  // 🎯T1304: before the first /api/agents answer the tree holds placeholder
+  // rows. Their liveness is unknown, and "stopped" on the overseer is a fault
+  // the owner would act on.
+  if (agent.placeholder) {
     return { kind: '', text: '' };
   }
   // 🎯T970: a seat still being brought up has not stopped. Before its process

@@ -238,6 +238,51 @@ func (s *Store) Find(id Identity) (Question, error) {
 	return Question{}, fmt.Errorf("unknown owner question %s/%s/%s@%s", id.Repo, id.Target, id.ID, id.Version)
 }
 
+// SilenceResolved is one question the 🎯T404.2 sweep retired on silence.
+type SilenceResolved struct {
+	Identity Identity
+	Asker    string
+	Default  string
+}
+
+// ResolveSilence retires every open question that carries a default and has
+// sat unanswered (UpdatedAt) past window, as moot: proceeded on default. A
+// question with no default is left untouched — it has nothing to proceed on
+// and keeps its STALLS mark regardless of how long it sits. Returns the
+// questions it resolved so the caller can tell each asker to proceed.
+func (s *Store) ResolveSilence(now time.Time, window time.Duration) ([]SilenceResolved, error) {
+	if window <= 0 {
+		return nil, fmt.Errorf("owner questions: silence window must be positive")
+	}
+	var resolved []SilenceResolved
+	err := s.mutate(func(rows []Question) ([]Question, error) {
+		for i := range rows {
+			q := &rows[i]
+			if q.State != Open {
+				continue
+			}
+			if strings.TrimSpace(q.Default) == "" {
+				continue // no default: stays open, keeps its STALLS mark
+			}
+			if now.Sub(q.UpdatedAt) < window {
+				continue
+			}
+			q.State = Moot
+			if q.Review != nil {
+				q.Review.Lifecycle = ownerquestion.Moot
+			}
+			q.Resolution = "moot: proceeded on default"
+			q.UpdatedAt = now
+			resolved = append(resolved, SilenceResolved{Identity: q.Identity, Asker: q.Asker, Default: q.Default})
+		}
+		return rows, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resolved, nil
+}
+
 // OpenVersion checks the durable lifecycle of an exact question version.
 // Replayed blocked reports must not repage a question the owner answered.
 func (s *Store) OpenVersion(id Identity) (bool, error) {

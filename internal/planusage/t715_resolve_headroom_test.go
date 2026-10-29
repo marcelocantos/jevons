@@ -25,7 +25,7 @@ func TestT715ResolveMintSkipsExhaustedPin(t *testing.T) {
 	pick, err := ResolveMint(context.Background(), []DestCand{
 		{Provider: "claude", Backend: claude, Load: 12, Cap: 12},
 		{Provider: "grok", Backend: grok, Load: 0, Cap: 12},
-	}, now, th)
+	}, now, th, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestT715MutationLoadAloneWithNoCapDoesNotExcludeGoesRed(t *testing.T) {
 	pick, err := ResolveMint(context.Background(), []DestCand{
 		{Provider: "claude", Backend: t495Backend("claude", t495pf(20), t495pf(80), t495Week(0.5), now), Load: 12},
 		{Provider: "grok", Backend: t495Backend("grok", t495pf(40), t495pf(60), t495Week(0.5), now), Load: 0, Cap: 12},
-	}, now, th)
+	}, now, th, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestT715ResolveMintAllAtCapRefuses(t *testing.T) {
 		{Provider: "claude", Backend: t495Backend("claude", t495pf(40), t495pf(60), t495Week(0.5), now), Load: 12, Cap: 12},
 		{Provider: "grok", Backend: t495Backend("grok", t495pf(20), t495pf(80), t495Week(0.5), now), Load: 12, Cap: 12},
 		{Provider: "codex", Backend: t495Backend("codex", t495pf(30), t495pf(70), t495Week(0.5), now), Load: 6, Cap: 6},
-	}, now, th)
+	}, now, th, nil)
 	if err == nil {
 		t.Fatal("every dest at cap must refuse")
 	}

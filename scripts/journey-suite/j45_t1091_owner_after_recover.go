@@ -50,9 +50,11 @@ func (s *suite) j45HoldOverseerInFleetTurn(actor string) error {
 		quote(ready), quote(release), j45HoldLimit)
 	note := "Journey J45 fleet check. Use Bash to run exactly this command and wait for it to return. " +
 		"Do not create the release file, background the command, or finish early:\n" + command + "\nThen reply with exactly: J45-HELD"
-	if _, err := s.mcpText("jevons_agent_send", map[string]any{
+	logFrom := s.logSize()
+	sent, err := s.mcpText("jevons_agent_send", map[string]any{
 		"name": overseerName, "actor": actor, "text": note,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("fleet note to the overseer: %w", err)
 	}
 	deadline := time.Now().Add(3 * time.Minute)
@@ -61,8 +63,56 @@ func (s *suite) j45HoldOverseerInFleetTurn(actor string) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("the overseer never began the fleet turn's shell hold")
+			return fmt.Errorf("the overseer never began the fleet turn's shell hold; %s", s.j45HoldEvidence(sent, logFrom))
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// j45HoldEvidence says what happened to the hold note, for a failure message:
+// J45 failed intermittently at this step and the shard's isolate went with it.
+func (s *suite) j45HoldEvidence(sendResult string, logFrom int64) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "send result: %q", trim(sendResult, 200))
+	if agents, err := s.listAgentsHTTP(); err == nil {
+		for _, a := range agents {
+			if a.Name == overseerName {
+				fmt.Fprintf(&b, "; overseer status=%s phase=%s", a.Status, a.Phase)
+			}
+		}
+	}
+	fmt.Fprintf(&b, "; overseer's last words: %s", trustLastAssistantWords(s, 3))
+	if body, err := os.ReadFile(s.logPath); err == nil && int64(len(body)) > logFrom {
+		var lines []string
+		for _, ln := range strings.Split(string(body[logFrom:]), "\n") {
+			if strings.Contains(ln, "name="+overseerName) || strings.Contains(ln, "agent="+overseerName) {
+				if strings.Contains(ln, "GET /api") {
+					continue
+				}
+				lines = append(lines, trim(ln, 240))
+			}
+		}
+		if len(lines) > 12 {
+			lines = lines[len(lines)-12:]
+		}
+		fmt.Fprintf(&b, "; daemon lines for %s since the send:\n  %s", overseerName, strings.Join(lines, "\n  "))
+	}
+	// The sidecar's own record of the seat: which provider it runs on and
+	// whether a turn is open, which the daemon's view can disagree with
+	// (🎯T1305).
+	if spools, _ := filepath.Glob(filepath.Join(s.stateDir, "spool", "events-*.log")); len(spools) > 0 {
+		if body, err := os.ReadFile(spools[len(spools)-1]); err == nil {
+			var seat []string
+			for _, ln := range strings.Split(string(body), "\n") {
+				if strings.Contains(ln, `"seat":"`+overseerName+`"`) && !strings.Contains(ln, `"type":"text"`) {
+					seat = append(seat, trim(ln, 220))
+				}
+			}
+			if len(seat) > 12 {
+				seat = seat[len(seat)-12:]
+			}
+			fmt.Fprintf(&b, "\n; sidecar events for %s:\n  %s", overseerName, strings.Join(seat, "\n  "))
+		}
+	}
+	return b.String()
 }

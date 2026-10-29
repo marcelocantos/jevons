@@ -7,7 +7,7 @@
 //
 //	make test-journey
 //	make test-journey PROVIDER=claude
-//	go run ./scripts/journey-suite [-keep] [-port 0] [-provider claude] [-only J10]
+//	go run ./scripts/journey-suite [-keep] [-port 0] [-provider claude] [-only J10] [-hold]
 //
 // Journeys (live agent backend; owner chat + MCP orchestration):
 //  1. health
@@ -54,7 +54,7 @@ import (
 
 const (
 	defaultPort     = portguard.DefaultPort
-	dailyPort       = portguard.DevelopmentPort // Universe A — never bind (portguard.RefuseDevelopment)
+	dailyPort       = portguard.DevelopmentPort // development :13705 — never bind (portguard.RefuseDevelopment)
 	mcpName         = "jevonsmcp-journey"
 	dailyMCPName    = "jevonsmcp"
 	overseerName    = "jevons"
@@ -67,7 +67,15 @@ type suite struct {
 	host     string
 	stateDir string
 	provider claudia.Provider
-	only     string // when set, run only journeys whose name contains it
+	only     string // when set, select comma-separated journey IDs or name fragments
+	skip     string // when set, leave out journeys matching these, as -only selects (🎯T1299)
+
+	// 🎯T1302: -shard i/N. collecting is the dry pass that lists the
+	// selected journeys; shardOf then names each one's shard.
+	shardIndex, shardCount int
+	shardOf                map[string]int
+	collecting             bool
+	collected              []string
 	failures int
 	// outages counts journeys the provider prevented from running (🎯T283).
 	// They are reported separately and do not fail the suite.
@@ -137,10 +145,22 @@ func main() {
 	keep := flag.Bool("keep", false, "keep sandbox state dir after run (for debugging)")
 	bin := flag.String("bin", "", "path to jevonsd (default: bin/jevonsd or PATH)")
 	only := flag.String("only", "",
-		"run only journeys whose name contains a comma-separated substring (e.g. J10 or J19,J22)")
+		"run only comma-separated journey IDs or name fragments (e.g. J3 or J19,J22)")
+	shard := flag.String("shard", "",
+		"run shard i of N (i/N): disjoint journey subsets, each in its own isolate, balanced by measured time (🎯T1302)")
+	skip := flag.String("skip", "",
+		"leave out comma-separated journey IDs or name fragments, matched as -only matches (🎯T1299: the fast gate skips the live-fleet journeys)")
+	hold := flag.Bool("hold", false,
+		"start the isolate, print its UI_HOST, run no journeys, and stay up until interrupted or -hold-max elapses (🎯T1129 interactive checks)")
+	holdMax := flag.Duration("hold-max", 2*time.Hour,
+		"with -hold, tear the isolate down after this long even if nobody interrupts it (🎯T1277)")
 	providerFlag := flag.String("provider", "",
 		"agent backend for the whole isolate (claudia provider id: grok, claude, …; empty = JEVONS_PROVIDER, else grok)")
 	flag.Parse()
+	shardIndex, shardCount, err := parseShard(*shard)
+	if err != nil {
+		fatal(err)
+	}
 
 	// 🎯T282: one selector drives the entire isolate — overseer and every
 	// agent the journeys spawn. Resolving through cli.ResolveProvider means
@@ -169,6 +189,8 @@ func main() {
 		fatal(err)
 	}
 	host := fmt.Sprintf("127.0.0.1:%d", p)
+
+	sweepStaleIsolateDirs()
 
 	stateDir, err := os.MkdirTemp("", "jevons-journey-*")
 	if err != nil {
@@ -234,6 +256,9 @@ persona_notes: |
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		fatal(err)
 	}
+	if err := quietAmbient(stateDir); err != nil {
+		fatal(err)
+	}
 
 	logPath := filepath.Join(stateDir, "jevonsd.log")
 	logFile, err := os.Create(logPath)
@@ -241,9 +266,10 @@ persona_notes: |
 		fatal(err)
 	}
 	s := &suite{
-		host: host, stateDir: stateDir, provider: provider, only: *only,
+		host: host, stateDir: stateDir, provider: provider, only: *only, skip: *skip,
 		daemonBin: daemon, cfgPath: cfgPath, logPath: logPath,
 		workdir: stateDir, port: p, logFile: logFile,
+		shardIndex: shardIndex, shardCount: shardCount,
 	}
 	var primaryBroker *isolatedBroker
 	var brokerStopErr error
@@ -314,57 +340,91 @@ persona_notes: |
 	}
 	fmt.Printf("started isolated jevonsd pid=%d host=%s state=%s mcp=%s provider=%s\n",
 		s.cmd.Process.Pid, host, stateDir, mcpName, provider)
-	s.run("J1-health", s.jHealth)
-	s.run("J2-chat-round-trip", s.jChatRoundTrip)
-	s.run("J32-overseer-overlap-queue", s.jOverseerOverlapQueue)
-	s.run("J3-cancel-and-send", s.jCancelAndSend)
-	s.run("J4-reconnect-sealed", s.jReconnectSealed)
+	if *hold {
+		// Interactive checks belong on an isolate, never :13705 (🎯T1129).
+		// catchSignals tears this isolate down on Ctrl-C or SIGTERM.
+		// 🎯T1277: a seat that started a hold and was then reaped never sends
+		// the interrupt, so its isolate ran for days. The hold now ends itself.
+		fmt.Printf("HOLD UI_HOST=%s open http://%s/ — interrupt to stop and clean up; stops itself after %s\n", host, host, *holdMax)
+		time.Sleep(*holdMax)
+		fmt.Fprintf(os.Stderr, "hold expired after %s — tearing down isolate and MCP registration\n", *holdMax)
+		exitNow(0)
+	}
+	journeys := func() {
+		s.run("J1-health", s.jHealth)
+		s.run("J2-chat-round-trip", s.jChatRoundTrip)
+		s.run("J32-overseer-overlap-queue", s.jOverseerOverlapQueue)
+		s.run("J3-cancel-and-send", s.jCancelAndSend)
+		s.run("J4-reconnect-sealed", s.jReconnectSealed)
 
-	// Orchestration (MCP-direct against the isolate — not the development stream).
-	s.run("J6-mcp-tool-surface", s.jMCPToolSurface)
-	s.run("J6c-overseer-tools-attached", s.jOverseerToolsAttached)
-	s.run("J43-sdk-seat-pair", s.jSDKSeatPair)
-	s.run("J44-control-plane-lifecycle", s.jControlPlaneLifecycle)
-	s.run("J6b-mcp-reconnect", s.jMCPReconnect)
-	s.run("J7-overseer-registry", s.jOverseerInRegistry)
-	s.run("J8-two-agents-same-workdir", s.jTwoAgentsSameWorkdir)
-	s.run("J8b-po-worker-lineage-fanout", s.jPOWorkerLineageFanout)
-	s.run("J9-thread-spawn-direct", s.jThreadSpawnDirectRemove)
-	s.run("J10-worker-shell-tool", s.jWorkerShellTool)
-	s.run("J11-worker-transcript", s.jWorkerTranscriptVisible)
-	s.run("J12-provider-switch", s.jProviderSwitch)
-	s.run("J13-overseer-switch", s.jOverseerSwitch)
-	s.run("J16-stopped-provider-switch", s.jStoppedProviderSwitch)
-	s.run("J34-hot-provider-switch", s.jHotProviderSwitch)
-	s.run("J37-busy-escalation", s.jBusyEscalation)
-	s.run("J38-midturn-answer", s.jMidTurnAnswer)
-	s.run("J14-bounce-resume", s.jBounceResume)
-	s.run("J40-owner-pause-resume", s.jOwnerPauseResume)
-	s.run("J17-t418-queue-bounce", s.jT418QueueBounce)
-	s.run("J19-root-history-paint", s.j19RootHistoryPaint)
-	s.run("J22-send-once", s.jSendOnce)
-	s.run("J23-fold-md", s.jFoldMd)
-	s.run("J24-composer", s.jComposerChrome)
-	s.run("J25-fleet-sidebar", s.jFleetSidebar)
-	s.run("J26-aside", s.jAsideChrome)
-	s.run("J27-frontier", s.jFrontierChrome)
-	s.run("J28-ticker-chrome", s.jTickerChrome)
-	s.run("J20-plan-dest", s.j20PlanDest)
-	s.run("J21-goal-continue-all-backends", s.j21GoalContinuesAllBackends)
-	s.run("J30-packaged-react-owner-turn", s.jPackagedReactOwnerTurn)
-	s.run("J31-packaged-react-owner-boundary", s.jPackagedReactOwnerBoundary)
-	s.run("J45-t1091-owner-after-recover", s.jT1091OwnerTurnAfterRecover)
-	s.run("J32-packaged-react-send-cutin", s.jPackagedReactSendCutIn)
-	s.run("J33-undelivered-resend", s.jUndeliveredResend)
-	s.run("J35-worker-busy-escalates", s.jWorkerBusyVisibleQueue)
-	s.run("J36-send-ack-correlation", s.jSendAckCorrelation)
-	// J39 bounces the isolate and restores a clock-free daemon before return.
-	s.run("J39-t952-hold", s.jT952Hold)
-	// Last: J18 stops every agent and raises the fleet-mute alarm on
-	// purpose, and the overseer then works the alarm. Any journey after it
-	// shared the isolate with that work (J19's history window filled with
-	// it in the 2026-10-05 gate).
-	s.run("J18-t418-mute", s.jT418Mute)
+		// Orchestration (MCP-direct against the isolate — not the development stream).
+		s.run("J6-mcp-tool-surface", s.jMCPToolSurface)
+		s.run("J6c-overseer-tools-attached", s.jOverseerToolsAttached)
+		s.run("J43-sdk-seat-pair", s.jSDKSeatPair)
+		s.run("J44-control-plane-lifecycle", s.jControlPlaneLifecycle)
+		s.run("J6b-mcp-reconnect", s.jMCPReconnect)
+		s.run("J7-overseer-registry", s.jOverseerInRegistry)
+		s.run("J8-two-agents-same-workdir", s.jTwoAgentsSameWorkdir)
+		s.run("J8b-po-worker-lineage-fanout", s.jPOWorkerLineageFanout)
+		s.run("J9-thread-spawn-direct", s.jThreadSpawnDirectRemove)
+		s.run("J10-worker-shell-tool", s.jWorkerShellTool)
+		s.run("J11-worker-transcript", s.jWorkerTranscriptVisible)
+		s.run("J12-provider-switch", s.jProviderSwitch)
+		s.run("J13-overseer-switch", s.jOverseerSwitch)
+		s.run("J16-stopped-provider-switch", s.jStoppedProviderSwitch)
+		s.run("J34-hot-provider-switch", s.jHotProviderSwitch)
+		s.run("J48-t877-hot-grok-sidecar", s.jT877HotGrokSidecar)
+		s.run("J49-t736-scout-handoff", s.jT736ScoutHandoff)
+		s.run("J37-busy-escalation", s.jBusyEscalation)
+		s.run("J38-midturn-answer", s.jMidTurnAnswer)
+		s.run("J14-bounce-resume", s.jBounceResume)
+		s.run("J40-owner-pause-resume", s.jOwnerPauseResume)
+		s.run("J41-t966-fleet-pause-visual", s.jT966FleetPauseVisual)
+		s.run("J17-t418-queue-bounce", s.jT418QueueBounce) // 🎯T418 durability + 🎯T769 restart process restore
+		s.run("J19-root-history-paint", s.j19RootHistoryPaint)
+		s.run("J22-send-once", s.jSendOnce)
+		s.run("J23-fold-md", s.jFoldMd)
+		s.run("J24-composer", s.jComposerChrome)
+		s.run("J25-fleet-sidebar", s.jFleetSidebar)
+		s.run("J26-aside", s.jAsideChrome)
+		s.run("J27-frontier", s.jFrontierChrome)
+		s.run("J28-ticker-chrome", s.jTickerChrome)
+		s.run("J20-plan-dest", s.j20PlanDest)
+		s.run("J21-goal-continue-all-backends", s.j21GoalContinuesAllBackends)
+		s.run("J30-packaged-react-owner-turn", s.jPackagedReactOwnerTurn)
+		s.run("J31-packaged-react-owner-boundary", s.jPackagedReactOwnerBoundary)
+		s.run("J45-t1091-owner-after-recover", s.jT1091OwnerTurnAfterRecover)
+		s.run("J32-packaged-react-send-cutin", s.jPackagedReactSendCutIn)
+		s.run("J33-undelivered-resend", s.jUndeliveredResend)
+		s.run("J35-worker-busy-escalates", s.jWorkerBusyVisibleQueue)
+		s.run("J36-send-ack-correlation", s.jSendAckCorrelation)
+		// J39 bounces the isolate and restores a clock-free daemon before return.
+		s.run("J39-t952-hold", s.jT952Hold)
+		// Last: J18 stops every agent and raises the fleet-mute alarm on
+		// purpose, and the overseer then works the alarm. Any journey after it
+		// shared the isolate with that work (J19's history window filled with
+		// it in the 2026-10-05 gate).
+		s.run("J46-t4043-owner-question-route", s.jT4043OwnerQuestionRoute)
+		s.run("J51-t1151-concurrent-fleet", s.jT1151ConcurrentFleet)
+		s.run("J50-t1183-trust-journey", s.jT1183TrustJourney)
+		s.run("J47-t1140-owner-reply-wire", s.jT1140OwnerReplyWire)
+		s.run("J52-t1120-one-answer", s.jT1120OneOwnerAnswer)
+		s.run("J18-t418-mute", s.jT418Mute)
+	}
+	if s.shardCount > 0 {
+		s.collecting = true
+		journeys()
+		s.collecting = false
+		s.shardOf = assignShards(s.collected, s.shardCount)
+		var mine []string
+		for _, n := range s.collected {
+			if s.inShard(n) {
+				mine = append(mine, n)
+			}
+		}
+		fmt.Printf("shard %d/%d: %s\n", s.shardIndex, s.shardCount, strings.Join(mine, " "))
+	}
+	journeys()
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()
@@ -427,10 +487,24 @@ func assertIsolation(provider claudia.Provider, hadDailyMCP bool, stateDir strin
 	return nil
 }
 
+func journeyID(s string) bool {
+	if len(s) < 2 || s[0] != 'J' {
+		return false
+	}
+	for _, c := range s[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func journeyNameMatches(name, only string) bool {
 	for _, p := range strings.Split(only, ",") {
 		p = strings.TrimSpace(p)
-		if p != "" && strings.Contains(name, p) {
+		// A complete ID (J3) must not select J30-J39. A trailing
+		// hyphen (J3-) or any other fragment retains substring selection.
+		if p != "" && (name == p || strings.HasPrefix(name, p+"-") || (!journeyID(p) && strings.Contains(name, p))) {
 			return true
 		}
 	}
@@ -449,8 +523,19 @@ func (s *suite) run(name string, fn func() error) {
 	if s.only != "" && !journeyNameMatches(name, s.only) {
 		return
 	}
+	if s.skip != "" && journeyNameMatches(name, s.skip) {
+		return
+	}
+	if s.collecting {
+		s.collected = append(s.collected, name)
+		return
+	}
+	if !s.inShard(name) {
+		return
+	}
 	start := time.Now()
 	err := fn()
+	defer s.restoreOverseerProvider(name)
 	// 🎯T839: a journey that killed the isolate, or ran without one, is
 	// judged by that, not by whatever its dead-port error happened to say.
 	if !s.tornDown {

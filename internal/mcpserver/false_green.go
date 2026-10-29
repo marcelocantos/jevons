@@ -116,7 +116,12 @@ func envelopeGateFlags(id string, lookup func(string) (*gate.Record, bool)) []ga
 // where the 2026-10-07 misattribution happened. workDir == "" or a workDir
 // outside any git work tree skips it: there is no repo to scope to.
 func FalseGreenFlagsForReport(report, workDir string) []gate.Flag {
-	return append(FalseGreenFlags(report), ForeignGateFlags(report, workDir)...)
+	flags := append(FalseGreenFlags(report), ForeignGateFlags(report, workDir)...)
+	if m, _ := envelope.Parse(report); m != nil {
+		flags = append(flags, gate.FlagLandingSHA(m.SHA, workDir)...)
+		flags = append(flags, gate.CheckOwnerImpactMissing(m, workDir)...)
+	}
+	return append(flags, gate.FlagLandingClaims(report, workDir)...)
 }
 
 // ForeignGateFlags is the 🎯T1027 arm alone: cited gates whose record

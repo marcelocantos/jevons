@@ -1,8 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package spool reads ~/.jevons/spool/events-YYYY-MM-DD.log, the dated
-// session log the Oh My Pi sidecar writes (🎯T866). Older dates first.
+// Package spool reads the Oh My Pi sidecar's dated session log,
+// events-YYYY-MM-DD.log (🎯T866), from wherever the sidecar writes it.
+// Older dates first.
 package spool
 
 import (
@@ -17,9 +18,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/marcelocantos/claudia/omp"
 )
 
-// DirEnv overrides the default ~/.jevons/spool (tests and isolates).
+// DirEnv overrides the sidecar's own spool directory (tests and isolates).
 const DirEnv = "JEVONS_SPOOL_DIR"
 
 // Record is one sidecar line. Each names its seat.
@@ -40,16 +43,18 @@ type Record struct {
 	UsageFact json.RawMessage `json:"usage_fact,omitempty"`
 }
 
-// Dir is ~/.jevons/spool, or JEVONS_SPOOL_DIR when set.
+// Dir is JEVONS_SPOOL_DIR when set, else the directory the sidecar itself
+// writes: claudia's omp.SpoolDir (CLAUDIA_OMP_SPOOL_DIR, else claudia's
+// state dir). Claudia 0145de0 (2026-10-16) moved the sidecar's default out of
+// ~/.jevons/spool, and a reader that kept the old default read a dead
+// directory: every sidecar seat's evidence, activity and replay went stale on
+// the development daemon while isolates, which set both variables to one
+// path, stayed green.
 func Dir() string {
 	if p := strings.TrimSpace(os.Getenv(DirEnv)); p != "" {
 		return p
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".jevons", "spool")
+	return omp.SpoolDir()
 }
 
 // SeatHasHistory reports whether any dated file holds a record for seat.

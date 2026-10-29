@@ -91,8 +91,28 @@ func Validate(m *Message) error {
 		}
 	case KindAck:
 		// kind alone is enough
+	case KindOwnerReply:
+		// purpose is optional; missing purpose is routine at the wire (🎯T1140).
+		if m.OwnerPurpose != OwnerPurposeNone {
+			if _, ok := ParseOwnerPurpose(string(m.OwnerPurpose)); !ok {
+				return fmt.Errorf("unknown purpose %q", m.OwnerPurpose)
+			}
+		}
+	case KindOwnerMission:
+		hasItems := strings.TrimSpace(m.Extra["items"]) != ""
+		hasCount := strings.TrimSpace(firstNonEmpty(m.Extra["item-count"], m.Extra["count"])) != ""
+		if !hasItems && !hasCount {
+			return fmt.Errorf("owner-mission requires items or item-count")
+		}
 	}
 	return nil
+}
+
+func firstNonEmpty(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
 }
 
 func validateSilentLedger(m *Message) error {

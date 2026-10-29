@@ -6,9 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { FrontierTable } from './FrontierTable';
 import type { SeatWaits } from '../frontier/play';
 
-// 🎯T980: play is a nudge. Its row shows the PO acknowledged it; when no plan
-// can seat the work it turns into a red arrow that force-seats on click, with
-// stop offered to its left on hover.
+// 🎯T980: play is a nudge. Acknowledged → pause when no plan can seat; hover
+// shows red force ▶ to the left and stop over pause (force is deliberate).
 describe('FrontierTable play states (🎯T980)', () => {
   afterEach(cleanup);
   const rows = [{ id: 'T979', name: 'Plan-band override indicator', status: 'identified' }];
@@ -37,32 +36,40 @@ describe('FrontierTable play states (🎯T980)', () => {
     expect(calls[0].body).not.toContain('force-play');
   });
 
-  it('turns into a red arrow that force-seats, with stop to its left on hover', async () => {
+  it('turns into pause; hover shows force to the left and stop over pause', async () => {
     const { view, calls, btn } = setup({ T979: { reason: 'claude: weekly ahead of pace (62% used)', at: '2026-10-01T05:00:00Z' } });
     await waitFor(() => expect(btn().getAttribute('data-play-mode')).toBe('waiting'));
-    expect(btn().className).toContain('ft-waiting-btn');
+    expect(btn().className).toContain('ft-wait-pause-btn');
     expect(btn().title).toContain('weekly ahead of pace');
     const wrap = view.container.querySelector('.ft-play-wrap')!;
-    expect(view.container.querySelector('.ft-wait-stop')).toBeNull();
-    fireEvent.mouseEnter(wrap);
-    const stop = view.container.querySelector<HTMLButtonElement>('.ft-wait-stop');
-    expect(stop).not.toBeNull();
-    expect(stop!.compareDocumentPosition(btn()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.mouseLeave(wrap);
-    expect(view.container.querySelector('.ft-wait-stop')).toBeNull();
-
+    expect(view.container.querySelector('.ft-wait-force')).toBeNull();
+    expect(view.container.querySelector('.ft-wait-stop-over')).toBeNull();
     await act(async () => btn().click());
-    const force = calls.find((c) => c.url === '/api/agents/jevons-po/send');
-    expect(force?.body).toContain('Owner force-play');
-    expect(force?.body).toContain('owner_asked=true');
+    expect(calls.length).toBe(0);
+
+    fireEvent.mouseEnter(wrap);
+    const force = view.container.querySelector<HTMLButtonElement>('.ft-wait-force');
+    const stop = view.container.querySelector<HTMLButtonElement>('.ft-wait-stop-over');
+    expect(force).not.toBeNull();
+    expect(stop).not.toBeNull();
+    expect(force!.compareDocumentPosition(btn()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await act(async () => force!.click());
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/agents/jevons-po/send')).toBe(true));
+    const send = calls.find((c) => c.url === '/api/agents/jevons-po/send');
+    expect(send!.body).toContain('Owner force-play');
+    expect(send?.body).toContain('owner_asked=true');
     await waitFor(() => expect(btn().getAttribute('data-play-mode')).toBe('acked'));
+
+    fireEvent.mouseLeave(wrap);
+    expect(view.container.querySelector('.ft-wait-force')).toBeNull();
   });
 
   it('stop on hover withdraws a waiting request', async () => {
     const { view, calls, btn } = setup({ T979: { reason: 'no plan', at: 'a' } });
     await waitFor(() => expect(btn().getAttribute('data-play-mode')).toBe('waiting'));
     fireEvent.mouseEnter(view.container.querySelector('.ft-play-wrap')!);
-    await act(async () => view.container.querySelector<HTMLButtonElement>('.ft-wait-stop')!.click());
+    await act(async () => view.container.querySelector<HTMLButtonElement>('.ft-wait-stop-over')!.click());
     expect(calls.some((c) => c.url === '/api/agents/engagement/stop' && c.body.includes('T979'))).toBe(true);
     expect(btn().getAttribute('data-play-mode')).toBe('play');
   });

@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { statusBarText } from '../conversation/overseerPhase';
+import { phaseAtRest, phaseSampleFromUnknown, statusBarText } from '../conversation/overseerPhase';
 
 /** Composer-gap overseer phase (🎯T575). Vanilla glance slot, not top #status. */
 export function OverseerPhaseStrip(props: {
@@ -9,7 +9,7 @@ export function OverseerPhaseStrip(props: {
   meta: unknown;
 }) {
   const text = statusBarText(props.connected, props.meta);
-  const busy = props.connected && text !== 'idle';
+  const busy = props.connected && !phaseAtRest(phaseSampleFromUnknown(props.meta));
   return (
     <div
       id="overseer-phase"

@@ -17,10 +17,10 @@ const path = require('path');
 
 const playwrightRoot = path.join(__dirname, '..', 'browser-loop-test', 'node_modules', 'playwright');
 const { chromium } = require(playwrightRoot);
-const VC = require(path.join(__dirname, '..', '..', 'web', 'scripts', 'viewport_census.js'));
+const VC = require(path.join(__dirname, 'viewport_census.js'));
 
 const HEADED = process.argv.includes('--headed');
-const censusPath = path.join(__dirname, '..', '..', 'web', 'scripts', 'viewport_census.js');
+const censusPath = path.join(__dirname, 'viewport_census.js');
 
 function die(code, msg) {
   console.error(msg);

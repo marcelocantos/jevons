@@ -84,8 +84,12 @@ tell application "System Events"
 end tell
 """
     try:
-        raw = subprocess.check_output(["osascript", "-e", script], text=True)
-    except subprocess.CalledProcessError:
+        raw = subprocess.check_output(
+            ["osascript", "-e", script],
+            text=True,
+            timeout=5,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return []
     return [ln.strip() for ln in raw.splitlines() if ln.strip()]
 

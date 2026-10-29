@@ -210,6 +210,38 @@ export function currentMarkClass(w: PlanWindow): string | null {
   return c || BURN_MARK_OK_CLASS;
 }
 
+/** 🎯T1284: UTC weekday profile from the daemon. Segments meet at UTC
+ * midnights; partial first/last days use their proportional share. A missing
+ * or thin profile deliberately retains T1283's straight diagonal. */
+export function paceLine(w: PlanWindow): string | null {
+  const period = periodBounds(w);
+  if (!period) return null;
+  const p = w.burn_profile;
+  if (!p || p.fallback || p.windows < 3 || !Array.isArray(p.weekday_shares) || p.weekday_shares.length !== 7 ||
+      p.weekday_shares.some((n) => typeof n !== 'number' || !Number.isFinite(n) || n < 0)) {
+    return `M0,${BURN_HEIGHT} L${BURN_WIDTH},0`;
+  }
+  const span = period.end - period.start;
+  let denom = 0, cursor = period.start;
+  while (cursor < period.end) {
+    const next = Math.min(period.end, Math.floor(cursor / 86400000) * 86400000 + 86400000);
+    denom += p.weekday_shares[new Date(cursor).getUTCDay()] * (next - cursor) / 86400000;
+    cursor = next;
+  }
+  if (!(denom > 0)) return `M0,${BURN_HEIGHT} L${BURN_WIDTH},0`;
+  let used = 0;
+  const path = [`M0,${BURN_HEIGHT}`];
+  cursor = period.start;
+  while (cursor < period.end) {
+    const next = Math.min(period.end, Math.floor(cursor / 86400000) * 86400000 + 86400000);
+    used += p.weekday_shares[new Date(cursor).getUTCDay()] * (next - cursor) / 86400000;
+    path.push(`L${round((next - period.start) / span * BURN_WIDTH)},${round(BURN_HEIGHT * (1 - used / denom))}`);
+    cursor = next;
+  }
+  path[path.length - 1] = `L${BURN_WIDTH},0`;
+  return path.join(' ');
+}
+
 /** The mark class for an ok reading, which has no pace class of its own. */
 export const BURN_MARK_OK_CLASS = 'plan-burn-ok';
 

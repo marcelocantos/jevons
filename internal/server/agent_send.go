@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/marcelocantos/jevons/internal/ownercockpit"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -266,7 +267,23 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	origin, supervisor := supervisorOrigin(strings.TrimSpace(req.Origin), text)
+	declared := strings.TrimSpace(req.Origin)
+	if declared == "" && !ownercockpit.BrowserShaped(r) {
+		// A request that names no speaker and is not the cockpit is a
+		// program, not the owner. jevons-po's curl report to the overseer
+		// (2026-10-23 02:56) defaulted to owner origin and painted in the
+		// owner's chat as the owner's own message. Programs that speak for
+		// the owner say so (origin "owner"); the cockpit is browser-shaped
+		// and still passes the T1129 owner gate below.
+		declared = sendOriginAgent
+		slog.Info("agent_send_http: unnamed non-browser sender treated as agent",
+			"component", "agent_send", "name", name)
+	}
+	origin, supervisor := supervisorOrigin(declared, text)
+	if err := s.authorizeOwnerSurfaceHTTP(r, origin, name); err != nil {
+		writeJSONError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if supervisor {
 		slog.Info("🎯T921 supervisor message delivered as the supervisor's, not the owner's",
 			"component", "agent_send", "name", name, "declared_origin", req.Origin)

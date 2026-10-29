@@ -87,9 +87,17 @@ func TestT920TokenFaultRefusesTheJourneysMessageNotTheQueueHead(t *testing.T) {
 	}
 	_ = s.SendToOverseerAs(userTurnPrefix+"Reply with exactly: "+token, "om-j33")
 
+	// 🎯T1130: both owner sends landed behind the running turn and announce
+	// themselves held; that chrome is not this journey's assertion.
+	if got := frames(); got != "held:om-left,held:om-j33" {
+		t.Fatalf("expected both messages to announce held behind the turn: frames %q", got)
+	}
 	endTurn() // leftover drains
 	if len(delivered) != 1 || !strings.Contains(delivered[0], "j32-leftover") {
 		t.Fatalf("the leftover must deliver untouched, delivered %q", delivered)
+	}
+	if got := frames(); got != "delivered:om-left" {
+		t.Fatalf("the leftover's held chrome must clear once it lands: frames %q", got)
 	}
 	endTurn() // J33's message is offered and refused
 	if got := frames(); got != "undelivered:om-j33" {

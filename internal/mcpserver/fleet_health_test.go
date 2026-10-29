@@ -70,36 +70,43 @@ func (f *fakeSweepReg) RemoveDeadSeat(name string) error {
 }
 
 func TestDeadRecoveryPlan(t *testing.T) {
-	d, r, c, rm := deadRecoveryPlan(false, false, true, true, claudia.PurposeWork)
+	d, r, c, rm := deadRecoveryPlan(false, false, true, true, false, claudia.PurposeWork)
 	if d || r || c || rm {
 		t.Fatalf("nil proc: detect=%v recover=%v clear=%v remove=%v", d, r, c, rm)
 	}
-	d, r, c, rm = deadRecoveryPlan(true, true, true, true, claudia.PurposeWork)
+	d, r, c, rm = deadRecoveryPlan(true, true, true, true, false, claudia.PurposeWork)
 	if d || r || c || rm {
 		t.Fatalf("alive: detect=%v recover=%v clear=%v remove=%v", d, r, c, rm)
 	}
-	d, r, c, rm = deadRecoveryPlan(true, false, true, true, claudia.PurposeWork)
+	d, r, c, rm = deadRecoveryPlan(true, false, true, true, false, claudia.PurposeWork)
 	if !d || !r || c || rm {
 		t.Fatalf("autostart dead: detect=%v recover=%v clear=%v remove=%v", d, r, c, rm)
 	}
 	// 🎯T544: a dead work seat (purpose work or unset) is removed, not stopped.
 	for _, purpose := range []string{claudia.PurposeWork, ""} {
-		d, r, c, rm = deadRecoveryPlan(true, false, false, true, purpose)
+		d, r, c, rm = deadRecoveryPlan(true, false, false, true, false, purpose)
 		if !d || r || c || !rm {
 			t.Fatalf("work dead purpose=%q: detect=%v recover=%v clear=%v remove=%v", purpose, d, r, c, rm)
 		}
 	}
 	// Asides and product owners keep the clear-handle path.
 	for _, purpose := range []string{claudia.PurposeAside, "product-owner"} {
-		d, r, c, rm = deadRecoveryPlan(true, false, false, true, purpose)
+		d, r, c, rm = deadRecoveryPlan(true, false, false, true, false, purpose)
 		if !d || r || !c || rm {
 			t.Fatalf("ephemeral dead purpose=%q: detect=%v recover=%v clear=%v remove=%v", purpose, d, r, c, rm)
 		}
 	}
 	// Intent says stay down: neither cleared nor removed.
-	d, r, c, rm = deadRecoveryPlan(true, false, false, false, claudia.PurposeWork)
+	d, r, c, rm = deadRecoveryPlan(true, false, false, false, false, claudia.PurposeWork)
 	if !d || r || c || rm {
 		t.Fatalf("intent-declined dead: detect=%v recover=%v clear=%v remove=%v", d, r, c, rm)
+	}
+	// 🎯T1112: intent now allows it, AutoStart, but the last stop was a
+	// deliberate supervisor kill and nothing addressed this name since —
+	// no relaunch, just the clear-handle path (stays stopped).
+	d, r, c, rm = deadRecoveryPlan(true, false, true, true, true, claudia.PurposeWork)
+	if !d || r || !c || rm {
+		t.Fatalf("deliberately-stopped autostart, intent flipped: detect=%v recover=%v clear=%v remove=%v", d, r, c, rm)
 	}
 }
 
@@ -111,7 +118,7 @@ func TestSweepDeadAgentsWorkSeatRemoved(t *testing.T) {
 		hasProc: map[string]bool{"jv-t544-worker": true},
 		alive:   map[string]bool{"jv-t544-worker": false},
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil)
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil, nil)
 	if len(reps) != 1 || reps[0].Name != "jv-t544-worker" || !reps[0].Removed || reps[0].Recovered {
 		t.Fatalf("reps=%+v want removed", reps)
 	}
@@ -140,7 +147,7 @@ func TestSweepDeadAgentsWorkSeatRemoveFailClearsHandle(t *testing.T) {
 		alive:     map[string]bool{"worker": false},
 		removeErr: errors.New("registry locked"),
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil)
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil, nil)
 	if len(reps) != 1 || reps[0].Removed || !strings.Contains(reps[0].Error, "registry locked") {
 		t.Fatalf("reps=%+v", reps)
 	}
@@ -160,7 +167,7 @@ func TestSweepDeadAgentsAutoStartRelaunch(t *testing.T) {
 		hasProc: map[string]bool{"durable": true, "jevons": true},
 		alive:   map[string]bool{"durable": false, "jevons": false},
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil)
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil, nil)
 	if len(reps) != 1 || reps[0].Name != "durable" {
 		t.Fatalf("reps=%+v want only durable", reps)
 	}
@@ -186,7 +193,7 @@ func TestSweepDeadAgentsEphemeralClearsHandle(t *testing.T) {
 		hasProc: map[string]bool{"worker": true},
 		alive:   map[string]bool{"worker": false},
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil)
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil, nil)
 	if len(reps) != 1 || reps[0].Name != "worker" || reps[0].Recovered {
 		t.Fatalf("reps=%+v", reps)
 	}
@@ -208,7 +215,7 @@ func TestSweepDeadAgentsLaunchFailThenStop(t *testing.T) {
 		alive:     map[string]bool{"durable": false},
 		launchErr: errors.New("spawn refused"),
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil)
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil, nil)
 	if len(reps) != 1 || reps[0].Recovered || !strings.Contains(reps[0].Error, "spawn refused") {
 		t.Fatalf("reps=%+v", reps)
 	}
@@ -232,7 +239,7 @@ func TestSweepDeadAgentsEmptyOnHealthy(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Never launched → Get nil → not a dead-handle detection.
-	reps := recoverDeadHandles(reg, nil, "jevons", fleetintent.Snapshot{}, nil)
+	reps := recoverDeadHandles(reg, nil, "jevons", fleetintent.Snapshot{}, nil, nil, nil)
 	if len(reps) != 0 {
 		t.Fatalf("want no dead agents, got %+v", reps)
 	}
@@ -277,7 +284,7 @@ func TestSweepThenPrependIsCallerVisible(t *testing.T) {
 		hasProc: map[string]bool{"worker": true},
 		alive:   map[string]bool{"worker": false},
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil)
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil, nil)
 	out := PrependFleetHealth("worker stopped\n", reps)
 	// 🎯T544: a dead work seat (purpose unset reads as work) is removed,
 	// not stopped, and the caller sees that outcome by name.
@@ -305,7 +312,7 @@ func TestSweepDeadAgentsHonoursAutoSpawnPausedForAutoSeatsOnly(t *testing.T) {
 		hasProc: map[string]bool{"jv-t1020-auto": true, "jevons-po": true},
 		alive:   map[string]bool{"jv-t1020-auto": false, "jevons-po": false},
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, func(name string) string { return AutoSeatHold(name, "", true, nil) })
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, func(name string) string { return AutoSeatHold(name, "", true, nil) }, nil)
 
 	byName := map[string]DeadAgentReport{}
 	for _, r := range reps {
@@ -326,5 +333,89 @@ func TestSweepDeadAgentsHonoursAutoSpawnPausedForAutoSeatsOnly(t *testing.T) {
 	}
 	if !launched["jevons-po"] {
 		t.Fatalf("launches=%v must still include the named PO", f.launches)
+	}
+}
+
+// 🎯T1112: a row preserved by a supervisor kill (🎯T560) must not come back
+// just because jevons_fleet_intent flips it to working. The ambient
+// dead-handle sweep sees the same shape a silent crash leaves — a known
+// process handle, no longer alive — so without the deliberate-stop signal
+// it cannot tell "nobody ever stopped this on purpose" from "someone just
+// killed it a minute ago and nothing has addressed it since". deliberateStop
+// is that signal; the sweep must leave the handle stopped, not relaunch it.
+func TestSweepDeadAgentsDeliberateStopNotRevivedByIntentFlip(t *testing.T) {
+	f := &fakeSweepReg{
+		defs:    []claudia.AgentDef{{Name: "jv-t1112-auto", AutoStart: true, Purpose: claudia.PurposeWork}},
+		hasProc: map[string]bool{"jv-t1112-auto": true},
+		alive:   map[string]bool{"jv-t1112-auto": false},
+	}
+	deliberate := func(name string) bool { return name == "jv-t1112-auto" }
+	// Intent now allows it (the mass flip to "working"); nothing addressed
+	// this name directly.
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, nil, deliberate)
+	if len(reps) != 1 || reps[0].Name != "jv-t1112-auto" || reps[0].Recovered {
+		t.Fatalf("reps=%+v want detected, not recovered", reps)
+	}
+	if len(f.launches) != 0 {
+		t.Fatalf("launches=%v want none — a deliberate kill is not undone by an intent flip alone", f.launches)
+	}
+	if hp, alive := f.ProcState("jv-t1112-auto"); hp || alive {
+		t.Fatalf("handle should be cleared/stopped, got hasProc=%v alive=%v", hp, alive)
+	}
+
+	// Same shape, but nothing recorded this name as deliberately stopped
+	// (e.g. a genuine silent crash): the pre-existing AutoStart recovery
+	// still fires.
+	f2 := &fakeSweepReg{
+		defs:    []claudia.AgentDef{{Name: "jv-t1112-crashed", AutoStart: true, Purpose: claudia.PurposeWork}},
+		hasProc: map[string]bool{"jv-t1112-crashed": true},
+		alive:   map[string]bool{"jv-t1112-crashed": false},
+	}
+	reps2 := sweepDeadAgents(f2, "jevons", fleetintent.Snapshot{}, nil, deliberate)
+	if len(reps2) != 1 || !reps2[0].Recovered {
+		t.Fatalf("reps2=%+v want recovered (not a deliberate stop)", reps2)
+	}
+	if len(f2.launches) != 1 || f2.launches[0] != "jv-t1112-crashed" {
+		t.Fatalf("launches=%v want [jv-t1112-crashed]", f2.launches)
+	}
+}
+
+// 🎯T1112 acceptance 2: a rehydrate is a mint for admission purposes. The
+// claudiaSweep adapter's Launch consults the admit hook before calling
+// fleet.LaunchRecovering, exactly as jevons_agent_start consults the spawn
+// governor — a registered-but-dead AutoStart seat the governor declines
+// stays declined, it is not waved through because the row already existed.
+func TestClaudiaSweepLaunchConsultsAdmitHook(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "a.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-t1112-gov", WorkDir: dir, SessionID: "s1", Provider: "grok", AutoStart: true, Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("refused: host pressure critical (🎯T1112 test)")
+	cs := claudiaSweep{reg: reg, admit: func(purpose, name string) error {
+		if name != "jv-t1112-gov" {
+			t.Fatalf("admit called for unexpected name %q", name)
+		}
+		return wantErr
+	}}
+	if err := cs.Launch("jv-t1112-gov"); err != wantErr {
+		t.Fatalf("Launch err=%v want %v (admit hook must gate the relaunch)", err, wantErr)
+	}
+	// A nil admit hook (no governor wired, or a hermetic test) launches as
+	// before — not a behaviour change for the unwired case.
+	cs2 := claudiaSweep{reg: reg}
+	if err := cs2.Launch("jv-t1112-gov"); err != nil {
+		// LaunchRecovering may itself fail in this sandbox (no real
+		// provider binary); the point under test is that admit was
+		// skipped, not that the launch succeeded, so only report if the
+		// error looks like our refusal leaking through.
+		if err == wantErr {
+			t.Fatalf("Launch with nil admit hook must not reuse a stale refusal: %v", err)
+		}
 	}
 }

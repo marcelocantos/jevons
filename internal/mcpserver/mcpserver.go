@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,13 +37,16 @@ import (
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/landhold"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/missionbound"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/reapverify"
+	"github.com/marcelocantos/jevons/internal/repowatch"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/seatinert"
 	"github.com/marcelocantos/jevons/internal/seatload"
 	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
@@ -73,8 +77,9 @@ type TranscriptOps struct {
 
 // Server wraps an MCP server that provides worker management tools.
 type Server struct {
-	missionStarts *missionbound.Store
-	registry      *claudia.Registry
+	missionStarts       *missionbound.Store
+	registry            *claudia.Registry
+	brokerIntentRefresh func() error // published after deliberate intent changes (T1253)
 	// modelCatalog overrides the launchable catalog in hermetic mint tests.
 	// Nil uses Claudia’s current catalog, not an old hard-coded model list.
 	modelCatalog func() []claudia.CatalogModel
@@ -112,6 +117,12 @@ type Server struct {
 	transport *server.StreamableHTTPServer
 
 	toolsListCount int64
+	// toolsCallCount and firstOverseerDeliveryNanos feed the boot-time
+	// toolless oracle: a broker-held seat that survives a daemon restart
+	// never re-lists tools, so a list count alone said "toolless" on every
+	// restart (2026-10-27).
+	toolsCallCount             int64
+	firstOverseerDeliveryNanos int64
 	// toolCallObserver sees every HTTP tools/call name+args (🎯T64.2).
 	toolCallObserver func(name string, args map[string]any)
 
@@ -222,6 +233,9 @@ type Server struct {
 	// is the burst key already delivered to the overseer. Guarded by mu.
 	seatStopLedger   *seatstop.Ledger
 	massStopNotified string
+	// seatOwnerPause marks seats the owner paused (🎯T981) and holds owner
+	// text until unpause. Guarded by mu.
+	seatOwnerPause map[string]*seatPauseEntry
 	// resolveProc overrides which claudia process carries an agent's event
 	// sink (🎯T426). Nil — the product path — reads the live registry.
 	resolveProc agentProcResolver
@@ -279,6 +293,9 @@ type Server struct {
 	// (🎯T416). Absent means unknown, which is a real answer and not a
 	// default — see turn_flight.go. Guarded by mu.
 	agentFlight map[string]TurnFlight
+	// sidecarTurnEndAt is the newest spool turn_end timestamp already folded
+	// into noteTurnEnded for each sidecar seat (🎯T1186). Guarded by mu.
+	sidecarTurnEndAt map[string]time.Time
 
 	// wedges holds what the daemon has seen of each in-flight turn since it
 	// began: motion, a host handle lost under it, messages handed over, and
@@ -286,12 +303,24 @@ type Server struct {
 	// flight writers can feed it while holding mu.
 	wedges turnWedges
 
+	// poReplies records which product owners owe the overseer an answer, so
+	// only answers and typed envelopes from a PO wake it (🎯T1262).
+	poReplies poReplyOwed
+
+	// inert classifies seats that accept queued sends without transcript
+	// movement across observation windows (🎯T754).
+	inert     *seatinert.Registry
+	inertOnce sync.Once
+
 	// wiredSinks records which process object currently carries this
 	// daemon's event sink, per agent (🎯T426). Guarded by wireMu and NOT by
 	// mu: the sink reaches into mu while claudia holds the agent lock, so
 	// wiring under mu would close a lock cycle — see attachAgentSink.
 	wireMu     sync.Mutex
 	wiredSinks map[string]wiredSink
+	// wireRecovery tracks asynchronous re-attach checks so test fixtures can
+	// finish their own work before the next test replaces the global logger.
+	wireRecovery sync.WaitGroup
 
 	// launching counts the launches currently in flight per agent (🎯T426).
 	// A process that is registered and alive but not yet wired is a fault
@@ -322,19 +351,37 @@ type Server struct {
 	agentTerminalGeneration map[string]uint64
 	sendqAttemptNoticed     map[string]string
 
-	// heldReapedNoticed remembers which held backlog the overseer has already
-	// been told about, per reaped seat (🎯T582 / 🎯T706). The sweep is a timer;
-	// without this the same finished seat produced a fleet-health alert every
-	// thirty seconds. The value is the hold's head entry id rather than a bare
-	// flag, so a seat reaped, restarted, drained and reaped again can still
-	// announce its second, genuinely new backlog.
+	// heldReapedAnnounced is hold ids the fleet-health path already released
+	// (🎯T582 / 🎯T706 / 🎯T1168). Keyed by the hold's head entry id, durable
+	// under state_dir so a daemon bounce does not re-deliver the same notice.
+	heldReapedAnnounced     map[string]struct{}
+	heldReapedAnnouncedLoad bool
+	// heldReapedNoticed mirrors the latest hold per agent name for
+	// forgetReapedBacklogNotice when a seat comes back live.
 	heldReapedNoticed map[string]string
+	// stalledBacklogWarned is hold ids that already emitted one 🎯T418 backlog
+	// stalled WARN for a stood-down seat (🎯T1187 / 🎯T952). Further sweeps
+	// while the hold is unchanged stay at Debug.
+	stalledBacklogWarned map[string]struct{}
 
 	// parentReportOffered is 🎯T731: report ids already offered to a parent,
 	// keyed parent+"\x00"+reportID. Drain fulfills the first offer; a second
 	// deliverByName of the same id is suppressed.
 	parentReportOffered       map[string]struct{}
 	parentReportOfferedLoaded bool
+
+	// poTurnEndedAt is 🎯T1193: when each product owner's last turn ended.
+	poTurnEndedAt map[string]time.Time
+	// poTurnStartedAt / poTurnSends / poBlockedChild are 🎯T1233: a PO
+	// turn woken by a blocked child report that ends without a send to
+	// that child is flagged once from the typed envelope + per-turn send log.
+	poTurnStartedAt map[string]time.Time
+	poTurnSends     map[string]map[string]struct{}
+	poBlockedChild  map[string]map[string]blockedChildAwait
+	// poChildWakeFaults is the latest 🎯T1193 stall per PO for agent_list/API.
+	poChildWakeFaults *poChildWakeFaultCache
+	// poOwnerMissionFaults is the latest 🎯T1195 stall per PO for agent_list/API.
+	poOwnerMissionFaults *poOwnerMissionFaultCache
 
 	// postReapWatches is 🎯T734: HEAD snapshots taken as a work seat is
 	// reaped, so a leftover pane that keeps committing is attributed to
@@ -362,6 +409,8 @@ type Server struct {
 	seatAliveFn func(string) bool
 	// birthStore is the durable accepted-prompt + notice-key ledger (🎯T679.2).
 	birthStore *birthLedger
+	// startFlightStore tracks detached jevons_agent_start flights across bounce (🎯T786).
+	startFlightStore *startFlightLedger
 	// mintRounds tracks, per parent, seats released unbriefed since that
 	// parent's last confirmed brief — closed by a quiet-period debounce into
 	// one parent notice when every seat in the round was lost (🎯T956).
@@ -405,7 +454,9 @@ type Server struct {
 	// when agent_start / thread_spawn / jwork omit provider (🎯T148).
 	// Empty means cli.ResolveProvider falls through to env / grok at use time.
 	defaultProvider string
-	mcp             mcpattach.Args
+	// fableClassRatified is config fable_class_defaults.ratified (🎯T358).
+	fableClassRatified string
+	mcp                mcpattach.Args
 
 	// llmPortfolio is the multi-provider task-type routing seed (🎯T325.2).
 	// Nil → cost.DefaultPortfolio(). Soft-cap overlays may come from budget.
@@ -435,6 +486,13 @@ type Server struct {
 	// sentinel holds cooldown/budget/grace state for durable 🎯T219 loop.
 	// Nil until ensureSentinelRuntime / registerSentinelTools.
 	sentinel *sentinelRuntime
+	// poAuditorFaults is the latest 🎯T1192 stall per PO for agent_list/API.
+	poAuditorFaults *poAuditorFaultCache
+	// poQueueBacklogFaults is the latest 🎯T1182 queue-age stall per PO for agent_list/API.
+	poQueueBacklogFaults *poQueueBacklogFaultCache
+	// poIdleNudgeState is the per-PO cross-cycle State for 🎯T1266 (nudge then
+	// one owner-visible fault for stopped workers holding undelivered messages).
+	poIdleNudgeState *poIdleNudgeStateCache
 
 	// secAuditor is the standing security interest (🎯T335). Nil until wired.
 	secAuditor *secauditor.Interest
@@ -446,6 +504,8 @@ type Server struct {
 	// idleActivity tracks ACP phase for enter-idle detection (🎯T207).
 	// Nil until StartIdleNudgeLoop; broadcastAgentEvent Observes transitions.
 	idleActivity *IdleActivityTracker
+	// blockedDest records provider/model pairs proved unusable (🎯T845).
+	blockedDest blockedDestModels
 	// idleNudgeLedger carries durable backoff/max for the 🎯T315 re-pressure
 	// actuator and the post-restart resume sweep; may be nil (no StateDir).
 	idleNudgeLedger *IdleNudgeLedger
@@ -461,32 +521,48 @@ type Server struct {
 	// finish-report an owner/parent message (or an explicit clear) lifted
 	// (🎯T938). A newer stored report from the seat forgets the entry.
 	seatBlockerClears map[string]string
+	// placementCorrectionAt maps an agent to when it was last told its
+	// envelope placement is unreadable (🎯T1190). One notice per author per
+	// placementCorrectionCooldown: a notice opens a turn, and a seat that
+	// keeps misplacing its envelope answered each one with another
+	// misplaced report (jevons-po, 2026-10-23, three loops in seven minutes).
+	placementCorrectionAt map[string]time.Time
 
 	// ownerNotifier writes deterministic owner notices that depend on no
 	// agent (🎯T415). Nil means exhaustion is logged but not reported,
 	// which is the pre-T415 behaviour and is said loudly at the point of
 	// use rather than discovered later.
 	ownerNotifier OwnerNotifier
+	// authHardBlockProbeFn overrides submitAuthHardBlockProbe (hermetics).
+	authHardBlockProbeFn func(name string)
+	// planAuthRedriveFn overrides submitPlanAuthRedrive (🎯T959 hermetics).
+	planAuthRedriveFn func(name string)
 	// exhaustion dedups repeated convergence exhaustion per agent.
 	exhaustion exhaustionState
 	// recoverBin is the detached diagnostician (🎯T415.1); stateDir is
 	// what it reads. Empty leaves diagnosis unavailable, which the
 	// deterministic notice does not depend on.
 	recoverBin string
-	stateDir   string
+	// fleetBriefedFileMu serialises the durable standing-brief record.
+	fleetBriefedFileMu sync.Mutex
+	stateDir           string
 	// daemonStateDir is cfg.StateDir (🎯T1082); see SetDaemonStateDir.
 	daemonStateDir atomic.Value
 	// spawnOrderEvidence caches the journalled start attempts 🎯T762 reconciles
-	// against: the journal is a full scan, and /api/agents asks per row.
-	spawnOrderMu       sync.Mutex
-	spawnOrderEvidence spawnorder.Evidence
-	spawnOrderReadAt   time.Time
+	// against. Refreshed in the background (🎯T1131) so /api/agents never
+	// blocks on a journal scan.
+	spawnOrderMu             sync.RWMutex
+	spawnOrderEvidence       spawnorder.Evidence
+	spawnOrderReadAt         time.Time
+	spawnOrderRevision       uint64 // journal invalidations, guarded by spawnOrderMu
+	spawnOrderRefreshRunning atomic.Bool
 
 	// intent is the 🎯T414 fleet-intent store: the deliberate answer to
 	// "should this agent be running?", read by every control that spawns,
 	// nudges, revives, repressures, or repairs. Nil resolves to all-working,
 	// which is the pre-T414 behaviour. See fleet_intent.go.
-	intent *fleetintent.Store
+	intent   *fleetintent.Store
+	landHold *landhold.Store
 
 	// reapVerify is the 🎯T753 pending-verification ledger: reaped implementers
 	// whose commits landed but whose target row stayed open.
@@ -524,6 +600,13 @@ type Server struct {
 	// Empty until SetIdeaStateDir; idea tools stay unregistered.
 	ideaStateDir      string
 	ownerQuestionsDir string
+	// ownerQuestionSilenceWindow is the 🎯T404.2 silence-resolution window.
+	// Zero = config.DefaultOwnerQuestionSilenceWindow (set by SetOwnerQuestionsDir
+	// callers via SetOwnerQuestionSilenceWindow).
+	ownerQuestionSilenceWindow time.Duration
+	// lastOwnerQuestionSilenceSweep throttles the sweep to once a minute,
+	// matching the digest check's cadence (🎯T1028.3 sibling pattern).
+	lastOwnerQuestionSilenceSweep time.Time
 
 	// agentReportDir roots the durable agent-report store (🎯T388) so a
 	// terminal report outlives the agent that wrote it. Empty until
@@ -542,6 +625,11 @@ type Server struct {
 	// refresh plus async feed triggers, writing durable versioned notes.
 	// Nil until SetResearchAgent.
 	research *research.Agent
+
+	// repowatch is the standing PO repo-watch cycle (🎯T1022.2): polls `gh`
+	// issues/PRs per PO workdir and delivers a typed brief to the owning PO.
+	// Nil until SetRepoWatchAgent.
+	repowatch *repowatch.Agent
 
 	// auditor is the periodic full-scan audit cycle (🎯T357): bounded passes
 	// over code, skills, and prompts on an advanced-tier model, folded into
@@ -622,6 +710,15 @@ func (s *Server) seatInFlight(name string) seatstate.Tri {
 // (cli.ResolveProvider("", cfg.Provider)); empty re-resolves from env at use.
 func (s *Server) SetDefaultProvider(provider string) {
 	s.defaultProvider = strings.TrimSpace(provider)
+}
+
+// SetFableClassRatified applies 🎯T358 owner ratification from config.yaml
+// (hot-reloaded). Empty means keep_current.
+func (s *Server) SetFableClassRatified(ratified string) {
+	if s == nil {
+		return
+	}
+	s.fableClassRatified = cost.NormalizeFableRatification(ratified)
 }
 
 // SetMCP installs the live jevonsmcp attach used on every mint (claudia 🎯T40).
@@ -799,10 +896,17 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 		feedOK = true
 	}
 	explicit := strings.ToLower(strings.TrimSpace(providerArg))
+	// 🎯T743: when an explicit pin is dropped, the start result and any
+	// later launch failure must still name what was asked — the caller's
+	// mental model stays "my grok seat" unless the substitution is cited.
+	askedDropped := ""
+	dropReason := ""
 	// 🎯T652: a PO habit pin on a depleted dest is not a decision — drop
 	// it so Claudia Resolve / the omit path can choose. Resume, an
 	// eligible explicit, and owner_asked still win (🎯T148 / 🎯T583 tape 3).
 	if explicit != "" && !existed && !ownerAsked && !s.providerDestEligible(explicit) {
+		askedDropped = explicit
+		dropReason = "ineligible"
 		explicit = ""
 	}
 	// 🎯T791: an unsteerable pin is dropped the same way; the exclusion is
@@ -810,6 +914,8 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 	droppedUnsteerable := ""
 	if explicit != "" && !existed && !ownerAsked {
 		if why := planusage.UnsteerableReason(explicit); why != "" {
+			askedDropped = explicit
+			dropReason = "unsteerable (" + why + ")"
 			droppedUnsteerable = fmt.Sprintf("explicit %s dropped: unsteerable (%s)", explicit, why)
 			explicit = ""
 		}
@@ -821,7 +927,7 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 	// override store at the snapshot source) and pins or excludes the
 	// provider internally. jevons no longer pre-empts that call.
 	if explicit == "" && !existed && feedOK {
-		resolved, err := planusage.ResolveMint(context.Background(), cands, now, th)
+		resolved, err := planusage.ResolveMint(context.Background(), cands, now, th, s.effectivePortfolio().TieBreakProviders(tt))
 		if err != nil || resolved.Provider == "" {
 			pick := cost.MintProviderPick{
 				Provider:       "",
@@ -835,7 +941,7 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 			}
 			// 🎯T978: say which plan refused and why, not only that none matched.
 			pick.Detail += ": " + planusage.MintRefusalDetail(cands, now, th)
-			return pick
+			return pick.WithSubstitution(askedDropped, dropReason)
 		}
 		p := strings.ToLower(string(resolved.Provider))
 		pick := cost.MintProviderPick{
@@ -857,7 +963,7 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 				pick.LosingProvider = want
 			}
 		}
-		return pick
+		return pick.WithSubstitution(askedDropped, dropReason)
 	}
 	return cost.PickMintProvider(cost.MintProviderArgs{
 		ProviderArg:       explicit,
@@ -868,7 +974,7 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 		PortfolioFromFile: fromFile,
 		PlanFeedOK:        feedOK,
 		OwnerAsked:        ownerAsked,
-	})
+	}).WithSubstitution(askedDropped, dropReason)
 }
 
 func (s *Server) planPolicyInputs() (planusage.Snapshot, []planusage.DestCand, time.Time, planusage.Thresholds, bool) {
@@ -941,10 +1047,12 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	if s.transcript != nil {
 		s.addTool(
 			mcp.NewTool("jevons_transcript_read",
-				mcp.WithDescription("Read a conversation transcript, one page at a time (🎯T942): by default the newest 40 turns, never more than about 16k tokens. The header says how many turns there are and how to ask for the previous page (before=<turn>). With agent=<name>, returns THAT agent's transcript only (registry session_id) — never substitutes the caller's/overseer transcript (🎯T304). Omit agent to read the active overseer/Jevon session. Returns turns with role and text."),
+				mcp.WithDescription("Read a conversation transcript, one page at a time (🎯T942): by default the newest 40 turns, never more than about 16k tokens. The header says how many turns there are and how to ask for the previous page (before=<turn>). With agent=<name>, returns THAT agent's transcript only (registry session_id) — never substitutes the caller's/overseer transcript (🎯T304). Omit agent to read the active overseer/Jevon session. Pass turn=N to read that one turn in full (🎯T1240), or full=true to read the whole page in full — both still bounded by the ~16k token page budget. Returns turns with role and text. Unknown arguments are refused rather than ignored."),
 				mcp.WithString("agent", mcp.Description("Fleet agent name whose transcript to read (e.g. jv-t300-loading-earlier). Required for supervision of workers; omit for the active overseer session.")),
 				mcp.WithNumber("limit", mcp.Description("Turns per page (default 40, at most 200). The page also stops at about 16k tokens.")),
 				mcp.WithNumber("before", mcp.Description("Show the turns before this turn number (1-based), for the previous page. Omit for the newest turns.")),
+				mcp.WithNumber("turn", mcp.Description("Read exactly this turn number (1-based) in full, bounded by the page token budget, instead of a truncated 200-char preview.")),
+				mcp.WithBoolean("full", mcp.Description("Read every turn on the page in full (not truncated to 200 chars), still bounded by the page token budget.")),
 			),
 			s.handleTranscriptRead,
 		)
@@ -965,6 +1073,8 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.registerSentinelTools()
 	s.registerWritSecurityTools()  // 🎯T335 security auditor + writ confinement
 	s.registerGateShowTool()       // 🎯T697: supervisor gate lookup
+	s.registerSupervisorTools()    // 🎯T704: notes + blurter escalate
+	s.registerReapClassifyTool()   // 🎯T764: reap classifier without whole-turn prose
 	s.registerSendqReconcileTool() // 🎯T726: the legal move out of PINNED
 	s.registerSpawnOrderTools()    // 🎯T762: which half of a spawn order was dropped
 
@@ -999,6 +1109,22 @@ func (s *Server) SetToolCallObserver(fn func(name string, args map[string]any)) 
 // attach our tools?" (🎯T50: the Grok CLI drops servers silently).
 func (s *Server) ToolsListCount() int64 { return atomic.LoadInt64(&s.toolsListCount) }
 
+// MCPRequestsSinceBoot counts tools/list and tools/call requests served
+// since boot: any of them shows some client holds this server's tools.
+func (s *Server) MCPRequestsSinceBoot() int64 {
+	return atomic.LoadInt64(&s.toolsListCount) + atomic.LoadInt64(&s.toolsCallCount)
+}
+
+// FirstOverseerDelivery is when this process first delivered to the
+// overseer, or the zero time when it has not.
+func (s *Server) FirstOverseerDelivery() time.Time {
+	n := atomic.LoadInt64(&s.firstOverseerDeliveryNanos)
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
 func (s *Server) mcpRequestLogger() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var method string
@@ -1019,6 +1145,7 @@ func (s *Server) mcpRequestLogger() http.Handler {
 			atomic.AddInt64(&s.toolsListCount, 1)
 		}
 		if method == "tools/call" {
+			atomic.AddInt64(&s.toolsCallCount, 1)
 			if name, args := parseToolsCall(body); name != "" && s.toolCallObserver != nil {
 				s.toolCallObserver(name, args)
 			}
@@ -1104,6 +1231,31 @@ func (s *Server) handleScreenshot(_ context.Context, _ mcp.CallToolRequest) (*mc
 	return mcp.NewToolResultText(path), nil
 }
 
+// transcriptReadArgNames are the only arguments jevons_transcript_read
+// accepts. 🎯T1240: a wrong key (e.g. name instead of agent) used to be
+// silently ignored, so the tool read the overseer's own transcript instead
+// of the named worker's — now it is refused, naming the valid keys.
+var transcriptReadArgNames = []string{"agent", "limit", "before", "turn", "full"}
+
+func unknownTranscriptReadArgs(args map[string]any) string {
+	allowed := make(map[string]bool, len(transcriptReadArgNames))
+	for _, n := range transcriptReadArgNames {
+		allowed[n] = true
+	}
+	var bad []string
+	for k := range args {
+		if !allowed[k] {
+			bad = append(bad, k)
+		}
+	}
+	if len(bad) == 0 {
+		return ""
+	}
+	sort.Strings(bad)
+	return fmt.Sprintf("unknown argument(s) %s; valid arguments are %s",
+		strings.Join(bad, ", "), strings.Join(transcriptReadArgNames, ", "))
+}
+
 // handleTranscriptRead returns turns for a named agent or the active overseer
 // session. 🎯T304: agent=<name> must resolve that agent's registry session only;
 // never fall back to GetID (caller/overseer) when a name is given — silent
@@ -1114,6 +1266,9 @@ func (s *Server) handleTranscriptRead(_ context.Context, req mcp.CallToolRequest
 	}
 
 	args := req.GetArguments()
+	if bad := unknownTranscriptReadArgs(args); bad != "" {
+		return mcp.NewToolResultError(bad), nil
+	}
 	agentName := strings.TrimSpace(str(args["agent"]))
 
 	var sessionID string
@@ -1174,6 +1329,32 @@ func (s *Server) handleTranscriptRead(_ context.Context, req mcp.CallToolRequest
 		return mcp.NewToolResultText("Transcript is empty."), nil
 	}
 
+	full, _ := args["full"].(bool)
+
+	// 🎯T1240: turn=N reads exactly that one turn in full, bounded by the
+	// page byte budget — a supervisor must never meet an unexpandable
+	// "... (truncated)" on a turn it already knows the number of.
+	if n, ok := args["turn"].(float64); ok && n >= 1 {
+		i := int(n) - 1
+		if i < 0 || i >= len(turns) {
+			if agentName != "" {
+				return mcp.NewToolResultError(fmt.Sprintf(
+					"agent %q transcript has %d turns; turn %d does not exist.", agentName, len(turns), int(n))), nil
+			}
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"transcript has %d turns; turn %d does not exist.", len(turns), int(n))), nil
+		}
+		role, _ := turns[i]["role"].(string)
+		text, _ := turns[i]["text"].(string)
+		var b strings.Builder
+		if agentName != "" {
+			fmt.Fprintf(&b, "agent=%s session=%s ", agentName, sessionDisplay(sessionID))
+		}
+		fmt.Fprintf(&b, "turns=%d showing %d-%d.\n", len(turns), i+1, i+1)
+		fmt.Fprintf(&b, "Turn %d [%s]: %s\n", i+1, role, boundText(text, "ask for one part with section=<heading>"))
+		return mcp.NewToolResultText(b.String()), nil
+	}
+
 	limit := transcriptPageTurns
 	if n, ok := args["limit"].(float64); ok && n >= 1 {
 		limit = min(int(n), transcriptMaxPageTurns)
@@ -1184,14 +1365,20 @@ func (s *Server) handleTranscriptRead(_ context.Context, req mcp.CallToolRequest
 	}
 	// One page, newest first up to the limit and the byte budget, printed in
 	// order (🎯T942): a whole transcript once put 673 KB into the overseer's
-	// context in one call, twice in 18 minutes.
+	// context in one call, twice in 18 minutes. full=true (🎯T1240) keeps each
+	// turn whole instead of truncating it to 200 chars; the byte budget below
+	// still bounds the page as a whole either way.
 	var lines []string
 	size := 0
 	start := end
 	for i := end - 1; i >= 0 && len(lines) < limit; i-- {
 		role, _ := turns[i]["role"].(string)
 		text, _ := turns[i]["text"].(string)
-		line := fmt.Sprintf("Turn %d [%s]: %s\n", i+1, role, truncate(text, 200))
+		shown := text
+		if !full {
+			shown = truncate(text, 200)
+		}
+		line := fmt.Sprintf("Turn %d [%s]: %s\n", i+1, role, shown)
 		if size+len(line) > transcriptPageBytes && len(lines) > 0 {
 			break
 		}

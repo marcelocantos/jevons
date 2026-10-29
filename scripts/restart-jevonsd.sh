@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # 🎯T191 / 🎯T553 — rebuild + activate the development jevonsd on :13705.
-# Workers do not auto-invoke this (🎯T553.2). Prefer KeepAlive
-# com.marcelocantos.jevonsd as the process owner (🎯T553.3).
+# Workers do not auto-invoke this (🎯T553.2). supervisord owns the
+# development process (supervisor/jevonsd.ini, 🎯T1111); this script asks it
+# for an upgrade exit and starts a detached daemon only where nothing
+# supervises the port.
 #
 # Purpose: overseer/PO/worker bounce after daemon-path Build without asking
 # the owner to restart by hand (🎯T188). Session death must not cancel the
@@ -72,10 +74,11 @@
 # The daemon itself is also started under nohup/setsid so it outlives
 # this script (reparented to init).
 #
-# SUPERVISION (🎯T405): the launchd job com.marcelocantos.jevons-watchdog
-# probes :$PORT every 30s and calls this script when the port stays dead —
-# so a bounce that fails for any other reason is also recovered without
-# the owner. Install with `make watchdog-install`.
+# SUPERVISION (🎯T405 / 🎯T1111): supervisord holds the development daemon
+# (supervisor/jevonsd.ini, autorestart=true) and relaunches it when it
+# exits; bin/jevons-watchdog is the interval probe that restarts the daemon
+# through this script when a bounce did not take, and tells the owner.
+# launchd is not involved.
 #
 # macOS bash 3.2 safe (no mapfile/associative arrays/bash-4isms).
 #
@@ -83,11 +86,12 @@
 #   ./scripts/restart-jevonsd.sh
 #   ./scripts/restart-jevonsd.sh --dry-run
 #   ./scripts/restart-jevonsd.sh -h | --help
+#   JEVONS_RESTART_AUTH_ID=<id> ./scripts/restart-jevonsd.sh  # auto-frontier only; PO grants via scripts/restart-auth.sh grant <shared-repo> <seat> <target> <base> <head>
 #
 # Env overrides:
 #   JEVONS_RESTART_PORT     default 13705
 #   JEVONS_RESTART_WORKDIR  default: repo root
-#   JEVONS_RESTART_LOG      default: ~/.jevons/daily-jevonsd.log
+#   JEVONS_RESTART_LOG      default: ~/.local/var/log/jevonsd.log on :13705
 #   JEVONS_RESTART_WAIT_SEC default 90
 #   JEVONS_RESTART_STOP_WAIT_SEC  grace for the 🎯T392.5 upgrade exit to
 #                               release the port before SIGKILL, default 20
@@ -117,8 +121,54 @@ cd "$ROOT"
 
 DAILY_PORT=13705
 PORT="${JEVONS_RESTART_PORT:-$DAILY_PORT}"
+
+# 🎯T1062: gate at the script entry, BEFORE worktree handoff, detach, lock,
+# build, or signal. A missing/unreadable host checker fails closed for an
+# auto-frontier identity, including direct Bash/nohup invocations. This is
+# accidental-misuse prevention, NOT complete containment: same-UID workers
+# can bypass this script and directly signal/write daemon artifacts.
+RESTART_GUARD_WORK=1
+for _arg in "$@"; do
+  case "$_arg" in -h|--help|--dry-run) RESTART_GUARD_WORK=0 ;; esac
+done
+if [[ "$PORT" == "$DAILY_PORT" && "$RESTART_GUARD_WORK" == 1 && "${JEVONS_AGENT:-}" =~ ^jv-t[0-9]+(\.[0-9]+)*-auto$ ]]; then
+  if [[ ! -x "$ROOT/scripts/restart-auth.sh" ]]; then
+    echo "restart-jevonsd: refusing auto-frontier restart: host checker missing (NOT complete containment: same-UID workers can directly signal/write daemon artifacts)" >&2
+    exit 3
+  fi
+  # A linked worktree will hand off to the shared clone. Scope the permit to
+  # that clone's HEAD, not to unlanded worktree changes.
+  guard_common="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  guard_root="$ROOT"
+  if [[ -n "$guard_common" && "$guard_common" != "$(git -C "$ROOT" rev-parse --path-format=absolute --git-dir 2>/dev/null || true)" ]]; then
+    guard_root="$(dirname "$guard_common")"
+  fi
+  "$ROOT/scripts/restart-auth.sh" check "$guard_root" || exit 3
+fi
+
+# 🎯T1165: the development daemon serves the shared branch (🎯T505/🎯T553.1),
+# never a worker's worktree. ROOT is wherever this copy of the script lives,
+# so a worker running its own worktree's copy used to relaunch :13705 on its
+# unlanded branch (2026-10-22 11:14, jv-t609-inspect-tail). From a linked
+# worktree, hand the development restart to the main working tree's script.
+if [ "$PORT" = "$DAILY_PORT" ] && [ -z "${JEVONS_RESTART_WORKDIR:-}" ]; then
+  git_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+  common_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -n "$git_dir" ] && [ -n "$common_dir" ] && [ "$git_dir" != "$common_dir" ]; then
+    main_root="$(dirname "$common_dir")"
+    echo "restart-jevonsd: invoked from linked worktree $ROOT; restarting the development daemon from the shared clone $main_root (🎯T1165)" >&2
+    exec "$main_root/scripts/restart-jevonsd.sh" "$@"
+  fi
+fi
 WORKDIR="${JEVONS_RESTART_WORKDIR:-$ROOT}"
-LOG="${JEVONS_RESTART_LOG:-$HOME/.jevons/daily-jevonsd.log}"
+# 🎯T771: development daemon boot lines belong in supervisord's capture file.
+if [ -n "${JEVONS_RESTART_LOG:-}" ]; then
+  LOG="$JEVONS_RESTART_LOG"
+elif [ "$PORT" = "$DAILY_PORT" ]; then
+  LOG="$HOME/.local/var/log/jevonsd.log"
+else
+  LOG="$HOME/.jevons/daily-jevonsd.log"
+fi
 WAIT_SEC="${JEVONS_RESTART_WAIT_SEC:-90}"
 # 🎯T392.5: how long to let the upgrade exit (SIGHUP) release the port
 # before escalating to SIGKILL. See kill_port_listeners.
@@ -150,6 +200,7 @@ CLAUDIAPIN="$ROOT/bin/claudiapin"
 # repo's HEAD/dirty plus every go.work sibling's. The binary hash alone
 # called a claudia-only fix "already activated" on 2026-08-29.
 BUILDIDENT="$ROOT/bin/buildident"
+BOUNCETIMING="$ROOT/bin/bouncetiming"
 SNAP_DIR="${JEVONS_RESTART_SNAP_DIR:-$HOME/.jevons/build-snapshot}"
 
 # 🎯T405 SELF-DETACH: re-exec into our own session before anything else,
@@ -210,6 +261,8 @@ fi
 # 🎯T553: every successful run appends "served <epoch> <sha> bounce=<0|1>"
 # to $SERVED_FILE, naming the committed HEAD it built and whether it
 # bounced. internal/t553oracle reads it to tie what :$PORT serves to a commit.
+# 🎯T1184: that SHA is the tree the *running* binary was launched from, not
+# git HEAD of $ROOT — a worktree build can never pass as HEAD again.
 SERVED_FILE="${JEVONS_RESTART_SERVED:-$HOME/.jevons/restart-jevonsd.served}"
 
 served_head() { git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown'; }
@@ -252,8 +305,9 @@ usage() {
   cat <<'EOF'
 Usage: restart-jevonsd.sh [options]
 
-Rebuild bin/jevonsd, stop brew KeepAlive if needed, free the development port,
-start repo bin/jevonsd detached, wait until /health and /api/frontier serve.
+Rebuild bin/jevonsd, stop the brew service if needed, free the development port,
+relaunch under supervisord (or start repo bin/jevonsd detached where nothing
+supervises the port), wait until /health and /api/frontier serve.
 
 🎯T218: if the rebuilt binary is already the one the running daemon is
 serving, this exits 0 without touching the port (already activated).
@@ -267,7 +321,7 @@ Options:
 Env:
   JEVONS_RESTART_PORT              Listen port (default 13705)
   JEVONS_RESTART_WORKDIR           -workdir for jevonsd (default: repo root)
-  JEVONS_RESTART_LOG               Daemon log file (default ~/.jevons/daily-jevonsd.log)
+  JEVONS_RESTART_LOG               Daemon log (default ~/.local/var/log/jevonsd.log on :13705)
   JEVONS_RESTART_WAIT_SEC          Health wait seconds (default 90)
   JEVONS_RESTART_STOP_WAIT_SEC     Grace for the upgrade exit to free the port
                                    before SIGKILL (default 20; 🎯T392.5)
@@ -294,10 +348,9 @@ BLESSED INVOKE (survive agent/overseer death AND stop the caller blocking
 on the bounce; the self-detach above covers the first half on its own):
   nohup ./scripts/restart-jevonsd.sh >>"$HOME/.jevons/restart-jevonsd.log" 2>&1 &
 
-SUPERVISION (🎯T405): com.marcelocantos.jevons-watchdog probes the port
-every 30s and calls this script when it stays dead — so a bounce that
-fails for any other reason is recovered without the owner. Install it
-with: make watchdog-install
+SUPERVISION (🎯T405 / 🎯T1111): supervisord holds the development daemon
+(supervisor/jevonsd.ini) and relaunches it on exit; bin/jevons-watchdog is
+the interval probe that calls this script when a bounce did not take.
 EOF
 }
 
@@ -308,6 +361,51 @@ log() {
 die() {
   log "ERROR: $*"
   exit 1
+}
+
+# 🎯T794: separate pre-shutdown work (old daemon still serving) from outage downtime.
+log_t794_pre_shutdown() {
+  local phase="$1"
+  local detail="${2:-}"
+  if [[ -n "${BOUNCE_WORK_START:-}" ]]; then
+    local now elapsed
+    now=$(date +%s)
+    elapsed=$((now - BOUNCE_WORK_START))
+    if [[ -n "$detail" ]]; then
+      log "🎯T794 pre-shutdown ($phase, ${elapsed}s since bounce work began; old daemon still serving until upgrade exit): $detail"
+    else
+      log "🎯T794 pre-shutdown ($phase, ${elapsed}s since bounce work began; old daemon still serving until upgrade exit)"
+    fi
+  else
+    log "🎯T794 pre-shutdown ($phase): $detail"
+  fi
+}
+
+report_t794_bounce_timing() {
+  local health_epoch="${1:-}"
+  if [[ ! -x "$BOUNCETIMING" ]]; then
+    (cd "$ROOT" && go build -o "$BOUNCETIMING" ./cmd/bouncetiming) >/dev/null 2>&1 || true
+  fi
+  if [[ ! -x "$BOUNCETIMING" || ! -r "$LOG" ]]; then
+    log "🎯T794 bounce timing: daemon log unreadable; skipped"
+    return 0
+  fi
+  local health_at=""
+  if [[ -n "$health_epoch" ]]; then
+    health_at=$(date -r "$health_epoch" '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || true)
+  fi
+  local out
+  if [[ -n "$health_at" ]]; then
+    out="$("$BOUNCETIMING" -daemon-log "$LOG" -health-at "$health_at" 2>&1)" || true
+  else
+    out="$("$BOUNCETIMING" -daemon-log "$LOG" 2>&1)" || true
+  fi
+  if [[ -n "${BOUNCE_WORK_START:-}" && -n "${BOUNCE_SHUTDOWN_EPOCH:-}" ]]; then
+    local pre=$((BOUNCE_SHUTDOWN_EPOCH - BOUNCE_WORK_START))
+    log "🎯T794 bounce timing: pre_shutdown_build=${pre}s (script work while old daemon served) $out"
+  else
+    log "🎯T794 bounce timing: $out"
+  fi
 }
 
 # 🎯T1086 / 🎯T405: tell the owner out of band that this run is leaving the
@@ -481,6 +579,8 @@ kill_port_listeners() {
     log "no listeners on :$PORT"
     return 0
   fi
+  BOUNCE_SHUTDOWN_EPOCH=$(date +%s)
+  log_t794_pre_shutdown end "requesting upgrade exit; owner-visible downtime begins after old process exits"
   log "🎯T392.5 upgrade-exit (SIGHUP) to listeners on :$PORT: $(echo "$pids" | tr '\n' ' ') — in-flight agent turns keep running across the bounce"
   # Word-split is intentional: kill accepts multiple PIDs.
   # shellcheck disable=SC2086
@@ -585,8 +685,8 @@ supervisor_policy() {
 # is not: that is someone's explicit stop, and overriding it is not this
 # script's call.
 ensure_supervised_relaunch() {
-  local old_pid="$1" policy="$2" ticks pid status started=0
-  ticks=$((RELAUNCH_WAIT_SEC * 5))
+  local old_pid="$1" policy="$2" wait_sec="${3:-$RELAUNCH_WAIT_SEC}" ticks pid status started=0
+  ticks=$((wait_sec * 5))
   while [[ "$ticks" -gt 0 ]]; do
     pid="$(sctl pid "$SUPERVISOR_PROGRAM" 2>/dev/null || true)"
     if [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$old_pid" ]]; then
@@ -611,8 +711,8 @@ ensure_supervised_relaunch() {
     sleep 0.2
     ticks=$((ticks - 1))
   done
-  notify_owner_down "supervisord program $SUPERVISOR_PROGRAM has no new pid ${RELAUNCH_WAIT_SEC}s after its upgrade exit ($policy)"
-  die "🎯T1086 supervisord program $SUPERVISOR_PROGRAM did not come back within ${RELAUNCH_WAIT_SEC}s of its upgrade exit ($policy)"
+  notify_owner_down "supervisord program $SUPERVISOR_PROGRAM has no new pid ${wait_sec}s after its upgrade exit ($policy)"
+  die "🎯T1086 supervisord program $SUPERVISOR_PROGRAM did not come back within ${wait_sec}s of its upgrade exit ($policy)"
 }
 
 # T540.2: preserve the existing supervisor owner during React activation.
@@ -630,7 +730,7 @@ upgrade_with_supervisor() {
     [[ "$PORT" == "$DAILY_PORT" ]] || return 1
   fi
   command -v supervisorctl >/dev/null 2>&1 || return 1
-  local managed_pid listeners remaining policy
+  local managed_pid listeners policy
   managed_pid="$(sctl pid "$SUPERVISOR_PROGRAM" 2>/dev/null)" || return 1
   [[ "$managed_pid" =~ ^[1-9][0-9]*$ ]] || return 1
   listeners="$(list_listen_pids)"
@@ -643,55 +743,17 @@ upgrade_with_supervisor() {
     *)
       log "🎯T1086 supervisord will not relaunch $SUPERVISOR_PROGRAM on an upgrade exit ($policy); this script starts it after the exit" ;;
   esac
+  BOUNCE_SHUTDOWN_EPOCH=$(date +%s)
+  log_t794_pre_shutdown end "supervised upgrade exit; owner-visible downtime begins after old process exits"
   sctl signal HUP "$SUPERVISOR_PROGRAM" || die "supervisor could not request upgrade exit"
-  remaining=$((STOP_WAIT_SEC * 5))
-  while kill -0 "$managed_pid" 2>/dev/null; do
-    [[ "$remaining" -gt 0 ]] || die "supervised daemon did not finish upgrade exit"
-    sleep 0.2
-    remaining=$((remaining - 1))
-  done
-  ensure_supervised_relaunch "$managed_pid" "$policy"
+  # 🎯T770: the supervised upgrade handshake is not "old pid exited within
+  # STOP_WAIT_SEC". On 2026-09-21 the script died here while supervisord
+  # relaunched ~30s later. Wait for the relaunch success condition instead,
+  # budgeting STOP_WAIT_SEC + RELAUNCH_WAIT_SEC for a slow upgrade exit.
+  ensure_supervised_relaunch "$managed_pid" "$policy" "$((STOP_WAIT_SEC + RELAUNCH_WAIT_SEC))"
   return 0
 }
 
-# 🎯T553.3: if KeepAlive owns jevonsd, SIGHUP is enough — launchd
-# relaunches the binary. Bootstrap the job when the plist exists but
-# launchd is not holding it (first adopt after write-only install).
-# Fall back to nohup only when no plist has been written yet.
-start_or_adopt_daemon() {
-  local label="com.marcelocantos.jevonsd"
-  local plist="$HOME/Library/LaunchAgents/${label}.plist"
-  local domain="gui/$(id -u)"
-  if [[ -f "$plist" ]]; then
-    if ! grep -q "$ROOT/bin/jevonsd" "$plist"; then
-      log "KeepAlive plist does not point at $ROOT/bin/jevonsd — refusing to bootstrap a wrong job; nohup-start"
-      start_daemon_detached
-      return 0
-    fi
-    local loaded_job
-    if loaded_job="$(launchctl print "${domain}/${label}" 2>/dev/null)"; then
-      if [[ "$loaded_job" == *"-vanilla-port"* ]]; then
-        # The running job retains ProgramArguments even after its plist is
-        # rewritten. SIGHUP has already preserved the fleet and freed the
-        # port; reload this one obsolete job before adopting the new binary.
-        log "T540.2: migrate loaded KeepAlive arguments after upgrade exit"
-        "$BIN" -install-daemon-agent -workdir "$ROOT" || die "cannot write React-only daemon job"
-        launchctl bootout "${domain}/${label}" || die "cannot unload obsolete daemon arguments"
-        launchctl bootstrap "$domain" "$plist" || die "cannot load React-only daemon job"
-      else
-        log "🎯T553.3 KeepAlive $label already loaded; kickstart after SIGHUP"
-        launchctl kickstart -k "${domain}/${label}" >/dev/null 2>&1 || true
-      fi
-    else
-      log "🎯T553.3 bootstrap KeepAlive $label (port is free)"
-      launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1 || \
-        die "could not bootstrap $label from $plist"
-    fi
-    return 0
-  fi
-  log "KeepAlive plist absent; nohup-start (legacy until make jevonsd-install)"
-  start_daemon_detached
-}
 
 start_daemon_detached() {
   # Detach so SIGHUP/SIGTERM to this script (or its parent agent) does not
@@ -802,11 +864,60 @@ wait_until_serving() {
   die "timed out after ${deadline}s waiting for development jevonsd on :$PORT (log=$LOG)"
 }
 
+# 🎯T1184: the git working tree the process holding :$PORT was launched
+# from. After a worktree's supervisor-install pointed jevonsd.ini at a
+# worker tree (2026-10-22 15:46–18:19), every restart relaunched that
+# worker's build while this log claimed the shared HEAD. A worktree
+# build can never pass as HEAD again.
+canon_dir() {
+  (CDPATH= cd "$1" && pwd -P)
+}
+
+running_binary_path() {
+  local pid="$1" exe
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  if [[ -e "/proc/$pid/exe" ]]; then
+    exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+    exe="${exe% (deleted)}"
+    [[ -n "$exe" ]] || return 1
+    printf '%s' "$exe"
+    return 0
+  fi
+  exe="$(lsof -p "$pid" -a -d txt -Fn 2>/dev/null | awk '/^n\// {print substr($0,2); exit}')"
+  [[ -n "$exe" ]] || return 1
+  printf '%s' "$exe"
+}
+
+running_binary_tree() {
+  local pid exe dir
+  pid="$(list_listen_pids | awk 'NF {print; exit}')"
+  exe="$(running_binary_path "$pid")" || return 1
+  [[ -e "$exe" ]] || return 1
+  dir="$(git -C "$(dirname "$exe")" rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -n "$dir" ]] || return 1
+  canon_dir "$dir"
+}
+
 record_served() {
   # 🎯T553: one ledger line naming the HEAD this run served.
+  # 🎯T1184: if the process on :$PORT lives in a different git tree than
+  # $ROOT (a worker worktree), name that tree's HEAD instead of the
+  # shared clone's. Same-tree keeps the pre-build capture so a commit
+  # landing mid-build stays an under-claim, never an over-claim.
+  local bounce="$1" head tree root_tree
+  head="$SERVED_HEAD"
+  tree="$(running_binary_tree 2>/dev/null || true)"
+  root_tree="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$tree" && -n "$root_tree" ]]; then
+    root_tree="$(canon_dir "$root_tree")"
+    if [[ "$tree" != "$root_tree" ]]; then
+      head="$(git -C "$tree" rev-parse HEAD 2>/dev/null || printf '%s' "$head")"
+      log "🎯T1184 serving $tree head=${head:0:12} (shared HEAD was ${SERVED_HEAD:0:12})"
+    fi
+  fi
   mkdir -p "$(dirname "$SERVED_FILE")" 2>/dev/null || true
-  printf 'served %s %s bounce=%s\n' "$(date +%s)" "$SERVED_HEAD" "$1" >>"$SERVED_FILE" 2>/dev/null || true
-  log "served head=${SERVED_HEAD:0:12} bounce=$1"
+  printf 'served %s %s bounce=%s\n' "$(date +%s)" "$head" "$bounce" >>"$SERVED_FILE" 2>/dev/null || true
+  log "served head=${head:0:12} bounce=$bounce"
 }
 
 # --- main --------------------------------------------------------------------
@@ -820,7 +931,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: 🎯T392.5 hold $LOCK_FILE via runlock so concurrent restarts serialise"
   log "[dry-run] would: brew services stop jevons (if brew lists jevons)"
   log "[dry-run] would: 🎯T392.5 SIGHUP listeners on :$PORT (upgrade exit — in-flight agent turns survive), SIGKILL only if the port is still held after ${STOP_WAIT_SEC}s"
-  log "[dry-run] would: 🎯T553.3 bootstrap/kickstart com.marcelocantos.jevonsd if the KeepAlive plist exists, else nohup/setsid start $BIN -port $PORT -workdir $WORKDIR >>$LOG"
+  log "[dry-run] would: nohup/setsid start $BIN -port $PORT -workdir $WORKDIR >>$LOG where nothing supervises the port (🎯T1111)"
   log "[dry-run] would: 🎯T1086 under supervisord, read $SUPERVISOR_PROGRAM's autorestart before SIGHUP and supervisorctl start it if the upgrade exit leaves it EXITED or FATAL"
   log "[dry-run] would: wait for /health 200 and /api/frontier non-404; on timeout tell the owner through blurter"
   log "[dry-run] BLESSED INVOKE: nohup $ROOT/scripts/restart-jevonsd.sh >>\$HOME/.jevons/restart-jevonsd.log 2>&1 &"
@@ -850,22 +961,6 @@ if [[ "$SKIP_MAKE" != "1" ]]; then
   "$BUILDSNAP" -root "$ROOT" -snap "$SNAP_DIR" \
     -target bin/jevonsd -artifact bin/jevonsd -dest "$BIN"
 
-  # 🎯T405: the supervisor is part of the deployment, not something a
-  # human installed once. bin/jevons-watchdog was built by hand on
-  # 2026-08-10 and every bounce since rebuilt the daemon around it,
-  # leaving the one process responsible for the daemon being up as the
-  # one process that never received a fix. launchd re-execs the program
-  # each interval, and install() lands it by rename, so replacing the
-  # file here is picked up on the next probe with no reload.
-  #
-  # Not fatal, unlike the daemon build above: a watchdog that will not
-  # compile is a reason to bring the daemon up unsupervised and say so,
-  # never a reason to leave it down.
-  log "rebuild: bin/jevons-watchdog from committed HEAD"
-  "$BUILDSNAP" -root "$ROOT" -snap "$SNAP_DIR" \
-    -target bin/jevons-watchdog -artifact bin/jevons-watchdog \
-    -dest "$ROOT/bin/jevons-watchdog" ||
-    log "WARNING: the watchdog did not rebuild — the daemon is coming up supervised by whatever build is on disk"
 
   # 🎯T553.1: React is built, type-checked and embedded by bin/jevonsd in the
   # same committed HEAD snapshot. There is no separately mutable UI to copy.
@@ -958,6 +1053,8 @@ if already_activated; then
 fi
 
 # The binary genuinely differs from what serves: activate it (🎯T194).
+BOUNCE_WORK_START=$(date +%s)
+log_t794_pre_shutdown build "pin check and rebuild while :$PORT still serves"
 stop_brew_jevons
 if ! upgrade_with_supervisor; then
 kill_port_listeners
@@ -972,9 +1069,14 @@ if [[ "${JEVONS_RESTART_FAULT:-}" == "after-kill" ]]; then
   kill -9 $$
 fi
 
-start_or_adopt_daemon
+# No supervisor owns this port (🎯T1111: supervisord handles the development
+# daemon above; this is the isolate / hand-run path), so detach a daemon of
+# our own.
+start_daemon_detached
 fi
 wait_until_serving
+HEALTH_READY_EPOCH=$(date +%s)
+report_t794_bounce_timing "$HEALTH_READY_EPOCH"
 record_active_identity
 
 log "OK: development jevonsd serving on :$PORT (workdir=$WORKDIR)"

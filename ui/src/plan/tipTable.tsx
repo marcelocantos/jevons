@@ -28,6 +28,7 @@ export type TipColumn = {
   /** Window label under the provider icon: 'session', 'week', 'month'. */
   label: string;
   window: PlanWindow;
+  stale?: boolean;
 };
 
 /** Header grouping: a provider and the columns it spans. */
@@ -53,11 +54,11 @@ export function windowLabel(name: string, model?: string | null): string {
 export function tipColumns(groups: TickerGroup[]): TipHeaderGroup[] {
   const out: TipHeaderGroup[] = [];
   for (const g of groups) {
-    if (!g.available) continue;
     const columns = (g.windows || []).map((w) => ({
       provider: g.provider,
       label: windowLabel(w.name || '', w.model),
       window: w,
+      stale: g.stale || !g.available,
     }));
     if (columns.length) out.push({ provider: g.provider, columns });
   }
@@ -158,7 +159,8 @@ export function unavailableNotes(groups: TickerGroup[], nowMs?: number): string[
   return groups
     .filter((g) => !g.available)
     .map((g) => {
-      const head = `${g.provider}: no reading — ${g.reason || 'no plan-remaining published'}`;
+      const retry = g.nextAttemptAt ? ` · retry ${formatInstantParts(new Date(g.nextAttemptAt), { hour: '2-digit', minute: '2-digit', hour12: false })}` : '';
+      const head = `${g.provider}: no reading — ${g.reason || 'no plan-remaining published'}${retry}`;
       if (!g.last || !g.last.windows.length) return head;
       const figures = g.last.windows
         .map((w) => `${windowLabel(w.name || '', w.model)} ${pct(usedPercentOf(w))}`)
@@ -181,7 +183,7 @@ export function PlanTipTable(props: { groups: TickerGroup[]; nowMs?: number; tim
   // colour (🎯T588.2). Reusing formatWindow rather than re-deriving the
   // class is the point: two sources would drift and the tooltip would
   // quietly disagree with the bar it describes.
-  const paceClass = (c: TipColumn) => formatWindow(c.window, nowMs).className || '';
+  const paceClass = (c: TipColumn) => c.stale ? 'plan-stale' : formatWindow(c.window, nowMs).className || '';
   const row = (
     label: string,
     cell: (c: TipColumn) => string,
@@ -255,6 +257,9 @@ export function PlanTipTable(props: { groups: TickerGroup[]; nowMs?: number; tim
           </tr>
         </tbody>
       </table>
+      {props.groups.filter((g) => g.available && g.last).map((g) => (
+        <div key={g.provider}>{g.provider}: observed {nowMs - g.last!.at < 60_000 ? 'just now' : humanDuration((nowMs - g.last!.at) / 1000) + ' ago'}</div>
+      ))}
       {notes.length ? <div className="plan-tip-notes">{notes.join('\n')}</div> : null}
     </div>
   );

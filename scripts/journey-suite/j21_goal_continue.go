@@ -76,23 +76,30 @@ func (s *suite) j21GoalContinuesAllBackends() error {
 	return nil
 }
 
+// j21TargetID scopes each backend to its own leaf so the claude arm cannot
+// hold 🎯T510 against grok/codex in one suite run (🎯T836). Product hermetics
+// for 🎯T510 keep the shared id in internal/mcpserver; T222 control stays in
+// TestAgentStartRefusesSecondEngagement.
+func j21TargetID(provider string) string {
+	return fmt.Sprintf("T510-J21-%s", provider)
+}
+
 func (s *suite) goalContinueOneBackend(provider string) error {
 	name := fmt.Sprintf("jv-t510-%s-%d", provider, time.Now().UnixNano()%1e6)
+	targetID := j21TargetID(provider)
 	work := filepath.Join(s.stateDir, "t510-"+provider)
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
-	// Force: a worker mid-turn refuses a plain kill (🎯T664), and a survivor
-	// keeps T510 engaged, so the next backend's start was refused.
-	defer func() {
-		_, _ = s.MCPToolCall("jevons_agent_kill", map[string]any{"name": name, "actor": "jevons", "force": true})
-	}()
+	// Force-kill and wait for deregistration: a survivor keeps its target_id
+	// engaged and the next backend's start was refused (🎯T664 / 🎯T836).
+	defer func() { s.releaseJourneySeat(name) }()
 
 	// First user turn must not close the Goal.
 	prompt := "Reply with exactly: ping. Do not emit any GOAL_STATUS line."
 	_, err := s.MCPToolCall("jevons_agent_start", map[string]any{
 		"name": name, "workdir": work, "actor": "jevons", "parent": "jevons",
-		"purpose": "work", "provider": provider, "target_id": "T510",
+		"purpose": "work", "provider": provider, "target_id": targetID,
 		"prompt": prompt,
 	})
 	if err != nil && isStartPending(err) {
@@ -256,4 +263,37 @@ func repliesAfterFirstTerminal(payload map[string]any) int {
 		}
 	}
 	return n
+}
+
+const j21SeatReleaseWait = 60 * time.Second
+
+// releaseJourneySeat force-kills a journey-planted seat and waits until it
+// leaves /api/agents so T222 cannot refuse the next mint on the same ledger.
+func (s *suite) releaseJourneySeat(name string) {
+	_, _ = s.MCPToolCall("jevons_agent_kill", map[string]any{
+		"name": name, "actor": "jevons", "force": true,
+	})
+	_ = s.waitAgentRemoved(name, j21SeatReleaseWait)
+}
+
+// waitAgentRemoved polls until name is absent from the fleet list.
+func (s *suite) waitAgentRemoved(name string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		agents, err := s.ListAgentsHTTP()
+		if err == nil {
+			found := false
+			for _, a := range agents {
+				if a.Name == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("agent %q still registered after %s", name, timeout)
 }

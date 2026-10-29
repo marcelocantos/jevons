@@ -39,6 +39,10 @@ type MintModelArgs struct {
 	CodexEligible bool
 	// Portfolio supplies per-route Models overlays; nil uses compiled peers.
 	Portfolio *Portfolio
+	// Role is the fleet role on mint (overseer, product-owner, worker, …).
+	Role string
+	// FableRatified is config fable_class_defaults.ratified (🎯T358).
+	FableRatified string
 }
 
 // MintModelPick is the omit-model mint decision (🎯T325.2.1).
@@ -66,6 +70,9 @@ func PickMintModel(a MintModelArgs) MintModelPick {
 		if m := strings.TrimSpace(a.StoredModel); m != "" {
 			return MintModelPick{Model: m, Knob: KnobModelResume}
 		}
+	}
+	if pin := FableClassMintModel(a); pin.Model != "" {
+		return pin
 	}
 	if !IsFastCheapTask(a.TaskType) {
 		return MintModelPick{}
