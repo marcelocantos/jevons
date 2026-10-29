@@ -82,6 +82,7 @@ export function AgentTranscript(props: {
   const pagingRef = useRef(false);
   const wasReadyRef = useRef(false);
   const lastHeightRef = useRef(0);
+  const lastScrollTopRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const hydrateSettled = useRef(false);
   const lastTotalRef = useRef(0);
@@ -154,6 +155,7 @@ export function AgentTranscript(props: {
     wasReadyRef.current = false;
     hydrateSettled.current = false;
     lastHeightRef.current = 0;
+    lastScrollTopRef.current = null;
     lastTotalRef.current = 0;
     lastCountRef.current = 0;
     setOverscan(HYDRATE_OVERSCAN_MAX);
@@ -492,8 +494,11 @@ export function AgentTranscript(props: {
         prevHeight: lastHeightRef.current,
         scrollHeight: el.scrollHeight,
         clientHeight: el.clientHeight,
+        scrollTop: el.scrollTop,
+        prevScrollTop: lastScrollTopRef.current ?? undefined,
       });
       lastHeightRef.current = next.height;
+      lastScrollTopRef.current = el.scrollTop;
       setFollow(next.follow);
       requestOlder();
     };

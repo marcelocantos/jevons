@@ -48,7 +48,20 @@ func prepareTrustJourneyRepo(srcRoot, scratch string) (string, error) {
 	if err := os.WriteFile(filepath.Join(calcDir, "calc_test.go"), []byte("package calc\n\nimport \"testing\"\n\nfunc TestPlaceholder(t *testing.T) {}\n"), 0o644); err != nil {
 		return "", err
 	}
-	if err := trustGit(dest, "add", "pkg/calc/calc.go", "pkg/calc/calc_test.go"); err != nil {
+	// This package is a real test binary in the cloned Jevons module. Without
+	// the same testhome linkage as every production test package, the fixture's
+	// own full gate fails before either J51 worker can land (🎯T1325).
+	if err := os.WriteFile(filepath.Join(calcDir, "testhome_test.go"),
+		[]byte("package calc\n\nimport _ \"github.com/marcelocantos/jevons/internal/testhome\"\n"), 0o644); err != nil {
+		return "", err
+	}
+	// Mark only the throwaway clone: historical ledger ratchets still validate
+	// generic integrity here, but cannot require production's achieved IDs in
+	// the fresh journey ledger (git history reserves those IDs).
+	if err := os.WriteFile(filepath.Join(dest, ".jevons-trust-journey"), []byte("throwaway fixture\n"), 0o644); err != nil {
+		return "", err
+	}
+	if err := trustGit(dest, "add", ".jevons-trust-journey", "pkg/calc/calc.go", "pkg/calc/calc_test.go", "pkg/calc/testhome_test.go"); err != nil {
 		return "", err
 	}
 	if err := trustGit(dest, "commit", "-q", "-m", "journey: seed pkg/calc"); err != nil {

@@ -80,6 +80,46 @@ describe('followPin', () => {
     ).toBe(false);
   });
 
+  it('a second virtualizer correction after growth is not a leave (🎯T1336)', () => {
+    // Cold load after a restart: canvas grows 956 → 1182 at scrollTop 330.
+    // react-virtual corrects scrollTop for rows above the viewport twice
+    // before the canvas observer re-pins.
+    const first = followAfterScroll({
+      fromBottom: 1182 - 626 - 340,
+      pinning: false,
+      wasFollowing: true,
+      prevHeight: 956,
+      scrollHeight: 1182,
+      clientHeight: 626,
+      scrollTop: 340,
+      prevScrollTop: 330,
+    });
+    expect(first.follow).toBe(true);
+    const second = followAfterScroll({
+      fromBottom: 1182 - 626 - 352,
+      pinning: false,
+      wasFollowing: first.follow,
+      prevHeight: first.height,
+      scrollHeight: 1182,
+      clientHeight: 626,
+      scrollTop: 352,
+      prevScrollTop: 340,
+    });
+    expect(second.follow).toBe(true);
+    // The owner scrolling up by the same distance still leaves.
+    const up = followAfterScroll({
+      fromBottom: 1182 - 626 - 300,
+      pinning: false,
+      wasFollowing: true,
+      prevHeight: 1182,
+      scrollHeight: 1182,
+      clientHeight: 626,
+      scrollTop: 300,
+      prevScrollTop: 556,
+    });
+    expect(up.follow).toBe(false);
+  });
+
   it('followAfterScroll keeps track when height grows after hydrate (🎯T494.1.3)', () => {
     const grew = followAfterScroll({
       fromBottom: 480,

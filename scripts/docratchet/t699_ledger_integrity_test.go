@@ -4,7 +4,9 @@
 package docratchet_test
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -33,6 +35,17 @@ func TestT699LedgerHasNoAchievedDependingOnOpen(t *testing.T) {
 		if strings.Contains(text, "Validation errors (degraded read)") {
 			t.Fatalf("bullseye --view %s reports degraded validation section:\n%s", view, text)
 		}
+	}
+
+	// A trust journey clone deliberately starts a fresh ledger so the daemon
+	// cannot auto-spawn against production's frontier. Git history reserves the
+	// historical T553 IDs, so they cannot be recreated in that ledger. The
+	// generic integrity checks above still run there; only this history-specific
+	// assertion belongs exclusively to the production ledger (🎯T1325).
+	if _, err := os.Stat(filepath.Join(root, ".jevons-trust-journey")); err == nil {
+		return
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
 
 	// Pin the reconciled T553 pair so a future reopen of T553.1 without T553.2

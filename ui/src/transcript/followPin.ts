@@ -86,6 +86,9 @@ export function followAfterScroll(o: {
   prevHeight: number;
   scrollHeight: number;
   clientHeight?: number;
+  /** scrollTop now and at the previous scroll event, when known. */
+  scrollTop?: number;
+  prevScrollTop?: number;
 }): { follow: boolean; height: number } {
   const sh = Number(o.scrollHeight) || 0;
   const prev = Number(o.prevHeight) || 0;
@@ -98,6 +101,8 @@ export function followAfterScroll(o: {
       clientHeight: o.clientHeight,
       prevHeight: prev,
       scrollHeight: sh,
+      movedTowardEnd:
+        o.scrollTop != null && o.prevScrollTop != null && Number(o.scrollTop) >= Number(o.prevScrollTop),
     }),
     height: sh,
   };
@@ -150,8 +155,19 @@ export function shouldHoldFollow(opts: {
   prevHeight?: number;
   /** Current canvas height, so growth since prevHeight is knowable. */
   scrollHeight?: number;
+  /**
+   * scrollTop did not decrease since the last scroll event. Leaving the end
+   * moves scrollTop up; react-virtual's correction for a row above the
+   * viewport re-measuring taller moves it down. Two such corrections before
+   * the canvas observer re-pins left the second one reading the remaining
+   * gap as a leave, because the first had already moved prevHeight past the
+   * growth: a cold load after a restart parked 234px short of the end
+   * (🎯T1336).
+   */
+  movedTowardEnd?: boolean;
 }): boolean {
   const from = Number(opts.fromBottom) || 0;
+  if (opts.wasFollowing && opts.movedTowardEnd) return true;
   const ch = Number(opts.clientHeight) || 0;
   const midList = ch > 0 && from > ch;
   const established = (Number(opts.prevHeight) || 0) > 0;

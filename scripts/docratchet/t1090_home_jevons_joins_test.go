@@ -45,7 +45,10 @@ var t1090HomeJevonsJoins = map[string]string{
 }
 
 func TestT1090NoNewHomeJevonsJoinsInDaemonCode(t *testing.T) {
-	root := repoRoot(t)
+	root, err := filepath.EvalSymlinks(repoRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command("go", "list", "-deps", "-f",
 		`{{if .Module}}{{if eq .Module.Path "github.com/marcelocantos/jevons"}}{{.Dir}}{{"\t"}}{{join .GoFiles " "}}{{end}}{{end}}`,
 		"./cmd/jevonsd")
@@ -64,6 +67,9 @@ func TestT1090NoNewHomeJevonsJoinsInDaemonCode(t *testing.T) {
 			continue
 		}
 		for _, name := range strings.Fields(files) {
+			// Go resolves symlinked temp roots (/tmp -> /private/tmp on
+			// macOS); compare canonical paths or every known exception
+			// appears new and stale in a trust journey clone (🎯T1325).
 			path := filepath.Join(dir, name)
 			rel, err := filepath.Rel(root, path)
 			if err != nil {
