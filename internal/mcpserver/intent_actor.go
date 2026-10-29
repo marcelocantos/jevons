@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"net/http"
 	"strings"
 	"sync"
@@ -55,7 +56,7 @@ const clientActorPrefix = "client:"
 
 // planPolicyActor is the product path that parks seats on plan exhaustion. It
 // is the daemon, not the overseer agent, and says so.
-const planPolicyActor = "product:plan_policy"
+const planPolicyActor = fleetintent.PlanPolicyActor
 
 // mcpOrigin is what the HTTP layer knows about the caller of one MCP request.
 type mcpOrigin struct {

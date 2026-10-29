@@ -154,6 +154,12 @@ gate: bin/gate
 gate-full: bin/gate
 	@scripts/gate-attest.sh full
 
+# Land the attested branch on master as one squash commit (🎯T1312):
+# make land MSG=<message file>. Refuses unless make gate attested HEAD.
+.PHONY: land
+land:
+	@scripts/land.sh "$(MSG)"
+
 bin/gate: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/gate ./cmd/gate

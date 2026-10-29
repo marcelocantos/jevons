@@ -29,6 +29,16 @@ const fleetBriefT1145 = "\n\n## Ledger merge conflicts (🎯T1145)\n" +
 	"  `go run ./cmd/integrate` — it unions the ledger when that is the only\n" +
 	"  conflicted path. File targets via jevons_target_file / bullseye tools (🎯T546).\n"
 
+// fleetBriefT1296 is split out for the same backtick reason as fleetBriefT1134.
+const fleetBriefT1296 = "\n\n## Kill only what you started (🎯T1296)\n" +
+	"- A seat signals only processes it started itself: keep the pid (`$!`, or the\n" +
+	"  pid its command printed) and `kill` that pid. Never `pkill`, `killall`, or\n" +
+	"  `kill $(pgrep …)`: a pattern matches other seats' and the owner's processes\n" +
+	"  (2026-10-29: an auditor's `pkill -f journey-suite` killed the owner's gate).\n" +
+	"  Claudia's sidecar refuses pattern kills before the shell runs (claudia 🎯T237).\n" +
+	"- A concurrent run in your way is not yours to clear: wait for the heavy lease,\n" +
+	"  or report it to your parent.\n"
+
 // fleetBriefT1151_6 is split out for the same backtick reason as fleetBriefT1134.
 
 // fleetBriefT1160 is split out for the same backtick reason as fleetBriefT1134.
@@ -530,7 +540,7 @@ denied nested sandbox-exec; that is the bad shape.
   Grep of a target id; owner/human editors; the bullseye process writes
   the file. The banner comment is not a gate.
 - Related: ambient RSI 🎯T92, hierarchy 🎯T129. Residual: one-off flukes may skip.
-` + fleetBriefT1134 + fleetBriefT1145 + fleetBriefT1151_6 + fleetBriefT1151_8 + fleetBriefT1160 + `
+` + fleetBriefT1134 + fleetBriefT1145 + fleetBriefT1296 + fleetBriefT1151_6 + fleetBriefT1151_8 + fleetBriefT1160 + `
 
 ## Shared-workdir hygiene: hunk-level edits only (🎯T1113)
 - The fleet shares one working-directory clone. Another agent's uncommitted

@@ -412,3 +412,8 @@ func (s Snapshot) Summarize() string {
 	b.WriteString(strings.Join(parts, ", "))
 	return b.String()
 }
+
+// PlanPolicyActor is the By of a park the daemon's plan policy made when a
+// seat's plan ran out (🎯T1316). Plan policy alone lifts it, by switching or
+// resuming the seat, so nothing else may relaunch a seat parked this way.
+const PlanPolicyActor = "product:plan_policy"

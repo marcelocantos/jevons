@@ -23,6 +23,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
 // Cockpit convergence (🎯T204): desired state is a *usable* owner chat and
@@ -71,6 +72,9 @@ const (
 	cockpitAuthWait
 	cockpitGiveUp
 	cockpitWaitObservation
+	// cockpitPolicyParked: plan policy parked a stopped overseer; only plan
+	// policy brings it back (🎯T1316).
+	cockpitPolicyParked
 )
 
 // cockpitObs is a snapshot of overseer + chat attach + busy state.
@@ -102,6 +106,13 @@ type cockpitObs struct {
 	// AuthLaunchBlocked: overseer launch is in an auth-failure backoff
 	// window (🎯T607) — do not spawn another provider process yet.
 	AuthLaunchBlocked bool
+	// PolicyParked: plan policy parked the overseer because its plan ran
+	// out (fleet intent parked by fleetintent.PlanPolicyActor). A relaunch
+	// would put it straight back on an exhausted plan and leave the park
+	// standing over a running seat (🎯T1316, J20 on claudia v0.77.0).
+	PolicyParked bool
+	// PolicyParkReason is the park's recorded reason, for the down notice.
+	PolicyParkReason string
 }
 
 // planCockpit is the hermetic policy (oracle for 🎯T204).
@@ -124,6 +135,9 @@ func planCockpit(o cockpitObs, attempts, maxAttempts int, stuckTimeout time.Dura
 		return cockpitGiveUp
 	}
 	if !o.ProcAlive {
+		if o.PolicyParked {
+			return cockpitPolicyParked
+		}
 		if o.AuthLaunchBlocked {
 			return cockpitAuthWait
 		}
@@ -427,6 +441,7 @@ func (s *Server) ObserveCockpit() cockpitObs {
 	waiting := s.waiting
 	lastProg := s.seatState(name).LastActivity
 	qdepth := s.seatState(s.overseerName).OwnerQueueDepth
+	intentFn := s.fleetIntentSource
 	s.mu.RUnlock()
 
 	o := cockpitObs{Waiting: waiting, QueueDepth: qdepth}
@@ -438,6 +453,11 @@ func (s *Server) ObserveCockpit() cockpitObs {
 		return o
 	}
 	o.Registered = true
+	if intentFn != nil {
+		if rec := intentFn().Agents[name]; rec.State == fleetintent.Parked && rec.By == fleetintent.PlanPolicyActor {
+			o.PolicyParked, o.PolicyParkReason = true, rec.Reason
+		}
+	}
 	if err := reg.ResumeDenied(name); err != nil {
 		o.ResumeDenied = true
 	}
@@ -541,6 +561,9 @@ func (s *Server) EnsureOverseer(state *cockpitState) error {
 		}
 		s.SetOverseerDownReason(reason)
 		return fmt.Errorf("cockpit: %s", reason)
+	case cockpitPolicyParked:
+		s.SetOverseerDownReason("overseer parked by plan policy until a plan has room: " + obs.PolicyParkReason)
+		return nil
 	case cockpitLaunch:
 		return s.cockpitLaunch(state)
 	default:

@@ -408,6 +408,14 @@ shared clone — not to “clean up” before a hand merge. Land only through
 drops more than a few bullseye target rows at once. Fleet seats: `bin/fleetgit`
 ahead of real git on PATH refuses `git stash push` and names dirty paths.
 
+**Kill only what you started (🎯T1296).** A seat signals only processes it
+started: keep the pid (`$!`, or the pid the command printed) and `kill` that
+pid. Never `pkill`, `killall` or `kill $(pgrep …)` — a pattern matches other
+seats' and the owner's processes (on 2026-10-29 an auditor's
+`pkill -f journey-suite` killed the owner's gate). Claudia's sidecar refuses
+pattern kills before the shell runs (claudia 🎯T237). A concurrent run in your
+way is not yours to clear: wait for the heavy lease, or report it.
+
 ### Worker names: literal dots for hierarchical target ids (🎯T197)
 
 Agent names are free-form. When a name encodes a **hierarchical** bullseye

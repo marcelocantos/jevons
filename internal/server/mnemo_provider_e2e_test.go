@@ -72,10 +72,12 @@ func TestMnemoProviderE2E_FeedUIAndMCP(t *testing.T) {
 	agg.HandlePhase(provider.Health{ID: "mnemo", Phase: provider.PhaseRunning})
 	t.Cleanup(agg.Shutdown)
 
-	// Wait for MCP tools to land.
+	// Wait for MCP tools to land. The aggregator registers them one at a
+	// time, so wait for both: waiting on the first alone failed the gate
+	// (b5e1e33b) when the second arrived a moment later.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if sink.has("mnemo__mnemo_status") {
+		if sink.has("mnemo__mnemo_status") && sink.has("mnemo__mnemo_search") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
