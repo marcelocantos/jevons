@@ -321,6 +321,8 @@ type Server struct {
 	// achievedTargetsSeen is the last-observed achieved target set per ledger
 	// for 🎯T195 reap-on-achieve. Outer key = cleaned ledger path.
 	achievedTargetsSeen map[string]map[string]bool
+	// T1257: a queued owner note vetoes an automatic closed-target reap.
+	closedTargetOwnerMessages func(string) bool
 
 	// workers is the 🎯T8.2 observability tracker (SQLite + SSE hub).
 	workers *workers.Tracker

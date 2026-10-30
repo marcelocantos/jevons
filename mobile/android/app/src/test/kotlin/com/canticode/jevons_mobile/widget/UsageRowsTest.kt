@@ -27,6 +27,17 @@ class UsageRowsTest {
         assertNull(rows.single().stale)
     }
 
+    @Test fun underPaceIsTheCockpitBlueNotAWarning() {
+        // Fable 34% used with ~57% of the week gone: spare capacity, blue in the cockpit.
+        val rows = UsageRows.fromPayload("""{"backends":[{"provider":"claude","status":"available","fetched_at":"2026-10-27T23:59:00Z","windows":[{"name":"weekly_model","model":"Fable","used_percent":34,"band":"under"},{"name":"weekly","used_percent":80,"band":"ahead"}]}]}""", now)
+        assertEquals(listOf(UsageRows.UNDER, UsageRows.ELEVATED), rows.single().bars.map { it.colour })
+    }
+
+    @Test fun lockedIsItsOwnColourNotHealthy() {
+        val rows = UsageRows.fromPayload("""{"backends":[{"provider":"claude","status":"available","fetched_at":"2026-10-27T23:59:00Z","windows":[{"name":"weekly","used_percent":40,"band":"locked"},{"name":"session","used_percent":10,"band":"ok"}]}]}""", now)
+        assertEquals(listOf(UsageRows.LOCKED, UsageRows.OK), rows.single().bars.map { it.colour })
+    }
+
     @Test fun staleKeepsLastQuantityGreyedAndMissingWindowHasNoFill() {
         val rows = UsageRows.fromPayload("""{"backends":[{"provider":"grok","status":"available","fetched_at":"2026-10-27T23:30:00Z","windows":[{"name":"weekly","remaining_percent":90,"band":"ok"},{"name":"session","band":"ok"}]},{"provider":"cursor","status":"available","fetched_at":"2026-10-27T23:59:00Z","windows":[]}]}""", now)
         val grok = rows[0]

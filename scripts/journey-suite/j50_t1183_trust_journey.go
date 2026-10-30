@@ -14,6 +14,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/gate"
+	"github.com/marcelocantos/jevons/internal/worktree"
 )
 
 const trustOwnerPrompt = "Add a function Double(x int) int to pkg/calc that returns 2*x, with a test. " +
@@ -62,6 +63,26 @@ func trustJourneyWithBroker(iso *suite, repo string) error {
 		gateRec   *gate.Record
 	)
 	for time.Now().Before(pollDeadline) {
+		fault, err := worktree.ReadTrunkFault(repo)
+		if err != nil {
+			return fmt.Errorf("read fixture trunk fault: %w", err)
+		}
+		if fault != nil && fault.Kind == worktree.TrunkRed {
+			// The PO owns the worker name; discover and stop its seats before
+			// the deferred PO teardown. Do not leave token-burning turns alive.
+			agents, err := iso.listAgentsHTTP()
+			if err != nil {
+				return err
+			}
+			for _, a := range agents {
+				if a.Parent == "jevons-po" {
+					if _, err := iso.mcpText("jevons_agent_kill", map[string]any{"name": a.Name, "actor": overseerName, "force": true}); err != nil {
+						return fmt.Errorf("stop worker %s after trunk_red incident %s: %w", a.Name, fault.ID, err)
+					}
+				}
+			}
+			return fmt.Errorf("J50 worker integration refused trunk_red incident %s; fixture trunk failing tests: %s", fault.ID, strings.Join(fault.Tests, ", "))
+		}
 		agents, err := iso.listAgentsHTTP()
 		if err != nil {
 			return err

@@ -23,9 +23,18 @@ data class UsageRow(val provider: String, val bars: List<UsageBar>, val stale: S
 
 /** Pure projection of the /api/plan-usage wire snapshot. No client-side pace classification. */
 object UsageRows {
-    const val OK = 0xff7acb7a.toInt()
-    const val ELEVATED = 0xffffc45b.toInt()
-    const val CRITICAL = 0xffff6969.toInt()
+    // The cockpit's dark palette (ui/src/cockpit.css :root), the widget's dark ground.
+    // scripts/docratchet TestT1244WidgetPaletteMatchesCockpit fails if these drift.
+    const val OK = 0xff4ade80.toInt() // --green
+    const val ELEVATED = 0xfffbbf24.toInt() // --amber: "ahead" of pace
+    const val CRITICAL = 0xffef4444.toInt() // --red: "hot" and "exhausted"
+    /**
+     * Spare capacity: used below the share of the window that has elapsed (--plan-under).
+     * It was drawn amber like "ahead", so a Fable window under pace read as a warning.
+     */
+    const val UNDER = 0xff60a5fa.toInt()
+    /** The owner locked the window (--plan-locked). It was drawn green, reading as healthy. */
+    const val LOCKED = 0xffc084fc.toInt()
     const val UNKNOWN = 0xffa0a0a0.toInt()
     private const val MAX_AGE_SECONDS = 15 * 60L
 
@@ -104,8 +113,10 @@ object UsageRows {
                 val band = override ?: w.optString("band")
                 val colour = if (stale || fill == null) UNKNOWN else when (band) {
                     "hot", "exhausted" -> CRITICAL
-                    "ahead", "under" -> ELEVATED
-                    "ok", "locked" -> OK
+                    "ahead" -> ELEVATED
+                    "under" -> UNDER
+                    "locked" -> LOCKED
+                    "ok" -> OK
                     else -> UNKNOWN
                 }
                 // A stale reading keeps a neutral border: it must never look like current capacity.

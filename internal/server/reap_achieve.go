@@ -16,6 +16,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/roles"
+	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 // 🎯T195: after a mission target is achieved on the bullseye ledger, reap
@@ -63,7 +64,7 @@ func durableRole(role string) bool {
 // that ran twice on 2026-08-10 while saying nothing the overseer could read,
 // and a correct reap that looks like an orphaning costs more than it saves.
 // A nil acct still reaps (slog-only) so unwired callers are not blocked.
-func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, acct *fleetlog.Account, targetID, scopeWorkdir string, isOverseer func(string) bool) ([]string, error) {
+func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, acct *fleetlog.Account, targetID, scopeWorkdir string, isOverseer func(string) bool, ownerMessageGuard ...func(string) bool) ([]string, error) {
 	if reg == nil {
 		return nil, fmt.Errorf("agent registry not available")
 	}
@@ -84,7 +85,7 @@ func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, acct *fleetlog.Account
 		if def == nil {
 			continue
 		}
-		if durableFleetAgentForAchieve(name, *def, isOverseer) {
+		if durableFleetAgentForAchieve(name, *def, isOverseer) || hasRegisteredDescendants(reg, name) || (len(ownerMessageGuard) > 0 && ownerMessageGuard[0] != nil && ownerMessageGuard[0](name)) {
 			continue
 		}
 		toReap = append(toReap, name)
@@ -103,13 +104,75 @@ func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, acct *fleetlog.Account
 		if reg.Def(name) == nil {
 			continue
 		}
-		names, err := acct.RemoveSubtree(reg, name, rm)
-		removed = append(removed, names...)
+		ok, err := acct.Remove(reg, name, rm)
+		if ok {
+			removed = append(removed, name)
+		}
 		if err != nil {
 			return removed, fmt.Errorf("reap achieve %q: %w", name, err)
 		}
 	}
 	return removed, nil
+}
+
+// hasRegisteredDescendants keeps parents of still-engaged seats parked.
+func hasRegisteredDescendants(reg *claudia.Registry, name string) bool {
+	parents := make(map[string]string)
+	for _, d := range reg.List() {
+		parents[d.Name] = d.Parent
+	}
+	for child := range parents {
+		seen := map[string]bool{}
+		for parent := parents[child]; parent != "" && !seen[parent]; parent = parents[parent] {
+			if parent == name {
+				return true
+			}
+			seen[parent] = true
+		}
+	}
+	return false
+}
+
+// SetClosedTargetOwnerMessageGuard keeps owner-origin obligations deliverable
+// through the same guard used by finish-report auto-reap.
+func (s *Server) SetClosedTargetOwnerMessageGuard(held func(string) bool) {
+	s.closedTargetOwnerMessages = held
+}
+
+// sweepStoppedClosedTargets removes historical parked residue on boot and
+// newly parked residue on ledger changes without interrupting live workers.
+func (s *Server) sweepStoppedClosedTargets(ledgerPath string, closed map[string]bool, parked func(string) bool) {
+	if s == nil || s.registry == nil || len(closed) == 0 {
+		return
+	}
+	recorded, err := roles.OpenAssignments(roles.DefaultAssignmentsPath(s.stateDir))
+	if err != nil {
+		slog.Warn("T1340 parked-seat sweep skipped: role assignments unreadable", "err", err)
+		return
+	}
+	overseer := s.overseerName
+	if overseer == "" {
+		overseer = defaultOverseerName
+	}
+	reg := s.registry
+	scope := targetfile.LedgerKey(filepath.Dir(ledgerPath))
+	var removed []string
+	for _, def := range reg.List() {
+		tid := NormalizeTargetID(def.TargetID)
+		if (s.closedTargetOwnerMessages != nil && s.closedTargetOwnerMessages(def.Name)) || !closed[tid] || !targetfile.SameLedger(scope, targetfile.LedgerKey(def.WorkDir)) || (parked != nil && !parked(def.Name)) || reg.Get(def.Name) != nil || durableFleetAgentForAchieve(def.Name, def, func(n string) bool { return n == overseer || durableRole(recorded.Get(n)) }) || hasRegisteredDescendants(reg, def.Name) {
+			continue
+		}
+		rm := fleetlog.Removal{Reason: fleetlog.ReasonReapAchieve, Detail: fmt.Sprintf("reaped parked seat on closed target 🎯%s", tid), Fields: map[string]any{"achieved_target_id": tid}}
+		if ok, err := s.RemovalAccount().Remove(reg, def.Name, rm); err != nil {
+			slog.Warn("T1340 parked-seat reap failed", "agent", def.Name, "err", err)
+		} else if ok {
+			removed = append(removed, def.Name)
+		}
+	}
+	if len(removed) > 0 {
+		slog.Info("T1340 reaped parked seats on closed targets", "removed", removed)
+		s.NotifyAgentsChanged()
+	}
 }
 
 const (
@@ -161,8 +224,34 @@ func newlyAchievedTargetIDs(prev, curr map[string]bool) []string {
 	return out
 }
 
-// seedAchievedFromLedger records the current achieved set without reaping
-// (boot / first watch bind). Historical achieves must not mass-kill agents.
+// SweepParkedClosedTargetsAtStartup discovers every ledger represented by a
+// registered mission. It runs before reattach so stale parked seats never
+// enter the delivery/revival loop, even when no frontier client has polled.
+func (s *Server) SweepParkedClosedTargetsAtStartup(parked func(string) bool) {
+	if s == nil || s.registry == nil {
+		return
+	}
+	seen := map[string]bool{}
+	for _, d := range s.registry.List() {
+		if d.TargetID == "" {
+			continue
+		}
+		ledger := targetfile.LedgerKey(d.WorkDir)
+		if ledger == "" || seen[ledger] {
+			continue
+		}
+		seen[ledger] = true
+		closed, err := listAchievedTargetIDs(ledger)
+		if err != nil {
+			slog.Warn("T1340 startup ledger unreadable", "ledger", ledger, "err", err)
+			continue
+		}
+		s.sweepStoppedClosedTargets(ledger, closed, parked)
+	}
+}
+
+// seedAchievedFromLedger records the current closed set and reaps only
+// stopped historical residue (never active workers) at the first watch bind.
 func (s *Server) seedAchievedFromLedger(ledgerPath string) {
 	if s == nil || ledgerPath == "" {
 		return
@@ -179,6 +268,7 @@ func (s *Server) seedAchievedFromLedger(ledgerPath string) {
 	}
 	s.achievedTargetsSeen[ledgerPath] = curr
 	s.mu.Unlock()
+	s.sweepStoppedClosedTargets(ledgerPath, curr, nil)
 }
 
 // maybeReapOnLedgerAchieve diffs the ledger achieved set against the last
@@ -215,6 +305,7 @@ func (s *Server) maybeReapOnLedgerAchieve(ledgerPath string) {
 	stateDir := s.stateDir
 	s.mu.Unlock()
 
+	s.sweepStoppedClosedTargets(ledgerPath, curr, nil)
 	if reg == nil || len(newly) == 0 {
 		return
 	}
@@ -236,7 +327,7 @@ func (s *Server) maybeReapOnLedgerAchieve(ledgerPath string) {
 	acct := s.RemovalAccount()
 	var anyRemoved bool
 	for _, tid := range newly {
-		removed, err := ReapWorkAgentsOnTargetAchieve(reg, acct, tid, scope, isO)
+		removed, err := ReapWorkAgentsOnTargetAchieve(reg, acct, tid, scope, isO, s.closedTargetOwnerMessages)
 		if err != nil {
 			slog.Warn("T195 reap on achieve failed", "target_id", tid, "err", err)
 			continue

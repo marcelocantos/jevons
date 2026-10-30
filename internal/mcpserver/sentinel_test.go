@@ -232,6 +232,26 @@ func TestSentinelRepairTriggersControlPlane(t *testing.T) {
 	}
 }
 
+// A repair the sentinel already made is event-log only: it does not start an
+// overseer turn (🎯T1122 / 🎯T1158). runSentinelCycle's repair branch is
+// Reconcile then recordSentinelRepair.
+func TestSentinelRepairDoesNotWakeTheOverseer(t *testing.T) {
+	s := New("/tmp", nil, nil)
+	var delivered []string
+	s.SetNotify(func(text string) { delivered = append(delivered, text) })
+	act := s.recordSentinelRepair(staffops.CycleResult{
+		Primary:        staffops.ActionRepair,
+		RepairSymptoms: []string{"idle:jv-t1334-trunkred-failfast"},
+		WireText:       "repaired: idle:jv-t1334-trunkred-failfast",
+	})
+	if !act.Repaired {
+		t.Fatalf("repair not recorded: %+v", act)
+	}
+	if act.Delivered || len(delivered) > 0 {
+		t.Fatalf("repair audit reached the overseer: act=%+v delivered=%q", act, delivered)
+	}
+}
+
 func TestStaffOpsStillWorksAfterSentinelRegister(t *testing.T) {
 	s := New("/tmp", nil, nil)
 	req := mcp.CallToolRequest{}

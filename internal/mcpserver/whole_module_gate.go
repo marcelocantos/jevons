@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/marcelocantos/jevons/internal/attrib"
 	"github.com/marcelocantos/jevons/internal/gate"
@@ -19,11 +20,11 @@ import (
 // drains — a RED whole-module run surfaces exactly the way a RED post-merge
 // gate does, without a second notification path to keep in sync.
 func (s *Server) tickWholeModuleGate(workdir string) {
-	if workdir == "" {
+	if workdir == "" || !s.standingGateEnabled.Load() {
 		return
 	}
-	tip, err := attrib.Git(workdir, "rev-parse", "HEAD")
-	if err != nil || tip == "" {
+	tip := wholeModuleGateTip(workdir)
+	if tip == "" {
 		return
 	}
 	settled, err := worktree.SettleWholeModuleGateTip(workdir, tip)
@@ -50,4 +51,16 @@ func (s *Server) tickWholeModuleGate(workdir string) {
 			})
 		}
 	}()
+}
+
+// wholeModuleGateTip is the shared clone's HEAD as a bare SHA. attrib.Git
+// returns git's stdout with its trailing newline; until 2026-10-30 that
+// newline reached gate.RunClean, every tick failed `git rev-parse
+// "<sha>\n"`, and the standing gate had never run on the live daemon.
+func wholeModuleGateTip(workdir string) string {
+	tip, err := attrib.Git(workdir, "rev-parse", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(tip)
 }

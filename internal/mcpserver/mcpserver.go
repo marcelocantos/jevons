@@ -462,7 +462,9 @@ type Server struct {
 	defaultProvider string
 	// fableClassRatified is config fable_class_defaults.ratified (🎯T358).
 	fableClassRatified string
-	mcp                mcpattach.Args
+	// standingGateEnabled is config standing_gate.enabled (🎯T1237).
+	standingGateEnabled atomic.Bool
+	mcp                 mcpattach.Args
 
 	// llmPortfolio is the multi-provider task-type routing seed (🎯T325.2).
 	// Nil → cost.DefaultPortfolio(). Soft-cap overlays may come from budget.
@@ -725,6 +727,15 @@ func (s *Server) SetFableClassRatified(ratified string) {
 		return
 	}
 	s.fableClassRatified = cost.NormalizeFableRatification(ratified)
+}
+
+// SetStandingGateEnabled applies config standing_gate.enabled (hot-reloaded).
+// Off stops the sentinel starting new 🎯T1237 standing whole-module gate runs.
+func (s *Server) SetStandingGateEnabled(on bool) {
+	if s == nil {
+		return
+	}
+	s.standingGateEnabled.Store(on)
 }
 
 // SetMCP installs the live jevonsmcp attach used on every mint (claudia 🎯T40).

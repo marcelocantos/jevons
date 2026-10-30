@@ -33,8 +33,13 @@ var (
 	// waiters before a narrow run proceeds without the exclusive lease.
 	heavyNarrowBypassAge = 5 * time.Minute
 	// heavyStaleNoticeAge is how long a holder may sit with waiters before
-	// one durable overseer notice is raised (not one per waiter).
-	heavyStaleNoticeAge = 5 * time.Minute
+	// one durable notice is raised (not one per waiter). It pages the owner
+	// as a problem, so it must exceed a healthy run: `make gate` takes 8-10
+	// minutes and the standing whole-module gate 10-14. At 5 minutes it paged
+	// the owner's Slack for routine gates five times between 08:51 and 10:09
+	// on 2026-10-30 (🎯T1339). A hung or deadline-bound holder, like the
+	// 95-minute red J51 of that morning, still pages.
+	heavyStaleNoticeAge = 30 * time.Minute
 	// heavyLeaseWaitOut receives wait/bypass/notice lines. Default stderr.
 	heavyLeaseWaitOut io.Writer = os.Stderr
 	// heavyWaitPoll is the flock retry interval while blocked.

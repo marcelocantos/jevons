@@ -128,6 +128,18 @@ type Config struct {
 	// docs/design/t358-fable-class-defaults-owner-decision.md). Empty or
 	// keep_current leaves mint pins unchanged.
 	FableClassDefaults FableClassDefaultsConfig `yaml:"fable_class_defaults"`
+
+	// StandingGate switches the 🎯T1237 standing whole-module gate. Zero
+	// value is off: on 2026-10-30 the owner paused it until 🎯T1338.5 (it
+	// yields the heavy lease to waiting gates) and 🎯T1342 (its false REDs)
+	// land. Running `go test ./...` on every settled tip of the shared clone
+	// held the lease 10-14 minutes at a time and saturated the host.
+	StandingGate StandingGateConfig `yaml:"standing_gate"`
+}
+
+// StandingGateConfig is the 🎯T1237 standing whole-module gate switch.
+type StandingGateConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // FableClassDefaultsConfig is the durable owner record for 🎯T358.

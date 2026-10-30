@@ -30,6 +30,7 @@ var t1158NoticeClassCallSites = []struct {
 	{"send_backlog.go", "noticeAct, hold, fmt.Sprintf", noticeAct},
 	{"send_backlog.go", "noticeAct, head.ID, fmt.Sprintf", noticeAct},
 	{"send_backlog.go", "noticeAct, heldBacklogKey(b)", noticeAct},
+	{"send_backlog.go", "noticeInform, heldBacklogKey(b)", noticeInform},
 	{"send_backlog.go", "FormatSendqPinLine", noticeAct},
 	{"send_backlog.go", "pin.AttemptID, line", noticeAct},
 	{"send_waiting.go", "Held message %s (attempt", noticeAct},
@@ -45,7 +46,7 @@ var t1158NoticeClassCallSites = []struct {
 func TestT1158EveryNotifyFleetHealthCallSiteDeclaresClass(t *testing.T) {
 	t.Parallel()
 	srcs := t727PackageSources(t)
-	const wantCalls = 25
+	const wantCalls = 26
 	var found int
 	for _, site := range t1158NoticeClassCallSites {
 		src, ok := srcs[site.file]

@@ -182,8 +182,9 @@ func TestT958TwoFullSuitesStillSerialize(t *testing.T) {
 
 func TestT958StaleNoticeOncePerHolder(t *testing.T) {
 	root := t.TempDir()
+	prevStale := heavyStaleNoticeAge
 	heavyStaleNoticeAge = 1 * time.Millisecond
-	defer func() { heavyStaleNoticeAge = 5 * time.Minute }()
+	defer func() { heavyStaleNoticeAge = prevStale }()
 
 	release, _, err := acquireHeavyLeaseCommand(root, "", []string{"go", "test", "./..."}, t.TempDir())
 	if err != nil {
@@ -241,4 +242,14 @@ func mustJSON(v interface{}) []byte {
 		panic(err)
 	}
 	return b
+}
+
+// The stale-holder notice pages the owner as a problem, so a healthy gate
+// must not reach it: `make gate` runs 8-10 minutes and the standing
+// whole-module gate 10-14 (🎯T1339).
+func TestT1339StaleNoticeOutlastsAHealthyGate(t *testing.T) {
+	const healthiestSlowGate = 20 * time.Minute
+	if heavyStaleNoticeAge < healthiestSlowGate {
+		t.Fatalf("heavyStaleNoticeAge = %s pages the owner during a healthy gate (want >= %s)", heavyStaleNoticeAge, healthiestSlowGate)
+	}
 }

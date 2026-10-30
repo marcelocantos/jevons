@@ -170,8 +170,10 @@ func t952UnconfirmedDaemon(t *testing.T, dir string, up *upward) *Server {
 
 // The 2026-09-30 claudia-po stall advanced 10m25s through 15m55s and each
 // sweep started an overseer turn. Twenty simulated minutes, a restart, and
-// an unconfirmed receipt stay on the original episode: one notice, then one
-// more when the age crosses the 15-minute band, and no age-varied replacement.
+// an unconfirmed receipt mint no age-varied replacement. Since 🎯T1339 a
+// backlog behind a working turn stays in the event log for its first hour,
+// so this 10-30 minute stall reaches the overseer not at all; before, it was
+// one notice plus one more at the 15-minute band.
 func TestT952UnconfirmedWorkingStallDoesNotMintAgeVariedPrompts(t *testing.T) {
 	const agent = "claudia-po"
 	dir := t.TempDir()
@@ -215,8 +217,8 @@ func TestT952UnconfirmedWorkingStallDoesNotMintAgeVariedPrompts(t *testing.T) {
 			stalled = append(stalled, line)
 		}
 	}
-	if len(stalled) != 2 {
-		t.Fatalf("stall notices=%d want 2 (the open and the 15m band); overseer saw %v", len(stalled), up.all())
+	if len(stalled) != 0 {
+		t.Fatalf("stall notices=%d want 0 for a working turn under an hour (🎯T1339); overseer saw %v", len(stalled), up.all())
 	}
 	rows, err := s.sendQueue().Snapshot(agent)
 	if err != nil || len(rows) != 1 || rows[0].ID != entry.ID || rows[0].State != sendq.Pending || rows[0].Text != entry.Text {

@@ -128,3 +128,55 @@ func TestFleetNoteQueuedBehindBusyOverseerIsNotClaimed(t *testing.T) {
 		t.Fatalf("queued note: settled=%v handoffs=%v queries=%d", settled, ids(), queries())
 	}
 }
+
+// T1337: a mid-turn relay cannot claim an immediate receipt when an earlier
+// worker report already took the overseer's turn. The idle case above settles
+// immediately; here the relay stays queued until that turn ends, then its own
+// fn- request settles. This is the ordering observed in the kept J38 isolate
+// (gate 04d88ce0), where the first report drained at 06:38:52 and Paris was
+// offered at 06:38:57. Neither an unconfirmed queued offer nor a settled
+// receipt for the earlier report is proof that Paris was sent.
+func TestT1337MidTurnRelayBehindReportSettlesOnlyOnItsOwnDrain(t *testing.T) {
+	s, ids, publish, queries := fleetReceiptServer(t)
+	const report = "worker first report"
+	const answer = "[Agent orch-midturn answered your message mid-turn, and is still working]\nParis"
+	// The preceding report has a real receipt and now holds the turn.
+	go func() {
+		for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+			if got := ids(); len(got) == 1 {
+				publish(got[0])
+				return
+			}
+		}
+	}()
+	if settled, err := s.DeliverToOverseerAsReceipted(report, sendOriginAgent); err != nil || !settled {
+		t.Fatalf("first report: settled=%v err=%v", settled, err)
+	}
+	before := queries()
+	if settled, err := s.DeliverToOverseerAsReceipted(answer, sendOriginAgent); err != nil || settled {
+		t.Fatalf("queued relay claimed receipt: settled=%v err=%v", settled, err)
+	}
+	if got := ids(); len(got) != 1 || queries() != before {
+		t.Fatalf("busy overseer sent a second batch: ids=%v queries=%d (before=%d)", got, queries(), before)
+	}
+	// The first turn ends; the queued answer gets a distinct request id.
+	s.mu.Lock()
+	s.waiting = false
+	s.mu.Unlock()
+	go func() {
+		for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+			if got := ids(); len(got) == 2 {
+				publish(got[1])
+				return
+			}
+		}
+	}()
+	sent := s.drainOverseerNotesSent()
+	if sent == nil || !sent.carries(answer) || !sent.waitFor(2*time.Second) {
+		t.Fatalf("the relay's own batch did not settle: %+v", sent)
+	}
+	got := ids()
+	if len(got) != 2 || got[0] == got[1] || queries() <= before {
+		t.Fatalf("relay did not earn its own receipt: ids=%v queries=%d (before=%d)", got, queries(), before)
+	}
+}

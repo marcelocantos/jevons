@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T810 — a fleet-health notice whose material content is unchanged does not
@@ -208,5 +210,69 @@ func TestT810ClearedUnconfirmedConditionRedelivers(t *testing.T) {
 	s.notifyFleetHealth(noticeAct, "k1", t810Stalled(1, "22m0s"))
 	if len(inbox.texts) != 2 {
 		t.Fatalf("quiet condition delivered=%d want a recurrence", len(inbox.texts))
+	}
+}
+
+// A busy seat collecting more messages is the same stall with the same
+// remedy. The 2026-10-30 specimen re-notified the overseer at 3, 4, 6, 7, 7
+// and 9 queued messages, one Sonnet turn each (🎯T1339). Counts are banded
+// like ages: 1, 2-9, 10+.
+func TestT1339GrowingBacklogCountIsOneEpisodeWithinItsBand(t *testing.T) {
+	s, inbox := t428Server(t, TurnEvidence{Observed: true, PayloadSeen: true})
+	now := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	s.SetNoticeCoalesceClock(func() time.Time { return now })
+
+	for i, depth := range []int{3, 4, 6, 7, 7, 9} {
+		s.notifyFleetHealth(noticeAct, "48b447aecc30", t810Stalled(depth, fmt.Sprintf("10m%ds", 6+i*30)))
+		now = now.Add(30 * time.Second)
+	}
+	if len(inbox.texts) != 1 {
+		t.Fatalf("overseer turns=%d want 1 for a backlog growing inside its band\n%v", len(inbox.texts), inbox.texts)
+	}
+	s.notifyFleetHealth(noticeAct, "48b447aecc30", t810Stalled(10, "13m0s"))
+	if len(inbox.texts) != 2 {
+		t.Fatalf("overseer turns=%d want 2 once the backlog reaches 10 messages", len(inbox.texts))
+	}
+}
+
+// A backlog behind a turn that is still in flight, and not wedged (🎯T927),
+// belongs to a seat that is busy. For its first hour that is event-log
+// information, not an overseer turn. A backlog with no live process to
+// deliver to still reaches the overseer, and so does one held behind a turn
+// for over an hour (🎯T527, 🎯T1339).
+func TestT1339BusySeatBacklogDoesNotWakeTheOverseer(t *testing.T) {
+	s, inbox := t428Server(t, TurnEvidence{Observed: true, PayloadSeen: true})
+	now := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	s.SetNoticeCoalesceClock(func() time.Time { return now })
+	old := now.Add(-StalledBacklogAfter - time.Minute)
+
+	s.reportStalledBacklog(sendq.Backlog{Agent: "jevons-po", Depth: 5, Oldest: old, EntryIDs: []string{"e-busy"}}, now, stalledBacklogInFlight)
+	if len(inbox.texts) != 0 {
+		t.Fatalf("a busy seat's backlog reached the overseer: %v", inbox.texts)
+	}
+	s.reportStalledBacklog(sendq.Backlog{Agent: "jv-gone", Depth: 1, Oldest: old, EntryIDs: []string{"e-gone"}}, now, "it has no live process to deliver to")
+	if len(inbox.texts) != 1 {
+		t.Fatalf("a backlog with no live process: overseer turns=%d want 1", len(inbox.texts))
+	}
+	s.reportStalledBacklog(sendq.Backlog{Agent: "jevons-po", Depth: 5, Oldest: now.Add(-stalledInFlightActAfter - time.Minute), EntryIDs: []string{"e-stuck"}}, now, stalledBacklogInFlight)
+	if len(inbox.texts) != 2 {
+		t.Fatalf("a backlog held behind one turn for over an hour: overseer turns=%d want 2", len(inbox.texts))
+	}
+}
+
+// The 🎯T1340 stall dedup (one WARN per entry for a seat with no live sender)
+// must not swallow a busy seat's later sweeps: an in-flight backlog that is
+// still held after an hour reaches the overseer as an act notice (🎯T527).
+func TestT1339InFlightStallStillEscalatesAfterAnHourOfSweeps(t *testing.T) {
+	s, inbox := t428Server(t, TurnEvidence{Observed: true, PayloadSeen: true})
+	now := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	s.SetNoticeCoalesceClock(func() time.Time { return now })
+	oldest := now.Add(-StalledBacklogAfter - time.Minute)
+	b := sendq.Backlog{Agent: "jevons-po", Depth: 3, Oldest: oldest, EntryIDs: []string{"e-long"}}
+	s.reportStalledBacklog(b, now, stalledBacklogInFlight)
+	now = oldest.Add(stalledInFlightActAfter + time.Minute)
+	s.reportStalledBacklog(b, now, stalledBacklogInFlight)
+	if len(inbox.texts) != 1 {
+		t.Fatalf("overseer turns=%d want 1: the hour-old in-flight stall never escalated", len(inbox.texts))
 	}
 }

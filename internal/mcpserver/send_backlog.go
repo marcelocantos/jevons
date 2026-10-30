@@ -283,7 +283,7 @@ func (s *Server) SweepSendBacklogs() {
 			if s.reconcileWedgedTurn(b, now) {
 				continue
 			}
-			s.reportStalledBacklog(b, now, "its turn is still in flight")
+			s.reportStalledBacklog(b, now, stalledBacklogInFlight)
 		default:
 			s.forgetReapedBacklogNotice(b.Agent)
 			if _, live := s.liveSender(b.Agent); !live {
@@ -479,13 +479,6 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 		}
 		reason := "stood down: " + fleetintent.Describe(dec.Blocking)
 		if s.noticedStalledBacklogWarn(hold) {
-			slog.Debug("🎯T1187 stood-down backlog stall already warned",
-				"component", "agent_send",
-				"agent", b.Agent,
-				"queued", b.Depth,
-				"oldest_age", age.Round(time.Second).String(),
-				"reason", reason,
-				"intent", dec.Reason)
 			return
 		}
 		slog.Warn("🎯T418 backlog stalled",
@@ -498,19 +491,57 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 		return
 	}
 
+	// Working-intent parked seats also have no live sender. Deduplicate those
+	// stalls by entry id, not only the fleet-intent stood-down branch (🎯T1340).
+	// A turn still in flight is not that case: its WARN is the per-sweep
+	// status J39 reads, and after an hour it must still reach the overseer
+	// as an act notice (🎯T527, 🎯T1339). T810 coalescing already keeps it
+	// from repeating as an overseer turn.
+	// Later sweeps of a deduplicated stall still leave one Info line each, so
+	// the log shows the sweep ran and how old the backlog is (J39 reads it as
+	// its per-minute clock), without repeating the WARN.
+	if why != stalledBacklogInFlight && s.noticedStalledBacklogWarn("working:"+heldBacklogKey(b)) {
+		slog.Info("🎯T418 backlog still held (warned once)",
+			"component", "agent_send",
+			"agent", b.Agent,
+			"queued", b.Depth,
+			"oldest_age", age.Round(time.Second).String(),
+			"reason", why)
+		return
+	}
 	slog.Warn("🎯T418 backlog stalled",
 		"component", "agent_send",
 		"agent", b.Agent,
 		"queued", b.Depth,
 		"oldest_age", age.Round(time.Second).String(),
 		"reason", why)
-	s.notifyFleetHealth(noticeAct, heldBacklogKey(b), fmt.Sprintf(
+	line := fmt.Sprintf(
 		"Stalled backlog on %q: %d message(s) held by the daemon, the oldest waiting %s, because %s. "+
 			"They are on disk and will be delivered when it next takes a turn. If that agent should not still be busy, "+
 			"confirm from ITS transcript (terminal assistant message + turn_duration, file not growing) and then "+
 			"jevons_agent_send with interrupt=true.",
-		b.Agent, b.Depth, age.Round(time.Second), why))
+		b.Agent, b.Depth, age.Round(time.Second), why)
+	// 🎯T1339: a turn still in flight that 🎯T927 did not find wedged is a
+	// seat that is busy, and 🎯T754 reports one that has gone inert. For its
+	// first hour, telling the overseer it is busy asks nothing of it. On
+	// 2026-10-30 these notices on a working jevons-po (10-17 minute turns)
+	// were most of the overseer's remaining turns, each answered with empty
+	// content. A queue still held behind one turn after an hour is a fault
+	// and keeps the interrupt prescription (🎯T527).
+	if why == stalledBacklogInFlight && age < stalledInFlightActAfter {
+		s.notifyFleetHealth(noticeInform, heldBacklogKey(b), line)
+		return
+	}
+	s.notifyFleetHealth(noticeAct, heldBacklogKey(b), line)
 }
+
+// stalledBacklogInFlight is the backlog-sweep reason for a seat whose turn is
+// still running.
+const stalledBacklogInFlight = "its turn is still in flight"
+
+// stalledInFlightActAfter is how long a backlog may wait behind one running
+// turn before the overseer is asked to look at it.
+const stalledInFlightActAfter = time.Hour
 
 // IsolateSweepNowFileEnv names a file of one RFC3339Nano timestamp. The
 // backlog sweep reads it only when JEVONS_TEST_FAULTS=1, which the isolate

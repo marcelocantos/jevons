@@ -373,19 +373,7 @@ func (s *Server) runSentinelCycle(args SentinelLoopArgs) (staffops.CycleResult, 
 	switch res.Primary {
 	case staffops.ActionRepair:
 		s.Reconcile()
-		overseer := args.Overseer
-		if overseer == "" {
-			overseer = s.overseerName()
-		}
-		act.Repaired = true
-		act.AuditNote = "control-plane repair: fleet recover + idle nudge + dead-handle health"
-		s.logLifecycle(compSentinel, "repair", "ok", map[string]any{
-			"symptoms": res.RepairSymptoms,
-			"primary":  string(res.Primary),
-		})
-		// Audit brief to overseer (not monologue — compact).
-		_ = s.deliverSentinel(overseer, staffops.SentinelEventSource, res.WireText)
-		act.Delivered = true
+		act = s.recordSentinelRepair(res)
 
 	case staffops.ActionFilePO:
 		po := args.DefaultPO
@@ -490,6 +478,23 @@ const SentinelNoticeClearedAfter = 3 * staffops.DefaultCooldown
 // (kind, seat, target); a changed symptom set is a changed digest.
 func sentinelNoticeKey(recipient string) string {
 	return "sentinel:file_po:" + strings.TrimSpace(recipient)
+}
+
+// recordSentinelRepair records a control-plane repair the sentinel has
+// already made. A repair asks nothing of the overseer (🎯T1122, 🎯T1158), so
+// the audit stays in the event log. Delivering it cost one Sonnet turn per
+// tick: on 2026-10-29/30 the development overseer took a turn about every two
+// to four minutes on "repaired: idle:<worker>" alone, each re-reading ~300K
+// cached tokens and answering nothing.
+func (s *Server) recordSentinelRepair(res staffops.CycleResult) SentinelActResult {
+	s.logLifecycle(compSentinel, "repair", "ok", map[string]any{
+		"symptoms": res.RepairSymptoms,
+		"primary":  string(res.Primary),
+	})
+	return SentinelActResult{
+		Repaired:  true,
+		AuditNote: "control-plane repair: fleet recover + idle nudge + dead-handle health (event log only)",
+	}
 }
 
 func (s *Server) deliverSentinel(target, event, text string) error {

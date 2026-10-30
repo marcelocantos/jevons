@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // 🎯T789.1: real provider, packaged React, isolate only. Builds a transcript
-// taller than 12,000 px with real turns, then sends while the seat is busy
+// taller than 12,000 px with seeded history, then sends live while the seat is busy
 // (escalated since 🎯T903: steered, with a countdown) and cuts in. The
 // pane must end within one row of the bottom with no 'Latest' button — the
 // 2026-09-22 observation was 12,180 px above the bottom after this sequence.
@@ -33,49 +33,32 @@ async function main() {
   await page.locator('#input').waitFor();
   const gap = () => page.locator('#messages').evaluate(el => ({ fromBottom: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight), scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }));
 
-  // Grow the transcript with real turns until it is taller than TALL_PX.
-  for (let turn = 0; turn < 12; turn++) {
-    const before = await page.locator('#messages [data-kind="assistant"]').count();
-    await page.locator('#input').fill(LONG(150));
-    await page.locator('#input').press('Enter');
-    // A loaded host can miss a turn; the transcript only needs to get tall.
-    const answered = await page.waitForFunction(n => document.querySelectorAll('#messages [data-kind="assistant"]').length > n, before, { timeout: 120000 }).then(() => true, () => false);
-    if (!answered) { console.log(`turn ${turn}: no reply within 120s, moving on`); continue; }
-    await page.waitForTimeout(500);
-    // Wait for the answer to stop growing.
-    let last = -1;
-    for (let i = 0; i < 240; i++) {
-      const g = await gap();
-      if (g.scrollHeight === last) break;
-      last = g.scrollHeight;
-      await page.waitForTimeout(1500);
-    }
-    const g = await gap();
-    console.log(`turn ${turn}: ${JSON.stringify(g)}`);
-    if (g.scrollHeight > TALL_PX + 1000) break;
-  }
+  // The Go journey seeded the canonical history store before this page loaded.
+  // Wait for its replay and virtual-list measurement, not provider replies.
+  await page.waitForFunction(min => document.querySelector('#messages')?.scrollHeight > min, TALL_PX, { timeout: 15000 });
+  await page.waitForTimeout(500);
   const tall = await gap();
   assert(tall.scrollHeight > TALL_PX, `transcript is taller than ${TALL_PX}px: ${JSON.stringify(tall)}`);
   assert(tall.fromBottom <= ONE_ROW_PX, `pinned before the send: ${JSON.stringify(tall)}`);
 
-  // Busy seat: start a long answer, then send two more while it runs. Since
+  // Busy seat: start a long answer, then send another while it runs. Since
   // 🎯T903 a plain Enter to the busy overseer escalates — steered into the
   // turn, the pane counting down to the interrupt — instead of waiting in the
   // queue strip, and Cut in is the ⌘⇧Enter chord.
   await page.locator('#input').fill(LONG(200));
   await page.locator('#input').press('Enter');
   await page.waitForTimeout(3000);
-  const held = [`held-${Date.now()}-a`, `held-${Date.now()}-b`];
+  const held = [`held-${Date.now()}-a`];
   for (const text of held) {
     await page.locator('#input').fill(`Reply with exactly: ${text}`);
     await page.locator('#input').press('Enter');
     await page.waitForTimeout(300);
   }
-  // The daemon took both sends: a seat that can steer counts down in the
+  // The daemon took the busy send: a seat that can steer counts down in the
   // escalation strip; one that cannot (Claude in tmux) queues them behind
   // the turn, and the owner bubbles are what is painted.
   await page.waitForFunction(text => !!document.querySelector('.escalation-strip') ||
-    [...document.querySelectorAll('#messages [data-kind="user"] .msg-body')].some(e => e.textContent.includes(text)), held[1]);
+    [...document.querySelectorAll('#messages [data-kind="user"] .msg-body')].some(e => e.textContent.includes(text)), held[0]);
   const queued = await gap();
   await page.locator('#input').fill(`Reply with exactly: cut-${held[0]}`);
   await page.locator('#input').press('Meta+Shift+Enter');

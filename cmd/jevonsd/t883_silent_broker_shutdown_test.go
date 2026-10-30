@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/testreap"
 )
 
 // supervisorStopWait is supervisord's stopwaitsecs for jevonsd
@@ -64,6 +65,10 @@ func TestT883SilentBrokerDoesNotHoldShutdown(t *testing.T) {
 
 func runT883Case(t *testing.T, bin, python string, sig syscall.Signal) {
 	t.Helper()
+	// A Go test timeout exits without running t.Cleanup. Arm the independent
+	// watcher before starting either fixture so its temp-root executable is
+	// reaped even when the test binary itself is killed.
+	testreap.Arm(t)
 	root := t.TempDir()
 	state, home, fakeBin := filepath.Join(root, "state"), filepath.Join(root, "home"), filepath.Join(root, "bin")
 	for _, dir := range []string{state, home, fakeBin} {
@@ -140,17 +145,18 @@ func runT883Case(t *testing.T, bin, python string, sig syscall.Signal) {
 		"CLAUDIA_BROKER_SOCKET=" + sock,
 	}
 	cmd.Stdout, cmd.Stderr = logs, logs
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	finished := false
+	exited := make(chan struct{})
+	go func() { done <- cmd.Wait(); close(exited) }()
 	t.Cleanup(func() {
-		if !finished {
-			_ = cmd.Process.Kill()
-			<-done
-		}
+		// Kill the group even after the direct child exits: a child it spawned
+		// may still be alive. The watcher above handles hard test timeouts.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-exited
 	})
 	// broker_absent probing can take slightly over 2s; a 2s client timeout flakes.
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -185,7 +191,6 @@ func runT883Case(t *testing.T, bin, python string, sig syscall.Signal) {
 	}
 	select {
 	case err := <-done:
-		finished = true
 		if err != nil {
 			t.Fatalf("shutdown failed: %v", err)
 		}

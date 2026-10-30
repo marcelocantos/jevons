@@ -23,9 +23,14 @@ func TestT1036FailedRestartFixtureLeavesNoDaemon(t *testing.T) {
 		name, mode, timeout, failure string
 	}{
 		{"failure", "fail", "3m", "intentional fixture failure"},
-		{"timeout", "timeout", "30s", "test timed out"},
+		{"timeout", "timeout", "3m", "test timed out"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// The helper compiles four Go binaries and starts the restart script
+			// before it writes the readiness marker. Under whole-module load that
+			// startup took over 30s, so a 30s Go test timeout killed setup
+			// before any daemon existed. Budget the compile/startup separately
+			// from the intentional timeout, and require the marker below.
 			cmd := exec.Command(os.Args[0], "-test.run=^TestT1036FailureHelper$", "-test.timeout="+tc.timeout)
 			marker := filepath.Join(t.TempDir(), "fixture-root")
 			cmd.Env = append(os.Environ(), "T1036_FAILURE_HELPER="+tc.mode, "T1036_ROOT_MARKER="+marker)

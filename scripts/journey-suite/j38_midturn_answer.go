@@ -20,11 +20,21 @@ func (s *suite) jMidTurnAnswer() error {
 	return s.withIsolatedBroker((*suite).midTurnAnswerWithBroker)
 }
 
+const (
+	j38SleepCalls   = 6
+	j38SleepSeconds = 8
+)
+
 // relayLine is what the daemon logs when it hands a mid-turn answer on.
 const relayLine = "🎯T902 relayed a mid-turn answer"
 
-func (s *suite) midTurnAnswerWithBroker() error {
+func (s *suite) midTurnAnswerWithBroker() (result error) {
 	id := fmt.Sprintf("orch-midturn-%d", time.Now().Unix()%100000)
+	defer func() {
+		if result != nil {
+			s.diagnoseMidTurnFailure(id)
+		}
+	}()
 	work := filepath.Join(s.stateDir, "midturn-answer-work")
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
@@ -35,17 +45,35 @@ func (s *suite) midTurnAnswerWithBroker() error {
 	if _, err := s.mcpText("jevons_agent_start", map[string]any{
 		"name": id, "workdir": work, "actor": "jevons", "parent": "jevons", "purpose": "work",
 		"provider": s.provider, "owner_asked": true,
-		"prompt": "Run exactly `sleep 30` with your Bash tool. Then run exactly `sleep 30` again, as a second, separate Bash call. " +
-			"Then reply with exactly SLEPTTWICE. If a message arrives while you are doing this, answer it in one short sentence " +
-			"first and then carry on with the remaining sleep.",
+		"prompt": fmt.Sprintf("Run `sleep %d` in %d SEPARATE Bash calls in sequence; do not finish your turn before all calls. ", j38SleepSeconds, j38SleepCalls) +
+			"After the sixth call reply SLEPTTWICE. If a question arrives, answer it in a NON-TERMINAL assistant " +
+			"message, THEN continue making the remaining Bash calls in the SAME turn. Answering and ending the turn " +
+			"without another Bash call does not count as answering mid-turn.",
 	}); err != nil {
 		return fmt.Errorf("spawn busy worker: %w", err)
 	}
 	if err := s.waitAgentPhase(id, func(p string) bool { return p != "" && p != "idle" }, 90*time.Second); err != nil {
 		return fmt.Errorf("worker never became busy: %w", err)
 	}
-	time.Sleep(10 * time.Second) // inside the first sleep
+	// Six 30-second calls used to exceed the 150-second post-relay deadline:
+	// both full gates 9a74e031 and ccd84972 recorded Paris relayed and then
+	// an empty end_turn 150 seconds later, with no SLEPTTWICE. Six 8-second
+	// calls retain a real tool boundary and >5 seconds of post-relay work
+	// without making the model finish at the oracle deadline.
+	// Sidecar Bash calls can return much faster than their requested sleep
+	// (for instance on a sandbox refusal). Waiting ten wall-clock seconds let
+	// this worker finish and notify the overseer before the question was sent.
+	// Steer as soon as the first tool call is observed instead.
+	if err := s.waitWorkerToolUse(id, 45*time.Second); err != nil {
+		return err
+	}
 
+	// The receipt assertion is for an idle-overseer handoff. A worker that
+	// finishes its work before the steer can notify the overseer and occupy
+	// its turn; a subsequent relay is correctly queued, not status=sent.
+	if err := s.waitAgentPhase(overseerName, func(p string) bool { return p == "idle" || p == "" }, time.Second); err != nil {
+		return fmt.Errorf("overseer was already busy before the question; idle-handoff receipt cannot be tested: %w", err)
+	}
 	// The overseer's question, on the overseer's own path.
 	sentAt := time.Now()
 	out, err := s.mcpText("jevons_agent_send", map[string]any{
@@ -66,6 +94,15 @@ func (s *suite) midTurnAnswerWithBroker() error {
 		if logHasRelay(s.logPath, id) {
 			relayedAt = time.Now()
 			break
+		}
+		// A terminal answer is not a mid-turn answer: the capture is
+		// deliberately dropped at end_turn. Waiting the full 150 seconds
+		// cannot turn that same answer into a relay.
+		if payload, err := s.agentTranscriptHTTP(id); err == nil {
+			rows, _ := payload["turns"].([]any)
+			if terminalJ38Answer(rows) {
+				return fmt.Errorf("worker answered only at terminal end_turn, not mid-turn for %s", id)
+			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
@@ -96,6 +133,104 @@ func (s *suite) midTurnAnswerWithBroker() error {
 		}
 	}
 	return nil
+}
+
+// terminalJ38Answer recognizes an answer only when it follows the steered
+// question and the very answer row ends the turn. A non-terminal answer must
+// still earn a relay; this does not relax the relay assertion.
+func terminalJ38Answer(rows []any) bool {
+	asked := false
+	for _, row := range rows {
+		turn, _ := row.(map[string]any)
+		raw, _ := json.Marshal(turn["raw"])
+		if turn["role"] == "user" && strings.Contains(strings.ToUpper(string(raw)), strings.ToUpper(j38Question)) {
+			asked = true
+		}
+		if asked && turn["role"] == "assistant" && strings.Contains(strings.ToUpper(string(raw)), "PARIS") &&
+			strings.Contains(string(raw), `"stop_reason":"end_turn"`) {
+			return true
+		}
+	}
+	return false
+}
+
+// waitWorkerToolUse proves the first turn has begun actual work, not merely
+// that the registry reports a non-idle launch phase.
+func (s *suite) waitWorkerToolUse(name string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		payload, err := s.agentTranscriptHTTP(name)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(payload["journal"].(string), `"type":"tool_use"`) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("worker did not start its first tool call within %s", timeout)
+}
+
+// diagnoseMidTurnFailure prints the actual worker rows while the isolate is still
+// up (before withIsolatedBroker tears it down). A missing relay is only a
+// model-behaviour failure if the worker never answered after the question.
+func (s *suite) diagnoseMidTurnFailure(id string) {
+	line := relayLogLine(s.logPath, id)
+	if log, err := os.ReadFile(s.logPath); err == nil {
+		for _, item := range strings.Split(string(log), "\n") {
+			if strings.Contains(item, "msg=notify_queue") || strings.Contains(item, "send receipt lookup") || strings.Contains(item, relayLine) {
+				fmt.Println("J38 notify evidence:", item)
+			}
+		}
+	}
+	payload, err := s.agentTranscriptHTTP(id)
+	if err != nil {
+		fmt.Printf("J38 diagnosis: transcript unavailable: %v; relay=%q\n", err, line)
+		return
+	}
+	rows, _ := payload["turns"].([]any)
+	asked := -1
+	for i, row := range rows {
+		turn, _ := row.(map[string]any)
+		if turn["role"] == "user" {
+			raw, _ := json.Marshal(turn["raw"])
+			if strings.Contains(strings.ToUpper(string(raw)), strings.ToUpper(j38Question)) {
+				asked = i
+			}
+		}
+	}
+	answered := false
+	terminalAnswer := false
+	fmt.Printf("J38 diagnosis: worker=%s question-row=%d rows-through-deadline=%d relay=%q\n", id, asked+1, len(rows), line)
+	for i := asked + 1; i < len(rows); i++ {
+		turn, _ := rows[i].(map[string]any)
+		raw, _ := json.Marshal(turn["raw"])
+		fmt.Printf("J38 worker row %d role=%v raw=%s\n", i+1, turn["role"], raw)
+		if (turn["role"] == "assistant" || turn["role"] == "agent_note") && strings.Contains(strings.ToUpper(string(raw)), "PARIS") {
+			if strings.Contains(string(raw), `"stop_reason":"end_turn"`) {
+				terminalAnswer = true
+			} else {
+				answered = true
+			}
+		}
+	}
+	fmt.Println("J38 diagnosis:", classifyMidTurnFailure(asked >= 0, answered, terminalAnswer, line))
+}
+
+// classifyMidTurnFailure refuses to call absent evidence a model failure.
+func classifyMidTurnFailure(questionFound, answered, terminalAnswer bool, relay string) string {
+	switch {
+	case relay != "":
+		return "worker answered; daemon logged relay (inspect receipt/status, not a missing relay)"
+	case !questionFound:
+		return "question missing from worker transcript; cannot distinguish model from delivery"
+	case answered:
+		return "(b) worker answered non-terminally after steer; daemon did not log a mid-turn relay — relay-path bug"
+	case terminalAnswer:
+		return "(a) worker answered only at terminal end_turn, not mid-turn — model-behaviour flake"
+	default:
+		return "(a) worker never answered after steer before deadline — model-behaviour flake"
+	}
 }
 
 // logHasRelay reports whether the daemon log records a relay from agent.

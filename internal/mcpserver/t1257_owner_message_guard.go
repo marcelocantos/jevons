@@ -108,3 +108,8 @@ func (s *Server) notifyParentPendingOwnerMessages(parent, worker, targetID strin
 		s.notifyFleetHealth(noticeAct, worker, fmt.Sprintf("parent %s unreachable (%v) for: %s", p, err, msg))
 	}
 }
+
+// HasUndeliveredOwnerMessages is the server ledger sweep guard (🎯T1340).
+func (s *Server) HasUndeliveredOwnerMessages(name string) bool {
+	return len(s.undeliveredOwnerMessages(name)) > 0
+}

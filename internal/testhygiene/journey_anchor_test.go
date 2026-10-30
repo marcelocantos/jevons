@@ -89,3 +89,39 @@ func TestT1207MalformedExecutableSnapshotIsAnError(t *testing.T) {
 		}
 	}
 }
+
+// T1342: a concurrent gate's fixture is not an orphan merely because its
+// executable sits under a Go test temp directory. Detached fixtures carry
+// provenance through the live test's watcher rather than their own PPID.
+func TestT1342FixtureCensusWaitsForOriginatingTestExit(t *testing.T) {
+	const root = "/var/folders/xx/T/TestRestartThrashPolicy123/"
+	const other = "/var/folders/xx/T/TestOther456/"
+	paths := map[int]string{
+		10: "/tmp/docratchet.test", 11: "/bin/sh",
+		20: root + "001/bin/jevonsd", 21: root + "002/bin/jevonsd",
+		30: "/tmp/jevonsd.test", 31: other + "001/jevonsd",
+		40: "/bin/sh", 41: "/tmp/another.test", 42: "/bin/sh",
+	}
+	tbl := seatload.Table{
+		{PID: 10, PPID: 1},
+		{PID: 11, PPID: 10, Command: "/bin/sh -c watcher testreap /usr/bin/tool " + root},
+		{PID: 20, PPID: 1},  // detached but the associated test is live
+		{PID: 21, PPID: 10}, // attached to the test directly
+		{PID: 30, PPID: 1}, {PID: 31, PPID: 30},
+		{PID: 40, PPID: 41, Command: "/bin/sh -c watcher testreap /usr/bin/tool " + other},
+		{PID: 41, PPID: 1}, {PID: 42, PPID: 1},
+	}
+	if got := LeakedFixtureDaemons(tbl, paths); len(got) != 0 {
+		t.Fatalf("concurrent tests still running: false orphan %v", got)
+	}
+	// The watcher may briefly survive after the test dies, but that cannot
+	// hide the orphan. The unrelated test watcher also cannot claim it.
+	tbl[0] = seatload.Proc{PID: 99, PPID: 1}
+	if got := LeakedFixtureDaemons(tbl, paths); len(got) != 2 || got[0] != 20 || got[1] != 21 {
+		t.Fatalf("detached fixture after originating test exit: %v, want [20 21]", got)
+	}
+	tbl[1].PPID = 42
+	if got := LeakedFixtureDaemons(tbl, paths); len(got) != 2 || got[0] != 20 || got[1] != 21 {
+		t.Fatalf("watcher without originating test: %v, want [20 21]", got)
+	}
+}

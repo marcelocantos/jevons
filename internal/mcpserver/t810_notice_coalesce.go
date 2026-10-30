@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,15 @@ var noticeAgeBands = []time.Duration{15 * time.Minute, time.Hour, 6 * time.Hour,
 
 var noticeDurationRE = regexp.MustCompile(`\b\d+(?:\.\d+)?(?:h|m|s|ms)(?:\d+(?:\.\d+)?(?:h|m|s|ms))*\b`)
 
+// noticeCountBands are the queued-message counts a backlog crossing makes a
+// notice materially new. A busy seat collecting one more message is the
+// same episode with the same remedy; on 2026-10-30 a stalled backlog on
+// jevons-po re-notified the overseer at 3, 4, 6, 7, 7 and 9 messages, one
+// Sonnet turn each (🎯T1339).
+var noticeCountBands = []int{2, 10}
+
+var noticeCountRE = regexp.MustCompile(`\b\d+ message\(s\)`)
+
 type noticeRecord810 struct {
 	Digest      string    `json:"digest"`
 	DeliveredAt time.Time `json:"delivered_at"`
@@ -92,6 +102,19 @@ func NoticeMaterialDigest(line string) string {
 			}
 		}
 		return fmt.Sprintf("<age-band-%d>", band)
+	})
+	norm = noticeCountRE.ReplaceAllStringFunc(norm, func(tok string) string {
+		n, err := strconv.Atoi(strings.Fields(tok)[0])
+		if err != nil {
+			return tok
+		}
+		band := 0
+		for _, b := range noticeCountBands {
+			if n >= b {
+				band++
+			}
+		}
+		return fmt.Sprintf("<count-band-%d> message(s)", band)
 	})
 	sum := sha256.Sum256([]byte(norm))
 	return hex.EncodeToString(sum[:])

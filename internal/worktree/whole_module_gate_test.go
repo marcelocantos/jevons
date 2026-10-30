@@ -194,3 +194,16 @@ func TestT1237ConcurrentRunsDoNotOverlap(t *testing.T) {
 		t.Fatalf("want exactly one of the two overlapping calls to actually run the gate, got %d", ran)
 	}
 }
+
+// The standing gate runs `go test` from the daemon, not through `make
+// test-go`, so it must export what that target exports. Without
+// CLAUDIA_NO_BROKER a fixture's Registry launch reaches the live broker on
+// the development machine (🎯T1237).
+func TestT1237WholeModuleGateRunsWithoutTheLiveBroker(t *testing.T) {
+	for _, kv := range worktree.WholeModuleGateEnv {
+		if kv == "CLAUDIA_NO_BROKER=1" {
+			return
+		}
+	}
+	t.Fatalf("worktree.WholeModuleGateEnv = %q, want CLAUDIA_NO_BROKER=1", worktree.WholeModuleGateEnv)
+}

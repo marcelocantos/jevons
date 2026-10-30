@@ -13,9 +13,12 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.util.SizeF
+import android.widget.RemoteViews
 import android.webkit.CookieManager
 import androidx.annotation.RequiresApi
 import com.canticode.jevons_mobile.MainActivity
@@ -42,6 +45,15 @@ class UsageWidget : AppWidgetProvider() {
         UsageJobs.schedulePeriodic(context)
         // A newly placed widget should not wait a whole period for its first reading.
         refreshNow(context)
+    }
+
+    /**
+     * Folding, unfolding and resizing change the sizes the host reports. Re-publish so
+     * each instance carries a layout for every size it can now be shown at.
+     */
+    override fun onAppWidgetOptionsChanged(context: Context, manager: AppWidgetManager, id: Int, options: Bundle) {
+        super.onAppWidgetOptionsChanged(context, manager, id, options)
+        onUpdate(context, manager, intArrayOf(id))
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -79,6 +91,27 @@ class UsageWidget : AppWidgetProvider() {
             UsageJobs.scheduleNow(context)
         }
 
+        /**
+         * One layout per size the host reports (OPTION_APPWIDGET_SIZES), so a foldable's outer
+         * and inner screens each get bars sized to the space they show. A single layout from
+         * OPTION_APPWIDGET_MIN_HEIGHT took the smallest size across postures and left the folded
+         * Pixel's widget part empty. RemoteViews accepts at most [MAX_RESPONSIVE_SIZES] entries.
+         */
+        @RequiresApi(Build.VERSION_CODES.S)
+        fun responsive(context: Context, view: WidgetView, options: Bundle, tap: PendingIntent): RemoteViews {
+            @Suppress("DEPRECATION")
+            val sizes = options.getParcelableArrayList<SizeF>(AppWidgetManager.OPTION_APPWIDGET_SIZES)
+                ?.distinct()?.take(MAX_RESPONSIVE_SIZES)
+            if (sizes.isNullOrEmpty()) {
+                val height = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT,
+                    options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 90))
+                return UsageRender.render(context, view, height, tap)
+            }
+            return RemoteViews(sizes.associateWith { UsageRender.render(context, view, it.height.toInt(), tap) })
+        }
+
+        private const val MAX_RESPONSIVE_SIZES = 16
+
         @RequiresApi(Build.VERSION_CODES.S)
         fun publish(context: Context, view: WidgetView) {
             val manager = AppWidgetManager.getInstance(context)
@@ -87,8 +120,7 @@ class UsageWidget : AppWidgetProvider() {
             val tap = PendingIntent.getActivity(context, 1, Intent(context, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             for (id in placedIds(context)) {
-                val height = manager.getAppWidgetOptions(id).getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 90)
-                manager.updateAppWidget(id, UsageRender.render(context, view, height, tap))
+                manager.updateAppWidget(id, responsive(context, view, manager.getAppWidgetOptions(id), tap))
             }
         }
     }

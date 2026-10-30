@@ -371,6 +371,7 @@ func main() {
 	// and does not bounce; only a successive-load diff does.
 	var fileBaseline config.Config
 	var applyFableClassRatified func(string)
+	var applyStandingGate func(bool)
 	var refreshBrokerIntentForConfig func(config.Config)
 	cfgHot, err := config.Watch(watcher, &config.WatchArgs[config.Config]{
 		Path: cfgPath, Load: config.Load, Fallback: cfg,
@@ -380,6 +381,9 @@ func main() {
 			}
 			if applyFableClassRatified != nil {
 				applyFableClassRatified(next.FableClassDefaults.Ratified)
+			}
+			if applyStandingGate != nil {
+				applyStandingGate(next.StandingGate.Enabled)
 			}
 			srv.SetPortfolios(next.Portfolios)
 			if providerCfg != nil {
@@ -785,6 +789,12 @@ func main() {
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
 	applyFableClassRatified = mcpSrv.SetFableClassRatified
 	applyFableClassRatified(cfg.FableClassDefaults.Ratified)
+	applyStandingGate = mcpSrv.SetStandingGateEnabled
+	if cfgHot != nil {
+		applyStandingGate(cfgHot.Get().StandingGate.Enabled)
+	} else {
+		applyStandingGate(cfg.StandingGate.Enabled)
+	}
 	// ð¯T325.3: durable idea intake ledger (state_dir/ideas.json).
 	mcpSrv.SetIdeaStateDir(cfg.StateDir)
 	mcpSrv.SetOwnerQuestionsDir(cfg.StateDir)
@@ -990,6 +1000,9 @@ func main() {
 	slog.Info("jevon agent", "provider", jevonDef.Provider, "session", jevonDef.SessionID, "resume", jevonDef.Materialized)
 
 	srv.SetRegistry(registry)
+	srv.SetClosedTargetOwnerMessageGuard(mcpSrv.HasUndeliveredOwnerMessages)
+	// 🎯T1340: retire historical parked seats before fleet reattach.
+	srv.SweepParkedClosedTargetsAtStartup(func(name string) bool { return mcpSrv.FleetIntent().AgentState(name) == fleetintent.Parked })
 	mcpSrv.StartSeatObservations(ctx, srv.ObserveSeatMetadata)
 	srv.SetOverseerReattachWait(5 * time.Second) // 🎯T806
 	// 🎯T806: undelivered owner messages survive a bounce; malformed state is fatal.

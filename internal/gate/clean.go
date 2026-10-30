@@ -217,6 +217,10 @@ type CleanArgs struct {
 	WorkDir string
 	// Keep leaves the worktree behind for inspection after a failure.
 	Keep bool
+	// Env adds KEY=VALUE pairs to the command's environment, after the
+	// caller's own and GOWORK=off. A daemon-run gate uses it for what the
+	// Makefile would have exported (🎯T1237: CLAUDIA_NO_BROKER).
+	Env []string
 
 	// The remaining fields are handed straight to Run.
 	Name           string
@@ -279,6 +283,10 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gate clean: scratch dir: %w", err)
 	}
+	if err := worktreereap.MarkGateScratch(scratch, root); err != nil {
+		os.RemoveAll(scratch)
+		return nil, fmt.Errorf("gate clean: mark scratch: %w", err)
+	}
 	wt := filepath.Join(scratch, "tree")
 	if out, err := runGit(root, "worktree", "add", "--detach", wt, commit); err != nil {
 		os.RemoveAll(scratch)
@@ -309,7 +317,7 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 		Store:      args.Store,
 		Explicit:   args.Explicit,
 		SharedTree: shared,
-		env:        append(os.Environ(), "GOWORK=off"),
+		env:        append(append(os.Environ(), "GOWORK=off"), args.Env...),
 		Now:        args.Now,
 		Prepare:    args.Prepare,
 	})

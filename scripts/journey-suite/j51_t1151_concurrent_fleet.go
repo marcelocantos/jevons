@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/marcelocantos/jevons/internal/worktree"
 )
 
 const t1151JourneyBudget = 90 * time.Minute
@@ -90,8 +92,45 @@ func t1151ConcurrentFleetRun(iso *suite, repo string) error {
 	}
 
 	deadline := time.Now().Add(t1151JourneyBudget)
-	var nudgedPO, triedLedgerCommit bool
+	return t1151WaitForCompletion(deadline, 5*time.Second, func() (*worktree.TrunkFault, error) { return worktree.ReadTrunkFault(repo) }, t1151RunCompletionChecks(iso, repo, baseline, workers, trackNames, names), func() error {
+		var failures []string
+		for _, name := range names {
+			if _, err := iso.mcpText("jevons_agent_kill", map[string]any{"name": name, "actor": overseerName, "force": true}); err != nil {
+				failures = append(failures, name+": "+err.Error())
+			}
+		}
+		if len(failures) != 0 {
+			return fmt.Errorf("stop workers: %s", strings.Join(failures, "; "))
+		}
+		return nil
+	})
+}
+
+func t1151WaitForCompletion(deadline time.Time, interval time.Duration, readFault func() (*worktree.TrunkFault, error), check func() (bool, error), stopWorkers func() error) error {
 	for time.Now().Before(deadline) {
+		fault, err := readFault()
+		if err != nil {
+			return fmt.Errorf("read fixture trunk fault: %w", err)
+		}
+		if fault != nil && fault.Kind == worktree.TrunkRed {
+			incident := fmt.Errorf("T1151 journey: worker integration refused trunk_red incident %s; fixture trunk failing tests: %s", fault.ID, strings.Join(fault.Tests, ", "))
+			if err := stopWorkers(); err != nil {
+				return fmt.Errorf("%w; %v", incident, err)
+			}
+			return incident
+		}
+		done, err := check()
+		if err != nil || done {
+			return err
+		}
+		time.Sleep(interval)
+	}
+	return fmt.Errorf("T1151 journey: not all worker slices filed+achieved before deadline")
+}
+
+func t1151RunCompletionChecks(iso *suite, repo string, baseline map[string]bool, workers int, trackNames, names []string) func() (bool, error) {
+	var nudgedPO, triedLedgerCommit bool
+	return func() (bool, error) {
 		if t1151AllLanded(repo, workers) && !triedLedgerCommit {
 			if dirty, _, _ := t1151SharedCloneDirty(repo); dirty {
 				_ = t1151CommitDirtyLedger(repo)
@@ -111,21 +150,20 @@ func t1151ConcurrentFleetRun(iso *suite, repo string) error {
 		if err := t1151JourneyComplete(repo, baseline, workers, trackNames); err == nil {
 			agents, err := iso.listAgentsHTTP()
 			if err != nil {
-				return err
+				return false, err
 			}
 			if err := t1151WorkdirsIsolated(repo, agents, names); err != nil {
-				return err
+				return false, err
 			}
 			head, _ := trustRepoHead(repo)
 			fmt.Printf("J51: T1151 concurrent fleet landed %d slices achieved %d tracks HEAD=%s provider=%s\n",
 				workers, workers, head, iso.provider)
 			_ = os.WriteFile(filepath.Join(iso.stateDir, "j51-t1151-result.txt"),
 				[]byte(fmt.Sprintf("head=%s workers=%d repo=%s\n", head, workers, repo)), 0o600)
-			return nil
+			return true, nil
 		}
-		time.Sleep(5 * time.Second)
+		return false, nil
 	}
-	return fmt.Errorf("T1151 journey: not all %d worker slices filed+achieved before deadline", workers)
 }
 
 func t1151JourneyComplete(repo string, baseline map[string]bool, workers int, trackNames []string) error {

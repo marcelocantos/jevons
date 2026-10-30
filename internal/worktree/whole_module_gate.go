@@ -32,6 +32,12 @@ const wholeModuleGateStateFile = "jevons-whole-module-gate.json"
 // so tests substitute a scripted command instead of a real `go test ./...`.
 var WholeModuleGateCommand = []string{"go", "test", "-json", "-count=1", "./..."}
 
+// WholeModuleGateEnv is what `make test-go` exports and a bare `go test`
+// from the daemon would not. Without CLAUDIA_NO_BROKER a fixture's Registry
+// launch on the development machine reaches the live claudia broker and is
+// granted a real seat with a real provider process behind it.
+var WholeModuleGateEnv = []string{"CLAUDIA_NO_BROKER=1"}
+
 // wholeModuleGateState is the debounce/dedup record: Candidate is a tip seen
 // once but not yet confirmed stable across a tick, and GatedTip is the last
 // tip this gate actually ran against (never re-run for the same tip).
@@ -149,6 +155,7 @@ func RunWholeModuleGate(repo, storeRoot, tip string) (*gate.Record, error) {
 		Repo:    repo,
 		Commit:  tip,
 		Command: WholeModuleGateCommand,
+		Env:     WholeModuleGateEnv,
 		Name:    "whole-module-gate",
 		Store:   store,
 	})

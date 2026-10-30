@@ -5,10 +5,12 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,8 +37,52 @@ func (s *suite) jPackagedReactOwnerBoundary() error {
 
 // J32 (🎯T789.1) sends and Cuts in on a busy seat over a transcript taller than 12,000 px.
 func (s *suite) jPackagedReactSendCutIn() error {
+	before, countErr := j32UsageCalls(s.stateDir)
+	if countErr != nil {
+		return fmt.Errorf("J32 usage baseline: %w", countErr)
+	}
+	started := time.Now()
 	err := s.jPackagedReactScript("t789-live.cjs", 25*time.Minute)
-	return errors.Join(err, s.cancelLeftoverOverseerWork("J32"))
+	elapsed := time.Since(started)
+	cleanupErr := s.cancelLeftoverOverseerWork("J32")
+	// The usage projection is asynchronous. Give it one bounded chance to catch
+	// up after the provider turns finish, and print the DB count, not a guess.
+	var after int
+	var usageErr error
+	for i := 0; i < 10; i++ {
+		after, usageErr = j32UsageCalls(s.stateDir)
+		if usageErr == nil && after > before {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if usageErr != nil {
+		return errors.Join(err, cleanupErr, fmt.Errorf("J32 usage after: %w", usageErr))
+	}
+	fmt.Printf("J32 measured wall=%s usage_calls before=%d after=%d provider_turns=%d (usage.db seat=jevons)\n", elapsed.Round(time.Millisecond), before, after, after-before)
+	if after-before > 3 {
+		err = errors.Join(err, fmt.Errorf("J32 provider turns %d exceed 3", after-before))
+	}
+	return errors.Join(err, cleanupErr)
+}
+
+func j32UsageCalls(stateDir string) (int, error) {
+	abs, err := filepath.Abs(filepath.Join(stateDir, "usage.db"))
+	if err != nil {
+		return 0, err
+	}
+	u := url.URL{Scheme: "file", Path: abs, RawQuery: "mode=ro"}
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	if _, err = db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		return 0, err
+	}
+	var n int
+	err = db.QueryRow(`SELECT COUNT(*) FROM usage_calls WHERE seat = ?`, overseerName).Scan(&n)
+	return n, err
 }
 
 // leftoverCancelWait bounds the cleanup of an overseer backlog a journey left.
@@ -45,9 +91,8 @@ const leftoverCancelWait = 3 * time.Minute
 // cancelLeftoverOverseerWork cancels, as the owner would, the overseer work
 // a journey left running, until the overseer is idle.
 //
-// J32 grows the transcript with up to twelve 150-line answers (moving on
-// from any not answered within 120 s), then sends a 200-line request, two
-// held messages and a Cut in. Its assertions end while that backlog still
+// J32 seeds the tall transcript, then sends a live busy request, one
+// held message and a Cut in. Its assertions end while that backlog still
 // runs. In the 2026-10-20 green subset the overseer was still working it
 // five minutes after J32 returned, so J33 could not start from an idle
 // overseer. The backlog is J32's own, so J32 cancels it: an owner interrupt
@@ -123,6 +168,14 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 	if drivesOverseer(script) && !s.j45NoIdleWait {
 		if err := s.waitAgentPhase(overseerName, func(p string) bool { return p == "idle" }, overseerIdleBefore); err != nil {
 			return fmt.Errorf("overseer never settled before %s: %w", script, err)
+		}
+	}
+	// 🎯T1338.2: like J19, seed the canonical store after daemon boot and
+	// before the React page connects. Only J32 takes this path.
+	if script == "t789-live.cjs" {
+		journal := filepath.Join(s.stateDir, "chatlog", overseerName+".jsonl")
+		if err := seedThroughStore(s.stateDir, overseerName, journal, func() error { return seedJ32Journal(journal) }); err != nil {
+			return fmt.Errorf("J32 seed transcript: %w", err)
 		}
 	}
 	surface, err := s.startReactSurface()

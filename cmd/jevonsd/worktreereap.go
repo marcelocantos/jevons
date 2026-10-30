@@ -61,6 +61,11 @@ func startWorktreeReap(ctx context.Context, cfg config.Config) {
 
 	go func() {
 		sweep := func() {
+			if n, err := worktreereap.SweepGateScratch(abs, os.TempDir(), false); err != nil {
+				slog.Warn("gate scratch reap", "err", err)
+			} else if n > 0 {
+				slog.Info("gate scratch reap", "removed", n)
+			}
 			res, err := worktreereap.Sweep(worktreereap.Config{
 				Policy: pol,
 				Log:    func(msg string) { slog.Info("worktree reap", "report", msg) },
